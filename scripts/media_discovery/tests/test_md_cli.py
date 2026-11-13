@@ -181,10 +181,13 @@ def test_live_run_opens_one_pr_and_emails_the_digest(site):
     assert set(PAGES) <= set(h.fetched)
 
     [(subject, body, kw)] = h.sent
-    assert subject == "1 new find for Example Site to review"
-    assert "https://github.example.com/o/r/pull/1" in body
-    assert "Lonely Claim" in body and "no independent second source" in body
-    assert "Data Futures Forum" in body and "an event needs a full YYYY-MM-DD date" in body
+    assert subject == "site.example.com media search: 1 new item for the site, 2 to double-check"
+    # A non-technical reader gets the editor's review page, not the pull request.
+    assert "https://site.example.com/admin/#/workflow" in body
+    assert "github.example.com" not in body and "pull request" not in body.lower()
+    assert "PREVIEW" not in body
+    assert "Lonely Claim" in body and "Only one website backed it up" in body
+    assert "Data Futures Forum" in body and "details such as an exact date were missing" in body
     assert kw == dict(host="smtp.fastmail.com", port=587, user="bot@example.com", password="pw",
                       mail_from="bot@example.com",
                       mail_to=["owner@example.com", "editor@example.net"])
@@ -203,8 +206,10 @@ def test_email_only_lists_would_open_and_opens_nothing(site):
     assert "mode=email-only" in h.stdout and "prs_opened=0" in h.stdout
     assert h.gh.opened == []
     [(subject, body, _)] = h.sent
-    assert subject == "1 confirmed find for Example Site (email-only mode)"
-    assert "Would add: _media/1-open-data-in-practice.md" in body
+    assert subject == ("site.example.com media search: 1 new item for the site, "
+                       "2 to double-check (preview)")
+    assert "nothing on the website was changed" in body and "PREVIEW RUN VS. NORMAL RUN" in body
+    assert "Open Data in Practice" in body
     h.assert_counts_only()
 
 
@@ -213,7 +218,7 @@ def test_live_without_a_token_falls_back_to_email_only(site):
     h = Harness(site, env=env).run()
     assert h.code == 0 and h.gh is None
     assert "live mode needs GITHUB_TOKEN" in h.stdout and "mode=email-only" in h.stdout
-    assert "(email-only mode)" in h.sent[0][0]
+    assert h.sent[0][0].endswith("(preview)")
 
 
 def test_unconfigured_site_is_a_no_op(tmp_path):
@@ -276,7 +281,7 @@ def test_github_error_still_emails_then_fails(site):
     assert h.code == 1
     assert "::error::GitHub API POST /repos/{repo}/pulls returned HTTP 403" in h.stdout
     [(_, body, _)] = h.sent
-    assert "the pull request could not be opened (HTTP 403)" in body
+    assert "creating the draft failed" in body
     h.assert_counts_only()
 
 
@@ -293,7 +298,7 @@ def test_a_crashing_candidate_does_not_abort_the_run(site):
     assert h.code == 0
     assert "unconfirmed=1" in h.stdout and "prs_opened=1" in h.stdout
     [(_, body, _)] = h.sent
-    assert "internal error while checking" in body
+    assert "Something went wrong while checking it." in body
     assert "boom" not in h.stdout and "Traceback" not in h.stdout
     h.assert_counts_only()
 

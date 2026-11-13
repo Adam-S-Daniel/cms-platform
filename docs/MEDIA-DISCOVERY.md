@@ -33,9 +33,14 @@ Publish.
 5. **Propose.** Each confirmed find becomes one pull request shaped exactly
    like a Decap editorial-workflow entry (live mode), or a line in the email
    (email-only mode).
-6. **Email** one digest listing the new PRs (or, in email-only mode, what
-   would have been opened) and every find that did not check out, with the
-   reasons.
+6. **Email** one digest, written for a non-technical reader
+   (`render.render_digest`): the subject starts with the site's host and
+   "media search", the body lists each confirmed find as a draft addition in
+   the website editor (or, in email-only mode, a "preview run", as what would
+   be drafted), then every find that did not check out with a plain-English
+   reason per page (`corroborate.Problem`). Each URL sits alone on its own
+   line, since mail clients take a colon right after a URL as part of it. No
+   email is sent when there is nothing to list.
 
 ## The verification rules (phase 1, precisely)
 
@@ -164,8 +169,8 @@ PYTHONPATH=<platform>/scripts python3 -m media_discovery run \
 ## Modes
 
 - **email-only** (the default): nothing is written to GitHub. The digest lists
-  each confirmed find as "would open a pull request", with the file it would
-  add. Use it to judge the quality of the finds before turning PRs on. It
+  each confirmed find under "Ready to add" and calls the run a preview, with a
+  section on what a normal run does differently. Use it to judge the quality of the finds before turning PRs on. It
   lists earlier discovery PRs with the job's read-only `GITHUB_TOKEN`; if that
   token cannot, the run continues without that duplicate check (a notice, not
   a failure).

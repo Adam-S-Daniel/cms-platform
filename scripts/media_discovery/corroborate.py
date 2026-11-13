@@ -20,6 +20,7 @@ class FetchedPage:
     final_url: str
     status: int
     text: str
+    unreadable_type: bool = False  # fetched, but not a page type the checks can read
 
 
 @dataclass
@@ -32,11 +33,22 @@ class SourceResult:
     cluster: int  # -1 when the page was not fetched
 
 
+@dataclass(frozen=True)
+class Problem:
+    """One reason a candidate was not confirmed, as a code the digest words for
+    a reader. `url` is the source it concerns ("" for the candidate as a whole);
+    `detail` is the HTTP status or identity reason where one applies."""
+    code: str
+    url: str = ""
+    detail: str = ""
+
+
 @dataclass
 class Verdict:
     confirmed: bool
     reasons: list[str] = field(default_factory=list)
     sources: list[SourceResult] = field(default_factory=list)
+    problems: list[Problem] = field(default_factory=list)
 
 
 def classify_timing(candidate: Candidate, today: date) -> str:
@@ -97,6 +109,7 @@ def _blocked(url: str, blocked_domains) -> bool:
 def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> Verdict:
     urls = list(dict.fromkeys([candidate.primary_url, *candidate.supporting_urls]))
     reasons: list[str] = []
+    problems: list[Problem] = []
     sources: list[SourceResult] = []
     qualified: list[bool] = []
     clusters: list[tuple[str, set, int]] = []  # (domain, shingles, id) of each cluster seed
@@ -108,6 +121,7 @@ def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> 
             sources.append(SourceResult(url, _domain(url), None, False, False, -1))
             qualified.append(False)
             reasons.append(f"not fetched: {url}")
+            problems.append(Problem("not-fetched", url))
             continue
         final = page.final_url or url
         domain = _domain(final, url)
@@ -116,6 +130,7 @@ def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> 
             sources.append(SourceResult(url, domain, None, False, False, -1))
             qualified.append(False)
             reasons.append(f"{url}: unusable address")
+            problems.append(Problem("unusable-address", url))
             continue
         blocked = (_blocked(url, cfg.sources.blocked_domains)
                    or _blocked(final, cfg.sources.blocked_domains))
@@ -138,6 +153,12 @@ def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> 
                    f"identity check failed ({identity.reason})" if not identity.ok else
                    "does not support the claim")
             reasons.append(f"{url}: {why}")
+            problems.append(
+                Problem("blocked", url) if blocked else
+                Problem("unreadable-type", url) if page.unreadable_type else
+                Problem("http-status", url, str(page.status)) if not ok_status else
+                Problem("identity", url, identity.reason) if not identity.ok else
+                Problem("no-match", url))
 
     confirmed = False
     if not qualified[0]:
@@ -148,4 +169,5 @@ def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> 
                         for q, s in zip(qualified[1:], sources[1:]))
         if not confirmed:
             reasons.append("no independent second source")
-    return Verdict(confirmed, reasons, sources)
+            problems.append(Problem("no-second-source"))
+    return Verdict(confirmed, reasons, sources, problems)

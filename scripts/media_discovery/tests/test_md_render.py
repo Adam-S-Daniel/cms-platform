@@ -7,7 +7,7 @@ import yaml
 from md_fixtures import CFG, PAGE_A, PAGE_B, make_candidate, page
 
 from media_discovery.config import load_config
-from media_discovery.corroborate import verify
+from media_discovery.corroborate import Problem, verify
 from media_discovery.render import (WORD_JOINER, _clean, render_digest, render_entry, render_pr,
                                     safe_md, slugify)
 
@@ -218,20 +218,6 @@ def test_pr_non_http_url_is_not_a_link():
     assert "<javascript" not in body
 
 
-def test_digest():
-    assert render_digest("Example Site", [], []) is None
-    subject, text = render_digest(
-        "Example Site",
-        [("Create Media \u201c1-a\u201d", "https://github.example.com/pr/1",
-          "https://admin.example.com/")],
-        [(make_candidate(), ["not fetched: https://example.org/x"])])
-    assert subject == "1 new find for Example Site to review"
-    assert "https://github.example.com/pr/1" in text and "Why not: not fetched" in text
-    only_unconfirmed = render_digest("S", [], [(make_candidate(), [])])
-    assert only_unconfirmed[0] == "1 unconfirmed find for S"
-    assert render_digest("S", [("t", "u", "a")] * 3, [])[0] == "3 new finds for S to review"
-
-
 def test_format_characters_are_stripped_before_safe_md_adds_word_joiners():
     # U+202E RIGHT-TO-LEFT OVERRIDE, U+200B ZERO WIDTH SPACE, U+2066 LEFT-TO-RIGHT
     # ISOLATE and a word joiner smuggled in by the page itself: all category Cf.
@@ -243,17 +229,86 @@ def test_format_characters_are_stripped_before_safe_md_adds_word_joiners():
     assert out.count(WORD_JOINER) == 1 and "‮" not in out and "​" not in out
 
 
-def test_digest_lists_would_open_finds_in_email_only_mode():
+def _problems(*items):
+    return [Problem(*i) for i in items]
+
+
+def test_digest_is_none_when_there_is_nothing_to_say():
+    assert render_digest("site.example.com", "Pat Rivera", [], []) is None
+    # A preview run ignores drafts, a normal run ignores would-add finds.
+    assert render_digest("s", "p", [make_candidate()], [], preview=True) is None
+    assert render_digest("s", "p", [], [], [make_candidate()]) is None
+
+
+def test_digest_subject_starts_with_the_site_and_counts():
     c = make_candidate()
-    e = render_entry(c, "past_talk", CFG)
-    subject, text = render_digest("Example Site", [], [], [(c, e)])
-    assert subject == "1 confirmed find for Example Site (email-only mode)"
-    assert "would open a pull request in live mode" in text
-    assert "Would add: _media/1-open-data-in-practice.md" in text
-    assert c.primary_url in text
-    subject, text = render_digest("S", [], [(make_candidate(), ["x"])], [(c, e), (c, e)])
-    assert subject == "2 confirmed finds for S (email-only mode)"
-    assert "Found but not confirmed" in text
-    # Opened PRs still lead the subject when both are present.
-    assert render_digest("S", [("t", "u", "a")], [], [(c, e)])[0] == \
-        "1 new find for S to review"
+    one = render_digest("site.example.com", "Pat Rivera", [c], [(c, [])])[0]
+    assert one == "site.example.com media search: 1 new item for the site, 1 to double-check"
+    assert render_digest("s", "p", [c, c, c], [])[0] == "s media search: 3 new items for the site"
+    assert render_digest("s", "p", [], [(c, [])] * 2)[0] == "s media search: 2 to double-check"
+    assert render_digest("s", "p", [], [], [c], preview=True)[0] == \
+        "s media search: 1 new item for the site (preview)"
+
+
+def test_digest_normal_run_points_at_the_editor_in_plain_words():
+    c = make_candidate()
+    _, text = render_digest("site.example.com", "Pat Rivera", [c], [],
+                            review_link="https://site.example.com/admin/#/workflow")
+    assert "READY TO ADD (1)" in text and "Open Data in Practice" in text
+    assert "Example Summit · March 12, 2026" in text
+    assert "https://site.example.com/admin/#/workflow" in text
+    assert "draft addition in the website editor" in text
+    for jargon in ("pull request", "_media/", "email-only", "PREVIEW"):
+        assert jargon not in text
+
+
+def test_digest_preview_run_says_what_differs_from_a_normal_run():
+    c = make_candidate()
+    _, text = render_digest("s", "Pat Rivera", [], [], [c], preview=True)
+    assert "nothing on the website was changed" in text
+    assert "PREVIEW RUN VS. NORMAL RUN" in text
+    assert "Only in this preview run:" in text and "Only in a normal run:" in text
+    assert "In a normal run, this would be waiting for you" in text
+
+
+@pytest.mark.parametrize("problem,expected", [
+    (("unreadable-type", "https://events.example.com/talks/open-data"),
+     "• The main link is a file (such as a PDF) the search can't read yet."),
+    (("http-status", "https://events.example.com/talks/open-data", "406"),
+     "• The main link turned away the search's automatic check."),
+    (("http-status", "https://events.example.com/talks/open-data", "0"),
+     "• The main link couldn't be reached."),
+    (("identity", "https://events.example.com/talks/open-data", "no-name"),
+     "• The main link doesn't show Pat Rivera's name."),
+    (("identity", "https://events.example.com/talks/open-data", "no-identity-marker"),
+     "• The main link names Pat Rivera, but nothing near the name"),
+    (("no-match", "https://news.example.org/summit-recap"),
+     "• This other page mentions Pat Rivera, but doesn't name this item"),
+    (("no-second-source",), "• Only one website backed it up"),
+    (("internal-error",), "• Something went wrong while checking it."),
+])
+def test_digest_explains_each_problem_in_plain_words(problem, expected):
+    _, text = render_digest("s", "Pat Rivera", [], [(make_candidate(), _problems(problem))])
+    assert "COULDN'T CONFIRM (1)" in text and "1. Open Data in Practice" in text
+    assert expected in text
+
+
+def test_digest_puts_every_url_alone_on_its_line():
+    """Apple Mail treats a colon right after a URL as part of it."""
+    c = make_candidate()
+    _, text = render_digest("s", "Pat Rivera", [c], [(c, _problems(
+        ("unreadable-type", c.primary_url), ("no-match", "https://news.example.org/a"),
+        ("http-status", "https://other.example.net/b", "403")))],
+        review_link="https://a.example.com/x")
+    url_lines = [line for line in text.splitlines() if "://" in line]
+    assert len(url_lines) == 5
+    assert all(re.fullmatch(r"https://\S+", line) for line in url_lines)
+    # Entries are separated by blank lines.
+    assert "\n\n\n1. Open Data in Practice\n" in text
+
+
+def test_digest_never_shows_a_non_web_link():
+    c = make_candidate(primary_url="javascript:alert(1)", title="T‮X\nY")
+    _, text = render_digest("s", "p", [], [(c, [])])
+    assert "javascript:" not in text and "(link not shown: not a web address)" in text
+    assert "‮" not in text and "1. TX Y" in text
