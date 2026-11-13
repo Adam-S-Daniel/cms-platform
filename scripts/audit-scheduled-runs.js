@@ -88,6 +88,21 @@
  * separate daily routine that read every workflow's latest run fleet-wide.
  * `release` is left out on purpose: its runs carry the tag, not a branch.
  *
+ * PULL REQUESTS NOBODY IS WORKING ON (2026-11-10). A red check on a PR is
+ * visible on the PR, but only to someone looking at it: a Dependabot PR, a
+ * bot's PR or a PR whose session ended can sit red for days. The PR lane lists
+ * `event=pull_request` runs from the last window + `--pr-red-hours` (default
+ * 24) hours, takes each PR's newest head, and reports the PR when the newest
+ * run of some workflow on that head ended in a BAD_CONCLUSIONS conclusion at
+ * least that many hours ago. A PR that is closed, a draft or labeled
+ * `on-hold` is skipped (one GET per reported PR, through the issues API, so
+ * the callers' `issues: write` grant covers it and no `pull-requests: read`
+ * is needed). Its runs go through the same run-id dedupe, starvation
+ * suppression and close gate as every other lane; a failure here reds the
+ * audit and keeps the issue open, like any other lane's. Fork PRs carry no
+ * `pull_requests` on their runs and are not reported. `--no-pr-scan` turns
+ * the lane off.
+ *
  * THE ISSUE IS ALSO A WORK ITEM (2026-10-31). With `--work-label agent-ready`
  * the tracking issue carries that label too, so the fleet worker (an hourly
  * routine in _agent-guidance) turns it into a fix PR. The issue lists one
@@ -117,7 +132,7 @@
  *   node scripts/audit-scheduled-runs.js [--repo owner/name] \
  *     [--window-hours 48] [--label ci] [--dry-run] [--no-push-scan]
  *     [--stale-days 14] [--no-stale-scan] [--no-other-scan]
- *     [--work-label agent-ready]
+ *     [--work-label agent-ready] [--no-pr-scan] [--pr-red-hours 24]
  *
  * Requires a gh-authenticated environment (GH_TOKEN or gh auth) with
  * actions: read (list runs) + issues: write (open/comment/close).
@@ -259,6 +274,11 @@ const STALE_MIN_RUNS = 3;
 // have alerted on day three); the day threshold only has to catch the slow
 // case without flagging a weekly cron that failed once.
 const DEFAULT_STALE_DAYS = 14;
+// The PR lane (see "PULL REQUESTS NOBODY IS WORKING ON" in the file header):
+// how long a check must have stayed red, with no newer run of that workflow on
+// the PR's newest head, before the PR is reported. A day keeps out a PR that
+// someone is fixing right now.
+const DEFAULT_PR_RED_HOURS = 24;
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
@@ -721,7 +741,17 @@ function renderFindings(runs, noun = "scheduled run") {
 // push-only) report does not claim findings it never saw. `pushRuns` defaults
 // to `[]` and `defaultBranch` is only read when a push section is actually
 // rendered, so every existing call site stays byte-identical.
-function renderSections(runs, dead, pushRuns, defaultBranch, stale, otherRuns) {
+function renderSections(
+  runs,
+  dead,
+  pushRuns,
+  defaultBranch,
+  stale,
+  otherRuns,
+  redPrs = [],
+  repo = "",
+  redHours = DEFAULT_PR_RED_HOURS,
+) {
   const out = [];
   if ((runs || []).length > 0) {
     out.push(
@@ -773,13 +803,24 @@ function renderSections(runs, dead, pushRuns, defaultBranch, stale, otherRuns) {
       renderStaleWorkflows(stale),
     );
   }
+  if ((redPrs || []).length > 0) {
+    if (out.length > 0) out.push("");
+    out.push(
+      `**Pull requests with a check red for ${redHours}h or more.** The newest run of`,
+      "each workflow listed ran on the PR's newest head, ended in",
+      `\`${BAD_CONCLUSIONS.join("` / `")}\`, and nothing has run it again since, so`,
+      "nobody seems to be working on it:",
+      "",
+      renderRedPullRequests(redPrs, repo),
+    );
+  }
   return out;
 }
 
 // The work list the fleet worker takes as its scope: one item per workflow
 // with a finding, failing-run workflows first (newest breakage on top), then
 // dead, then stale ones. A workflow in several lanes is listed once.
-function renderToCheck(runs, dead, pushRuns, stale, otherRuns) {
+function renderToCheck(runs, dead, pushRuns, stale, otherRuns, redPrs = []) {
   const items = [];
   const seen = new Set();
   const add = (key, text) => {
@@ -799,6 +840,15 @@ function renderToCheck(runs, dead, pushRuns, stale, otherRuns) {
     const name = workflowKey(wf);
     add(name, `\`${name}\`: find why it no longer succeeds and fix it.`);
   }
+  for (const pr of redPrs || []) {
+    const names = [...new Set(pr.runs.map(workflowKey))].map((n) => `\`${n}\``).join(", ");
+    add(
+      `pr#${pr.number}`,
+      pr.dependabot
+        ? `PR #${pr.number} (Dependabot): find why ${names} fails on it and fix the cause in a separate PR; never push to a Dependabot branch.`
+        : `PR #${pr.number}: find why ${names} fails on it and fix it. Push to its branch only if an agent opened the PR; otherwise fix the cause in a separate PR, or say what the owner must do.`,
+    );
+  }
   return items;
 }
 
@@ -811,13 +861,19 @@ function buildIssueBody({
   defaultBranch,
   stale,
   otherRuns,
+  redPrs,
+  redHours = DEFAULT_PR_RED_HOURS,
   nowIso,
 }) {
   const deadList = dead || [];
   const pushList = pushRuns || [];
   const staleList = stale || [];
   const otherList = otherRuns || [];
-  const lines = [MARKER, hiddenRunIdsBlock([...(runs || []), ...pushList, ...otherList])];
+  const prList = redPrs || [];
+  const lines = [
+    MARKER,
+    hiddenRunIdsBlock([...(runs || []), ...pushList, ...otherList, ...redPullRequestRuns(prList)]),
+  ];
   if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
   if (staleList.length > 0) lines.push(hiddenStaleWorkflowsBlock(staleList));
   lines.push(
@@ -828,11 +884,11 @@ function buildIssueBody({
     "Neither a scheduled run nor a default-branch run has a PR to go red on —",
     "this issue is the alert.",
     "",
-    ...renderSections(runs, deadList, pushList, defaultBranch, staleList, otherList),
+    ...renderSections(runs, deadList, pushList, defaultBranch, staleList, otherList, prList, repo, redHours),
     "",
     "## To check",
     "",
-    ...renderToCheck(runs, deadList, pushList, staleList, otherList),
+    ...renderToCheck(runs, deadList, pushList, staleList, otherList, prList),
     "",
     "**What to do:** open the links and fix the root cause. When this issue is",
     "labeled `agent-ready`, the fleet worker turns it into a fix PR. The audit",
@@ -845,23 +901,38 @@ function buildIssueBody({
   return lines.join("\n");
 }
 
-function buildComment({ windowHours, runs, dead, pushRuns, defaultBranch, stale, otherRuns, nowIso }) {
+function buildComment({
+  repo = "",
+  windowHours,
+  runs,
+  dead,
+  pushRuns,
+  defaultBranch,
+  stale,
+  otherRuns,
+  redPrs,
+  redHours = DEFAULT_PR_RED_HOURS,
+  nowIso,
+}) {
   const deadList = dead || [];
   const pushList = pushRuns || [];
   const staleList = stale || [];
   const otherList = otherRuns || [];
-  const lines = [hiddenRunIdsBlock([...(runs || []), ...pushList, ...otherList])];
+  const prList = redPrs || [];
+  const lines = [
+    hiddenRunIdsBlock([...(runs || []), ...pushList, ...otherList, ...redPullRequestRuns(prList)]),
+  ];
   if (deadList.length > 0) lines.push(hiddenDeadWorkflowsBlock(deadList));
   if (staleList.length > 0) lines.push(hiddenStaleWorkflowsBlock(staleList));
   lines.push(
     "",
     `New findings in the last ${windowHours}h (scanned at ${nowIso}):`,
     "",
-    ...renderSections(runs, deadList, pushList, defaultBranch, staleList, otherList),
+    ...renderSections(runs, deadList, pushList, defaultBranch, staleList, otherList, prList, repo, redHours),
     "",
     "## To check",
     "",
-    ...renderToCheck(runs, deadList, pushList, staleList, otherList),
+    ...renderToCheck(runs, deadList, pushList, staleList, otherList, prList),
   );
   return lines.join("\n");
 }
@@ -869,10 +940,117 @@ function buildComment({ windowHours, runs, dead, pushRuns, defaultBranch, stale,
 function buildCloseComment({ windowHours, nowIso }) {
   return (
     `No failing scheduled runs, no failing default-branch runs, no ` +
-    `disabled scheduled workflows, and no scheduled workflow without a recent ` +
-    `success in the last ${windowHours}h (scanned at ${nowIso}) — closing. The ` +
+    `disabled scheduled workflows, no scheduled workflow without a recent ` +
+    `success, and no pull request left red in the last ${windowHours}h ` +
+    `(scanned at ${nowIso}) — closing. The ` +
     "audit will reopen a fresh tracking issue if any returns."
   );
+}
+
+// ── THE PR LANE ─────────────────────────────────────────────────────────────
+
+// The same-repo PR numbers a run belongs to. GitHub fills `pull_requests` only
+// for a PR whose head branch lives in this repo, so a fork PR yields none and
+// is never reported (the fleet worker skips fork PRs too).
+function pullRequestNumbers(run) {
+  return ((run && run.pull_requests) || [])
+    .map((pr) => pr && pr.number)
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+function runTime(r) {
+  return String((r && (r.run_started_at || r.created_at)) || "");
+}
+
+// The newest run first; a re-run keeps its id, so ties fall back to the id.
+function newerRun(a, b) {
+  const t = runTime(a).localeCompare(runTime(b));
+  if (t !== 0) return t > 0 ? a : b;
+  return Number(a.id) >= Number(b.id) ? a : b;
+}
+
+// PRs whose checks have stayed red: for each PR, take its NEWEST head (the
+// head sha of its newest pull_request run) and, on that head, the newest run
+// of each workflow. A PR is red when one of those runs completed with a
+// BAD_CONCLUSIONS conclusion at least `redHours` before `nowMs` (its
+// updated_at, which a re-run moves forward). A failure on an older head is
+// history, not a red PR, and a workflow still running on the newest head is
+// not red yet. Returns [{ number, headSha, dependabot, runs }] by PR number.
+function findRedPullRequests(runs, nowMs, redHours = DEFAULT_PR_RED_HOURS) {
+  const byPr = new Map();
+  for (const r of runs || []) {
+    if (!r || r.event !== "pull_request") continue;
+    for (const n of pullRequestNumbers(r)) {
+      if (!byPr.has(n)) byPr.set(n, []);
+      byPr.get(n).push(r);
+    }
+  }
+  const cutoff = nowMs - redHours * 3600 * 1000;
+  const red = [];
+  for (const [number, list] of byPr) {
+    const newest = list.reduce(newerRun);
+    const headSha = newest.head_sha;
+    if (!headSha) continue;
+    const latestByWorkflow = new Map();
+    for (const r of list) {
+      if (r.head_sha !== headSha) continue;
+      const key = r.workflow_id != null ? `id:${r.workflow_id}` : workflowKey(r);
+      const prev = latestByWorkflow.get(key);
+      latestByWorkflow.set(key, prev ? newerRun(prev, r) : r);
+    }
+    const failing = [...latestByWorkflow.values()].filter((r) => {
+      if (r.status !== "completed" || !BAD_CONCLUSIONS.includes(r.conclusion)) return false;
+      const finished = Date.parse(r.updated_at || r.run_started_at || r.created_at || "");
+      return Number.isFinite(finished) && finished <= cutoff;
+    });
+    if (failing.length === 0) continue;
+    red.push({
+      number,
+      headSha,
+      dependabot: String(newest.head_branch || "").startsWith("dependabot/"),
+      runs: failing,
+    });
+  }
+  return red.sort((a, b) => a.number - b.number);
+}
+
+// What the issues API says about one reported PR: "open" (report it),
+// "closed", "draft" or "on-hold" (skip it), or "unknown" (the answer is not a
+// PR at all, or carries no state: the lane could not tell).
+function redPullRequestState(issue) {
+  if (!issue || !issue.pull_request || typeof issue.state !== "string") return "unknown";
+  if (issue.state !== "open") return "closed";
+  if (issue.draft === true) return "draft";
+  const names = (issue.labels || []).map((l) => (typeof l === "string" ? l : l && l.name));
+  if (names.includes("on-hold")) return "on-hold";
+  return "open";
+}
+
+function redPullRequestRuns(prs) {
+  return (prs || []).flatMap((pr) => pr.runs);
+}
+
+// Keep, per PR, only the runs not in `reported`; drop a PR left with none.
+function dropReportedRedPullRequests(prs, reported) {
+  return (prs || [])
+    .map((pr) => ({ ...pr, runs: pr.runs.filter((r) => !reported.has(String(r.id))) }))
+    .filter((pr) => pr.runs.length > 0);
+}
+
+// One line per red PR: the PR, then each red workflow's run. Only the PR
+// number, the workflow file name and API-built URLs reach the issue; the PR
+// title and branch name are left out because anyone who can push a branch
+// chooses them.
+function renderRedPullRequests(prs, repo) {
+  return (prs || [])
+    .map((pr) => {
+      const runs = pr.runs
+        .map((r) => `[\`${workflowKey(r)}\` ${r.conclusion}](${r.html_url})`)
+        .join(", ");
+      const who = pr.dependabot ? " (Dependabot)" : "";
+      return `- [#${pr.number}](https://github.com/${repo}/pull/${pr.number})${who}: ${runs}`;
+    })
+    .join("\n");
 }
 
 // ── LISTING TRUNCATION (#425) ────────────────────────────────────────────────
@@ -1224,6 +1402,15 @@ function main() {
   const staleScanDisabled = flag("no-stale-scan");
   // Same opt-out-only shape as the push lane.
   const otherScanDisabled = flag("no-other-scan");
+  // Same opt-out-only shape as the push lane.
+  const prScanDisabled = flag("no-pr-scan");
+  const prRedHours = Number.parseInt(arg("pr-red-hours", String(DEFAULT_PR_RED_HOURS)), 10);
+  if (!Number.isInteger(prRedHours) || prRedHours <= 0) {
+    console.error(
+      `audit-scheduled-runs: invalid --pr-red-hours ${arg("pr-red-hours", String(DEFAULT_PR_RED_HOURS))}`,
+    );
+    return 2;
+  }
   const staleDays = Number.parseInt(arg("stale-days", String(DEFAULT_STALE_DAYS)), 10);
   if (!Number.isInteger(staleDays) || staleDays <= 0) {
     console.error(
@@ -1335,6 +1522,50 @@ function main() {
   const pushProbeFailed = !pushScanDisabled && (metaProbeFailed || !defaultBranch);
   const otherProbeFailed = !otherScanDisabled && (metaProbeFailed || !defaultBranch);
 
+  // Pull requests nobody is working on (see the PR LANE note in the file
+  // header). Its own try: a failure here is "could not tell" for this lane
+  // only, and never loses what the other lanes already found.
+  let redPrs = [];
+  let prProbeFailed = false;
+  let prListingTruncated = false;
+  if (!prScanDisabled) {
+    try {
+      // windowHours + prRedHours: a run must be at least prRedHours old to
+      // count, and the full windowHours past that keeps the same lag margin
+      // the other lanes get (see WHY A 48h WINDOW above).
+      const prListing = listRunsForEvent(repo, "pull_request", sinceIso(nowMs, windowHours + prRedHours));
+      prListingTruncated = prListing.truncated;
+      if (prListingTruncated) {
+        console.error(
+          `::error title=Scheduled-run health::${repo} pull_request run listing is TRUNCATED. ` +
+            "Treating the result as UNKNOWN, not as healthy.",
+        );
+      }
+      const skipped = [];
+      for (const pr of findRedPullRequests(prListing.runs, nowMs, prRedHours)) {
+        const split = partitionStarvedRuns(pr.runs, (r) => listRunJobs(repo, r.id));
+        if (split.alertable.length === 0) continue;
+        const state = redPullRequestState(JSON.parse(ghApi(`repos/${repo}/issues/${pr.number}`)));
+        if (state === "unknown") throw new Error(`could not read the state of PR #${pr.number}`);
+        if (state === "open") redPrs.push({ ...pr, runs: split.alertable });
+        else skipped.push(`#${pr.number} (${state})`);
+      }
+      if (skipped.length > 0) {
+        console.log(
+          `::notice title=Scheduled-run health::Not reporting red pull request(s) that are ` +
+            `closed, draft or on hold: ${skipped.join(", ")}.`,
+        );
+      }
+    } catch (e) {
+      redPrs = [];
+      prProbeFailed = true;
+      console.error(
+        `::error title=Scheduled-run health::Could not check ${repo} for pull requests left red: ` +
+          `${e.message}. Treating the result as UNKNOWN, not as healthy.`,
+      );
+    }
+  }
+
   // Dead cron-bearing workflows — the runs query cannot see these (they emit
   // nothing). Reuses the SAME repo-metadata read above (no extra API call);
   // `deadProbeFailed` suppresses the auto-close and reds the run, because an
@@ -1409,9 +1640,11 @@ function main() {
       pushProbeFailed ||
       otherProbeFailed ||
       staleProbeFailed ||
+      prProbeFailed ||
       scheduleListingTruncated ||
       pushListingTruncated ||
-      otherListingTruncated)
+      otherListingTruncated ||
+      prListingTruncated)
       ? 1
       : code;
 
@@ -1461,14 +1694,16 @@ function main() {
     `+ ${otherFailures.length} failing other default-branch run(s) ` +
     `in the last ${windowHours}h on ${repo}` +
     (dead.length > 0 ? ` + ${dead.length} disabled scheduled workflow(s)` : "") +
-    (stale.length > 0 ? ` + ${stale.length} workflow(s) with no recent success` : "");
+    (stale.length > 0 ? ` + ${stale.length} workflow(s) with no recent success` : "") +
+    (redPrs.length > 0 ? ` + ${redPrs.length} pull request(s) red for ${prRedHours}h+` : "");
 
   if (
     failures.length === 0 &&
     dead.length === 0 &&
     pushFailures.length === 0 &&
     otherFailures.length === 0 &&
-    stale.length === 0
+    stale.length === 0 &&
+    redPrs.length === 0
   ) {
     // NEVER close on an unknown answer — that is the #258 bug exactly: the
     // audit closed a live alert because it could not see the dead workflows
@@ -1479,9 +1714,11 @@ function main() {
         pushProbeFailed ||
         otherProbeFailed ||
         staleProbeFailed ||
+        prProbeFailed ||
         scheduleListingTruncated ||
         pushListingTruncated ||
-        otherListingTruncated)
+        otherListingTruncated ||
+        prListingTruncated)
     ) {
       const unknownParts = [];
       if (deadProbeFailed) unknownParts.push("the dead-workflow check");
@@ -1491,6 +1728,8 @@ function main() {
       if (pushListingTruncated) unknownParts.push("the push-run listing (truncated)");
       if (otherProbeFailed) unknownParts.push("the other default-branch run check");
       if (otherListingTruncated) unknownParts.push("the other default-branch run listing (truncated)");
+      if (prProbeFailed) unknownParts.push("the red pull request check");
+      if (prListingTruncated) unknownParts.push("the pull_request run listing (truncated)");
       console.log(
         `::notice title=Scheduled-run health::Leaving tracking issue #${issue.number} OPEN — ` +
           `no failing runs, but ${unknownParts.join(" and ")} did not complete, so a clean ` +
@@ -1544,12 +1783,14 @@ function main() {
     otherFailures = otherFailures.filter((r) => !closedRuns.has(String(r.id)));
     dead = dead.filter((w) => !closedDead.has(workflowKey(w)));
     stale = stale.filter((w) => !closedStale.has(workflowKey(w)));
+    redPrs = dropReportedRedPullRequests(redPrs, closedRuns);
     if (
       failures.length === 0 &&
       dead.length === 0 &&
       pushFailures.length === 0 &&
       otherFailures.length === 0 &&
-      stale.length === 0
+      stale.length === 0 &&
+      redPrs.length === 0
     ) {
       console.log(
         `OK — ${summary}; all already reported on a tracking issue closed in the last ` +
@@ -1575,6 +1816,8 @@ function main() {
                 defaultBranch,
                 stale,
                 otherRuns: otherFailures,
+                redPrs,
+                redHours: prRedHours,
                 nowIso,
               })}`,
               `labels[]=${label}`,
@@ -1590,7 +1833,17 @@ function main() {
     } else {
       console.log(
         `(dry-run) would open "${ISSUE_TITLE}" [${label}${workLabel ? `, ${workLabel}` : ""}] with:\n` +
-          renderSections(failures, dead, pushFailures, defaultBranch, stale, otherFailures).join("\n"),
+          renderSections(
+            failures,
+            dead,
+            pushFailures,
+            defaultBranch,
+            stale,
+            otherFailures,
+            redPrs,
+            repo,
+            prRedHours,
+          ).join("\n"),
       );
     }
     console.log(`ALERT FILED — ${summary}.`);
@@ -1621,12 +1874,16 @@ function main() {
   // stale until somebody fixes it, and re-commenting it daily would make the
   // alert the noise it exists to cut through.
   const freshStale = stale.filter((w) => !reportedStale.has(workflowKey(w)));
+  // A red PR is reported once per failing run, through the shared run-id
+  // channel: a new push that fails again is a new run, and is reported then.
+  const freshRedPrs = dropReportedRedPullRequests(redPrs, reported);
   if (
     fresh.length === 0 &&
     freshDead.length === 0 &&
     freshPush.length === 0 &&
     freshOther.length === 0 &&
-    freshStale.length === 0
+    freshStale.length === 0 &&
+    freshRedPrs.length === 0
   ) {
     console.log(
       `OK — ${summary}; all already reported on tracking issue #${issue.number}. Nothing new.`,
@@ -1634,7 +1891,12 @@ function main() {
     return done(0);
   }
   const newCount =
-    fresh.length + freshDead.length + freshPush.length + freshOther.length + freshStale.length;
+    fresh.length +
+    freshDead.length +
+    freshPush.length +
+    freshOther.length +
+    freshStale.length +
+    freshRedPrs.length;
   console.log(
     `::notice title=Scheduled-run health::${summary} — ${newCount} new; ` +
       `commenting on issue #${issue.number}.`,
@@ -1644,6 +1906,7 @@ function main() {
       ghApi(`repos/${repo}/issues/${issue.number}/comments`, {
         fields: [
           `body=${buildComment({
+            repo,
             windowHours,
             runs: fresh,
             dead: freshDead,
@@ -1651,6 +1914,8 @@ function main() {
             defaultBranch,
             stale: freshStale,
             otherRuns: freshOther,
+            redPrs: freshRedPrs,
+            redHours: prRedHours,
             nowIso,
           })}`,
         ],
@@ -1667,7 +1932,17 @@ function main() {
     }
   } else {
     console.log(
-      `(dry-run) would comment:\n${renderSections(fresh, freshDead, freshPush, defaultBranch, freshStale, freshOther).join("\n")}`,
+      `(dry-run) would comment:\n${renderSections(
+        fresh,
+        freshDead,
+        freshPush,
+        defaultBranch,
+        freshStale,
+        freshOther,
+        freshRedPrs,
+        repo,
+        prRedHours,
+      ).join("\n")}`,
     );
   }
   console.log(
@@ -1692,6 +1967,12 @@ module.exports = {
   STALE_SCAN_RUNS,
   STALE_MIN_RUNS,
   DEFAULT_STALE_DAYS,
+  DEFAULT_PR_RED_HOURS,
+  pullRequestNumbers,
+  findRedPullRequests,
+  redPullRequestState,
+  dropReportedRedPullRequests,
+  renderRedPullRequests,
   staleCandidates,
   lastSuccessAt,
   staleVerdict,
