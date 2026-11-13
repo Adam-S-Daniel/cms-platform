@@ -134,6 +134,27 @@ test.describe("cms-editor-ui shared helper — anti-drift lint (#1723)", () => {
     expect(captured.name.test("Tag"), "a bare collection label is not the New control").toBe(false);
   });
 
+  test("mediaLibraryButton finds the library under BOTH the relabeled and Decap's own name", () => {
+    // The production shell relabels Decap's "Media" tab "Images & files"
+    // (theme/admin/media-library-labels.js, #1003); the local and test shells
+    // keep "Media". An exact "Media" match timed out the prod media round trip
+    // on adamdaniel.ai once v0.1.176 shipped the relabel.
+    let captured = null;
+    const fakePage = {
+      getByRole(role, opts) {
+        captured = { role, ...opts };
+        return { first: () => "LOCATOR" };
+      },
+    };
+    const { mediaLibraryButton } = require("./cms-editor-ui");
+    expect(mediaLibraryButton(fakePage)).toBe("LOCATOR");
+    expect(captured.role).toBe("button");
+    expect(captured.name.test("Images & files"), "the production shell's name").toBe(true);
+    expect(captured.name.test("Media"), "Decap's own name").toBe(true);
+    expect(captured.name.test("Media search"), "a control that only mentions Media").toBe(false);
+    expect(captured.name.test("New mentions"), "the New mentions link").toBe(false);
+  });
+
   // ── #1815 delete-phase: prove the editor delete actually DISPATCHED ───
   // Prod runs 26996121665 / 26994473112 failed because the delete leg
   // clicked "Delete published entry", accepted the native window.confirm,
