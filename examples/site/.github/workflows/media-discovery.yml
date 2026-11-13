@@ -40,9 +40,9 @@ permissions:
 
 jobs:
   media-discovery:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/media-discovery.yml@v0.1.176
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/media-discovery.yml@v0.1.177
     with:
-      platform_ref: v0.1.176
+      platform_ref: v0.1.177
     secrets:
       anthropic_api_key: ${{ secrets.MEDIA_DISCOVERY_ANTHROPIC_API_KEY }}
       app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}

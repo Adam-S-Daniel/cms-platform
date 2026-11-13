@@ -10,9 +10,16 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.176)
+## Version history (v0.1.0 → v0.1.177)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.177 — The prod media round trip finds the media library under its new "Images & files" name.**
+The first-parent range since v0.1.176 holds two entries on main before this release PR: the merge commits of [#1024](https://github.com/Adam-S-Daniel/cms-platform/pull/1024) (the fix below) and [#1023](https://github.com/Adam-S-Daniel/cms-platform/pull/1023) (the `_agent-guidance` AGENTS.md sync).
+
+Media library helper. v0.1.176 relabeled Decap's top-nav "Media" tab "Images & files" on the production admin shell (#1003), but the shared e2e helper `mediaLibraryButton` in `e2e/cms-editor-ui.js` still matched exactly "Media". adamdaniel.ai's `cms-media-roundtrip` then could not open the library to delete its upload ([run 43517006509](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/43517006509)) and left a cleanup PR behind. The helper now matches `/^(?:Images & files|Media)$/`: the first name on a production shell, Decap's own on `index-local.html` and `index-test.html`, which do not load the relabel. A pure-fs test in `e2e/cms-editor-ui.test.js` locks both names in and keeps "Media search" and "New mentions" out.
+
+Consumer effect. None to act on. The e2e harness is checked out at the pinned release, so a consumer's prod media round trip picks up the fix with this pin.
 
 **v0.1.176 — Media discovery reads PDFs and JavaScript-built pages, writes its digest for a non-technical reader, and the admin gains a New mentions page.**
 The first-parent range since v0.1.175 holds nineteen entries on main before this release PR. Six are the media stack: the merge commits of [#1001](https://github.com/Adam-S-Daniel/cms-platform/pull/1001), [#996](https://github.com/Adam-S-Daniel/cms-platform/pull/996), [#997](https://github.com/Adam-S-Daniel/cms-platform/pull/997), [#1000](https://github.com/Adam-S-Daniel/cms-platform/pull/1000), [#1002](https://github.com/Adam-S-Daniel/cms-platform/pull/1002) and [#1003](https://github.com/Adam-S-Daniel/cms-platform/pull/1003). The rest are [#1007](https://github.com/Adam-S-Daniel/cms-platform/pull/1007) (a 7-day Dependabot cooldown in the site template), two skill retirements ([#1016](https://github.com/Adam-S-Daniel/cms-platform/pull/1016) `consumer-repo-provisioning`, whose pointers now name `docs/CONSUMER-PROVISIONING.md`, and [#1017](https://github.com/Adam-S-Daniel/cms-platform/pull/1017) `github-actions-sha-pinning`), a `skills.lock` re-pin ([#1011](https://github.com/Adam-S-Daniel/cms-platform/pull/1011)), seven `_agent-guidance` AGENTS.md syncs, and two Dependabot squash commits ([#1013](https://github.com/Adam-S-Daniel/cms-platform/pull/1013), hono; [#1014](https://github.com/Adam-S-Daniel/cms-platform/pull/1014), addressable in `e2e/fixture-site`).
