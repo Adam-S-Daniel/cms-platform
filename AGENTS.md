@@ -254,8 +254,9 @@ The floor above says every `uses:` goes through an `actions.lock`. **Not in
 this repo, adamdaniel.ai or jodidaniel.com**: actionlint (a required lane)
 rejects the lockfile's `$/` local refs, and `gh actions-lock --verify` rejects
 the `./.cms-platform/...` refs into a runtime checkout. They stay on full
-SHAs until both tools change; the `github-actions-sha-pinning` skill has the
-detail. The flip side (ADR 0024's 2026-10-31 addendum): a reusable is covered
+SHAs until both tools change (a cross-repo ref to this repo's own reusables or
+composites stays on its release tag, never a SHA: `docs/PIN-CONSISTENCY.md`).
+The flip side (ADR 0024's 2026-10-31 addendum): a reusable is covered
 by its OWN repo's lockfile, so a lockfile repo cannot call a reusable defined
 here. Its health audit calls `_agent-guidance`'s
 `scheduled-run-health-reusable.yml` instead.

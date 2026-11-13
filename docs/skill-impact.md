@@ -79,6 +79,20 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-11-13 — cms-platform/platform-release-and-bump — edit
+
+- Motivation: the skill's one pointer to `github-actions-sha-pinning` would dangle once that skill is removed (the entry below).
+- Change: the pointer now cites `docs/PIN-CONSISTENCY.md`; no rule changed (PR to be linked).
+- Eval: outstanding — the skills-evals fixture for this skill was not run in this change (a one-line pointer repoint).
+- Outcome: pending merge.
+
+## 2026-11-13 — cms-platform/github-actions-sha-pinning — remove
+
+- Motivation: skills-evals verdict `retire` as of 2026-11-13: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
+- Change: deleted `skills/github-actions-sha-pinning/`; the facts other files relied on already live in AGENTS.md (no `actions.lock` here), `docs/PIN-CONSISTENCY.md` (platform refs stay on the release tag, no version comment) and `docs/CI-INVARIANTS.md` (Dependabot cooldown), so the two pointers (AGENTS.md, `platform-release-and-bump`) now cite those docs and its freshness-allow and dated-phrasing allowlist entries were dropped (PR to be linked).
+- Eval: the skills-evals evals explorer, https://adamdaniel.ai/tools/evals/ (verdict `retire` as of 2026-11-13).
+- Outcome: pending merge.
+
 ## 2026-10-28 — cms-platform/(13 skills) — edit
 
 - Motivation: the 2026-10-28 prompt-audit sweep (https://github.com/Adam-S-Daniel/cms-platform/issues/900) found stale or contradicted statements in instruction files: preview-environments (deploy-preview.yml is `workflow_call` only), post-failure-comment (e2e marker is per matrix slot; a "prior revisions" note), code-quality (two self-ci lanes missing), platform-release-and-bump (hand-built candidate drafts), admin-config-render (canary "not optional" vs the `base_collections` keep-list), consumer-repo-provisioning (diff-against-prior-version phrasing), cms-stuck-pr-triage / browser-testing / ci-watcher-loops (incident IDs and dated evidence inside rules), aws-bootstrap (obsolete v0.1.125 entry), test-canary (long description).
