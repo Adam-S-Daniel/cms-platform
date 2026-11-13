@@ -146,7 +146,8 @@ problem) instead of being ignored.
 | `CMS_AUTOMATION_APP_ID` | variable | live mode (the PR-writing App) | email-only, with a `::notice::` |
 | `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode | email-only, with a `::notice::` |
 
-The SMTP host defaults to `smtp.fastmail.com` on port 465 (implicit TLS); the
+The SMTP host defaults to `smtp.fastmail.com` on port 587, upgraded with
+STARTTLS before the login (the setup Fastmail gives its own mail clients); the
 CLI reads `MEDIA_DISCOVERY_SMTP_HOST` if a different host is ever needed. The
 reusable derives the `/admin` link from `_config.yml` (`cms.admin_origin`, else
 `url`, plus `/admin/`) and the site name from `title` (else the repository
@@ -217,7 +218,15 @@ tokens, 5 continuations) bound the worst case.
 - **Counts-only logs.** The repository and its Actions logs are public. The
   CLI prints counts and fixed messages only: never a title, name, URL, quote or
   address. API, GitHub and SMTP errors are reported by class and HTTP status,
-  never by message or response body. The workflow passes every input,
+  never by message or response body. The one exception is a refused SMTP
+  login, which no class name explains: the log then shows the host and port,
+  the TLS version, the server's EHLO extensions and advertised AUTH
+  mechanisms, each mechanism tried with the server's reply code and text,
+  and the shape of the user name and password (length, whitespace, line
+  breaks, non-ASCII). The reply text has every address, the user name, its
+  local part and the password replaced, and is one line of at most 300
+  characters. smtplib's debug output is never turned on: it prints the AUTH
+  exchange, which carries the credentials. The workflow passes every input,
   variable and secret through `env:`, and masks the SMTP user and each
   recipient before the CLI runs.
 - **Safe PR bodies** (`render.safe_md`): web text in a PR body is escaped so

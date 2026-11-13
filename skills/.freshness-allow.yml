@@ -51,14 +51,6 @@ allow:
     reason: Retired fleet-wide; the skill says no repo in the fleet has it.
     marker: "**No `code-quality.yml` exists in this fleet**"
 
-  - skill: consumer-repo-provisioning
-    citation: CMS_PLATFORM_PAT
-    reason: Retired credential; the skill documents it as one not to create.
-    marker: "## `CMS_PLATFORM_PAT` — do not create it"
-  - skill: consumer-repo-provisioning
-    citation: infrastructure/site-params.env
-    reason: Consumer-side file the scaffolder writes; this tree ships only infrastructure/site-params.example.env.
-    marker: "derives every value from `APEX_DOMAIN` in"
 
   - skill: preview-environments
     citation: teardown-preview.yml

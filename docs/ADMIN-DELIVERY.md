@@ -63,7 +63,8 @@ whole design:
   platform `field_library` (see "field_library + `$ref` reuse" below) — the
   base config itself stays TEXT and is spliced byte-for-byte as today.
 - **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
-  reviews dashboards (`reviews/*.html`) — skipping a file only if it already
+  reviews dashboards (`reviews/*.html`) AND the Media search page
+  (`media-search.html`, which reads `CMS_REPO`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
   `CMS_REPO` / `CMS_SITE_ORIGIN` / `CMS_ADMIN_ORIGIN` (#517, `""` unless
   `cms.admin_origin` is set) / `CMS_APEX` / `CMS_OAUTH_BASE_URL` /
@@ -93,7 +94,7 @@ whole design:
 (same copy + render + inject + cleanup; resolves the gem via
 `Gem.loaded_specs['cms-platform-theme']`). The two are **parity-locked** by
 `e2e/decap-config-render-parity.test.js` — keep the injected globals and the
-`index*` / `reviews/*` globs **identical** in both, or the lint fails.
+`index*` / `reviews/*` / `media-search.html` globs **identical** in both, or the lint fails.
 
 ### In-editor content previews and Liquid (#726)
 
@@ -606,7 +607,7 @@ serves its editor from its own origin (`AdminDomainName`, see
 `docs/ADMIN-AUTH-SECURITY.md`) answers every miss on that host with, so it
 shares an origin with the editor's tokens: plain HTML, no script, no style, no
 external resource, no layout or include, and no `window.CMS_*` injection (the
-render paths only touch `index*.html` and `reviews/*.html`).
+render paths only touch `index*.html`, `reviews/*.html` and `media-search.html`).
 `theme/spec/admin_not_found_page_test.rb` parses it against an allowlist.
 
 ## Seeded 404 page: self-contained and neutral, not gem-styled (issue #326)
@@ -675,3 +676,19 @@ nothing else in the seeding contract changes, and the render-neutral check in
 here (`404.html` is not under `theme/`, so that specific gate is irrelevant;
 the PR will still go through the ordinary visual-regression lane like any
 other content change).
+
+## Media search page (`/admin/media-search.html`)
+
+The site owner's page for deciding which finds from the weekly media search go
+on the site. `media-search.html` is the shell; `media-search.js` holds the logic
+(pure functions on `window.MediaSearch`, unit-tested by
+`e2e/media-search.test.js`); `media-search-nav-link.js` adds the header link
+(production shell only). Results are read, and decisions written, through the
+GitHub REST API with the editor's session token (`decap-cms-user`). Where they
+live is the `DATA_SOURCE` block at the top of `media-search.js`: today
+`findings.json` and `decisions.json` on the `persistent/media-search` branch of
+`CMS_REPO`. "Add to site" opens the same draft `scripts/media_discovery/github_api.py`
+`open_entry_pr` does (branch `cms/<collection>/<slug>`, `Create Media “slug”` pull
+request, labels `decap-cms/pending_review` + `media-discovery`, the dedupe marker
+first in the body), so it appears in the editor's Workflow list. Keep
+`normalizeUrl` and `safeMd` in step with `domains.py` and `render.py`.
