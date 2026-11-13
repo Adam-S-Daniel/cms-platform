@@ -121,7 +121,7 @@ jobs:
       # Unconditional: the escaping lint runs on every site, and it parses
       # with the site bundle's `liquid` gem.
       - name: Set up Ruby
-        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
+        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94
         with:
           # Tracks deploy-preview.yml's `ruby_version` default, so the tree
           # this verifies is built by the same Ruby that builds the deploys.
