@@ -135,7 +135,7 @@ jobs:
           # knobs here is the clear notice AGENTS.md asks for; continuing to a
           # confusing failure is the silent no-op it forbids.
           if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
-            echo "::error::No CMS automation App on this repo. platform-bump REQUIRES it since v0.1.103 — set the vars.CMS_AUTOMATION_APP_ID variable and the CMS_AUTOMATION_APP_PRIVATE_KEY secret (see the consumer-repo-provisioning skill). The CMS_PLATFORM_PAT fallback was removed."
+            echo "::error::No CMS automation App on this repo. platform-bump REQUIRES it since v0.1.103 — set the vars.CMS_AUTOMATION_APP_ID variable and the CMS_AUTOMATION_APP_PRIVATE_KEY secret (see docs/CONSUMER-PROVISIONING.md). The CMS_PLATFORM_PAT fallback was removed."
             exit 1
           fi
           # `|| LATEST=""` — never a bare `|| true`: on a non-2xx `gh api` prints
@@ -156,7 +156,7 @@ jobs:
           fi
           # Scoped DOWN at mint time: this one repo, and only the three
           # permissions the push + PR + auto-merge below need. The App itself
-          # holds nothing wider (see the consumer-repo-provisioning skill).
+          # holds nothing wider (see docs/CONSUMER-PROVISIONING.md).
           node "$MINT" --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
             --repositories "${GITHUB_REPOSITORY#*/}" \
             --permissions contents=write,pull_requests=write,workflows=write
