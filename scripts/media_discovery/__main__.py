@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import llm
+from .browser import BrowserSession
 from .config import ConfigError, load_config
 from .corroborate import Problem, effective_kind, verify
 from .dedupe import is_duplicate, load_existing
@@ -72,6 +73,44 @@ def _site_label(admin_url: str, site_name: str) -> str:
     return host.removeprefix("www.") or site_name
 
 
+BROWSER_STATUSES = frozenset({"403", "406", "429", "503"})
+
+
+def browser_eligible(problems, pages) -> list[str]:
+    """The sources worth a headless-browser retry: refused as a bot, showing no
+    name (JavaScript-built text), or not matching the claim."""
+    urls = []
+    for p in problems:
+        if p.url not in pages or p.url in urls:
+            continue
+        if ((p.code == "http-status" and p.detail in BROWSER_STATUSES)
+                or (p.code == "identity" and p.detail == "no-name")
+                or p.code == "no-match"):
+            urls.append(p.url)
+    return urls
+
+
+class _LazyBrowser:
+    """Starts the browser session on the first retry; fetch() is None without one."""
+
+    def __init__(self, factory):
+        self._factory, self._session = factory, None
+
+    def fetch(self, url):
+        if self._session is None:
+            self._session = self._factory()
+            self._session.__enter__()
+        return self._session.fetch(url)
+
+    def close(self):
+        if self._session is not None:
+            try:
+                self._session.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 - shutdown problems are not findings
+                pass
+            self._session = None
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python3 -m media_discovery")
     sub = p.add_subparsers(dest="command", required=True)
@@ -85,7 +124,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetch,
-         github_factory=GitHub, send=send_digest, out=None) -> int:
+         github_factory=GitHub, send=send_digest, out=None,
+         browser_factory=BrowserSession) -> int:
     args = _parser().parse_args(argv)
     env = os.environ if env is None else env
     out = out or sys.stdout
@@ -159,50 +199,71 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
 
     seen = set(prior)
     counts = dict(duplicates=0, confirmed=0, prs_opened=0, unconfirmed=0)
+    browser_retries = browser_rescued = 0
+    browser = _LazyBrowser(browser_factory)
     new_prs, would_open, unconfirmed = [], [], []
     failure = None
     reviewer_misses = 0
-    for cand in candidates:
-        if is_duplicate(cand, existing, seen):
-            counts["duplicates"] += 1
-            continue
-        try:
-            kind = effective_kind(cand, today)
-            urls = list(dict.fromkeys([cand.primary_url, *cand.supporting_urls]))
-            verdict = verify(cand, {u: fetcher(u) for u in urls}, cfg)
-            if not verdict.confirmed:
-                unconfirmed.append((cand, verdict.problems))
+    try:
+        for cand in candidates:
+            if is_duplicate(cand, existing, seen):
+                counts["duplicates"] += 1
                 continue
             try:
-                entry = render_entry(cand, kind, cfg)
-            except ValueError as exc:
-                unconfirmed.append((cand, [Problem("no-entry", detail=str(exc))]))
+                kind = effective_kind(cand, today)
+                urls = list(dict.fromkeys([cand.primary_url, *cand.supporting_urls]))
+                pages = {u: fetcher(u) for u in urls}
+                verdict = verify(cand, pages, cfg)
+                if not verdict.confirmed:
+                    retry = browser_eligible(verdict.problems, pages)
+                    if retry:
+                        browser_retries += 1
+                        pages2, got = dict(pages), False
+                        for u in retry:
+                            fetched = browser.fetch(u)
+                            if fetched is not None:
+                                pages2[u], got = fetched, True
+                        if got:
+                            second = verify(cand, pages2, cfg)
+                            verdict = second
+                            if second.confirmed:
+                                browser_rescued += 1
+                if not verdict.confirmed:
+                    unconfirmed.append((cand, verdict.problems))
+                    continue
+                try:
+                    entry = render_entry(cand, kind, cfg)
+                except ValueError as exc:
+                    unconfirmed.append((cand, [Problem("no-entry", detail=str(exc))]))
+                    continue
+            except Exception:  # noqa: BLE001 - one bad candidate must not end the run; no text logged
+                unconfirmed.append((cand, [Problem("internal-error")]))
                 continue
-        except Exception:  # noqa: BLE001 - one bad candidate must not end the run; no text logged
-            unconfirmed.append((cand, [Problem("internal-error")]))
-            continue
-        seen |= _urls(cand)
-        counts["confirmed"] += 1
-        if mode != "live":
-            would_open.append(cand)
-            continue
-        title, body = render_pr(cand, kind, entry, verdict, review_link)
-        try:
-            opened = gh.open_entry_pr(args.repo, entry, title, body, LABELS, reviewers)
-        except GitHubError as exc:
-            failure = failure or str(exc)
-            unconfirmed.append((cand, [Problem("draft-failed", detail=str(exc.status))]))
-            continue
-        if opened is None:
-            counts["duplicates"] += 1
-            continue
-        counts["prs_opened"] += 1
-        reviewer_misses += not opened.reviewers_requested
-        new_prs.append(cand)
+            seen |= _urls(cand)
+            counts["confirmed"] += 1
+            if mode != "live":
+                would_open.append(cand)
+                continue
+            title, body = render_pr(cand, kind, entry, verdict, review_link)
+            try:
+                opened = gh.open_entry_pr(args.repo, entry, title, body, LABELS, reviewers)
+            except GitHubError as exc:
+                failure = failure or str(exc)
+                unconfirmed.append((cand, [Problem("draft-failed", detail=str(exc.status))]))
+                continue
+            if opened is None:
+                counts["duplicates"] += 1
+                continue
+            counts["prs_opened"] += 1
+            reviewer_misses += not opened.reviewers_requested
+            new_prs.append(cand)
+    finally:
+        browser.close()
     counts["unconfirmed"] = len(unconfirmed)
 
     say(f"media-discovery: mode={mode} candidates={len(candidates)} dropped={dropped} "
-        + " ".join(f"{k}={v}" for k, v in counts.items()))
+        + " ".join(f"{k}={v}" for k, v in counts.items())
+        + f" browser_retries={browser_retries} browser_rescued={browser_rescued}")
     if reviewer_misses:
         say(f"::warning::{reviewer_misses} pull request(s) opened without the requested reviewers "
             "(check MEDIA_DISCOVERY_REVIEWERS: each must be a collaborator)")

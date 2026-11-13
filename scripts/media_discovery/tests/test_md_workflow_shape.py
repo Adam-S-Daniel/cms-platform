@@ -166,12 +166,45 @@ def test_dependencies_are_installed_pinned(reusable):
     [install] = [s for s in steps(reusable) if "pip install" in s.get("run", "")]
     words = shell_words(install["run"])
     assert "anthropic==2.3.0" in words and "pyyaml==6.0.3" in words and "pypdf==6.21.4" in words
+    assert "playwright==1.64.1" in words
     assert all("==" in w for w in words[words.index("--user") + 1:])
+
+
+BROWSER_COMPOSITE = "./.cms-platform/.github/actions/install-playwright-browsers"
+
+
+def test_chromium_is_installed_through_the_bounded_composite(reusable):
+    # Owner choice A on #1002: the bounded composite, not a raw
+    # `python3 -m playwright install --with-deps chromium`, which the
+    # playwright-install-bounded lint forbids. The composite runs `npx playwright`
+    # from .cms-platform/e2e, so Node and `npm ci` there must come first.
+    all_steps = steps(reusable)
+    assert not any("playwright install" in s.get("run", "") for s in all_steps)
+    [pip] = [i for i, s in enumerate(all_steps) if "pip install" in s.get("run", "")]
+    [node] = [i for i, s in enumerate(all_steps)
+              if s.get("uses", "").startswith("actions/setup-node@")]
+    [npm] = [i for i, s in enumerate(all_steps) if s.get("run", "").strip() == "npm ci"]
+    [browser] = [i for i, s in enumerate(all_steps) if s.get("uses") == BROWSER_COMPOSITE]
+    assert pip < browser and node < npm < browser
+    assert all_steps[npm]["working-directory"] == ".cms-platform/e2e"
+    assert all_steps[browser]["with"]["browser"] == "chromium"
+    for i in (node, npm, browser):
+        assert all_steps[i]["if"] == CONFIGURED
+
+
+def test_the_sparse_checkout_carries_the_browser_installer(reusable):
+    [co] = [s for s in steps(reusable)
+            if s.get("uses", "").startswith("actions/checkout@") and "with" in s
+            and s["with"].get("path") == ".cms-platform"]
+    sparse = co["with"]["sparse-checkout"].split()
+    for needed in (".github/actions/install-playwright-browsers",
+                   "e2e/package.json", "e2e/package-lock.json"):
+        assert needed in sparse
 
 
 def test_third_party_actions_are_full_sha_pinned(reusable):
     for s in steps(reusable):
-        if "uses" in s:
+        if "uses" in s and not s["uses"].startswith("./"):
             ref = s["uses"].split("@", 1)[1]
             assert FULL_SHA.match(ref), s["uses"]
 
