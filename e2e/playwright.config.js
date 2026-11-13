@@ -169,6 +169,8 @@ const PLATFORM_META_SPECS = [
   "admin-hidden-tab.test.js",
   // Reads theme/admin/media-search.js SOURCE (the Media search page); platform tree only.
   "media-search.test.js",
+  // Lints theme/admin SOURCE and platform YAML labels for a bare "media"; platform tree only.
+  "admin-plain-names.test.js",
   "admin-publish-duration-copy.test.js",
   // #649 — AST lint over theme/admin SOURCE (owner-facing copy; platform tree only).
   "admin-owner-copy-banned-words.test.js",

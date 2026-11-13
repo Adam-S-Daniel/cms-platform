@@ -63,7 +63,7 @@ whole design:
   platform `field_library` (see "field_library + `$ref` reuse" below) — the
   base config itself stays TEXT and is spliced byte-for-byte as today.
 - **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
-  reviews dashboards (`reviews/*.html`) AND the Media search page
+  reviews dashboards (`reviews/*.html`) AND the New mentions page
   (`media-search.html`, which reads `CMS_REPO`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
   `CMS_REPO` / `CMS_SITE_ORIGIN` / `CMS_ADMIN_ORIGIN` (#517, `""` unless
@@ -677,9 +677,34 @@ here (`404.html` is not under `theme/`, so that specific gate is irrelevant;
 the PR will still go through the ordinary visual-regression lane like any
 other content change).
 
-## Media search page (`/admin/media-search.html`)
+## Words we use
 
-The site owner's page for deciding which finds from the weekly media search go
+A site owner meets the word "media" in three places, and it must mean one thing.
+Three terms, each with one meaning:
+
+| Say | It is | Where it comes from |
+| --- | --- | --- |
+| **Images & files** | The library of uploaded pictures and files: Decap's top-nav tab, the library window, the picker buttons. | Decap's built-in "Media", relabeled by `media-library-labels.js` (a locale override: it merges three phrases over `CMS.getLocale('en')` and re-registers it). |
+| The site's own collection name | The site's articles, talks or press: its label in `admin/collections.site.yml` (for example "Press and talks"). | Each site repo. |
+| **New mentions** | The page that finds new items about the owner on the web, to add to the site (`/admin/media-search.html`, kept as a file name and URL). | `media-search.html`, `media-search.js`, `media-search-nav-link.js`. |
+
+The rule: no `label`, `label_singular` or `hint` in `config.base.yml` or
+`collections.site.yml.example`, no visible text or `aria-label`, `title`,
+`placeholder` or `alt` in `theme/admin/*.html`, and no label string in the nav-link and
+relabel scripts, contains "media" as a standalone word ("social media" is the one
+allowed phrase). File names, URLs, collection names and code identifiers keep
+the word. `e2e/admin-plain-names.test.js` enforces it with
+`e2e/plain-names-lint.js`, which a site repo can call on its own collections:
+
+```js
+const { checkCollectionsYaml } = require("./.cms-platform/e2e/plain-names-lint");
+const bad = checkCollectionsYaml(fs.readFileSync("admin/collections.site.yml", "utf8"));
+expect(bad, bad.join("\n")).toEqual([]);
+```
+
+## New mentions page (`/admin/media-search.html`)
+
+The site owner's page for deciding which finds from the weekly search for new mentions go
 on the site. `media-search.html` is the shell; `media-search.js` holds the logic
 (pure functions on `window.MediaSearch`, unit-tested by
 `e2e/media-search.test.js`); `media-search-nav-link.js` adds the header link
