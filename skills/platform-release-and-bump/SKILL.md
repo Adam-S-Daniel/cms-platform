@@ -69,8 +69,7 @@ the pin-consistency guard fails. The two consumers differ slightly:
   `revision:` above, and draft candidate validation above, which deliberately
   uses full commit SHA pins). If you find yourself hunting 40-hex SHAs or
   `# vX.Y.Z` comments in a stable adoption's workflows, you are working from
-  the retired SHA-plus-comment model (see the `github-actions-sha-pinning`
-  skill).
+  the retired SHA-plus-comment model (see `docs/PIN-CONSISTENCY.md`).
 
 The robust, idempotent way is the same script the workflow runs. It moves only
 real pins (a parser finds them; prose that names the old version stays as it

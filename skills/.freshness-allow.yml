@@ -51,18 +51,6 @@ allow:
     reason: Retired fleet-wide; the skill says no repo in the fleet has it.
     marker: "**No `code-quality.yml` exists in this fleet**"
 
-  - skill: github-actions-sha-pinning
-    citation: .github/workflows/dependabot-comment-sync.yml
-    reason: Deleted with the version-comment machinery; the skill says so.
-    marker: "and `scripts/sync-action-pin-comments.sh` — is **deleted**"
-  - skill: github-actions-sha-pinning
-    citation: scripts/sync-action-pin-comments.sh
-    reason: Deleted with the version-comment machinery; the skill says so.
-    marker: "and `scripts/sync-action-pin-comments.sh` — is **deleted**"
-  - skill: github-actions-sha-pinning
-    citation: sync-action-pin-comments.sh
-    reason: Deleted with the version-comment machinery; the skill says so.
-    marker: "and `scripts/sync-action-pin-comments.sh` — is **deleted**"
 
   - skill: preview-environments
     citation: teardown-preview.yml
