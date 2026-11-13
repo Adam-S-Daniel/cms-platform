@@ -38,7 +38,7 @@
 #    "state":"full","repos":2,"guidance_version":"0123abcd",
 #    "check_expected":true,"check_reported":"match",
 #    "registry_sha":null,"sources":[{"registry":"<owner>/<repo>","ref":"<40 hex>"}],
-#    "sources_dropped":0,"uploaded":null}
+#    "sources_dropped":0,"listing":"full","uploaded":null}
 # `session` is a sha256 prefix of the session id, never the id. `surface` and
 # `cli` are the transcript's own `entrypoint` and `version`, or null when the
 # value is not one the private reader accepts (see SURFACE_RE and CLI_RE).
@@ -57,7 +57,16 @@
 # the cap. Both are null when the install record is missing, not a regular
 # file, over 1 MiB, unreadable, or has no `sources` list (installs before
 # _agent-guidance#398 had none). `uploaded` is true or false when an upload was
-# tried, null when it was not. Apart from registry owner/repo names, this
+# tried, null when it was not. `listing` is optional: "full" or "truncated"
+# when the transcript holds the session's first skill listing (an `attachment`
+# of type skill_listing with isInitial true), and absent (the key is omitted)
+# when no such listing is found. When the install record lists the skills it
+# installed from Adam-S-Daniel/adam-agentskills, only those are judged: "full"
+# when every one is listed with a description, "truncated" when any is listed
+# by name alone or missing (a cut that reaches only account or plugin skills
+# leaves them fully listed). Without that list, any skill, bare or
+# namespaced, listed by name alone reads "truncated". Never "full" without
+# that proof. Apart from registry owner/repo names, this
 # record holds no paths, names, titles or file content. (Phase 2's lines, below,
 # carry skill names, tool-use ids and digests, and go to the private store or
 # the private bucket only.)
@@ -162,7 +171,8 @@
 #   key   drop/<YYYY-MM-DD UTC of the send>/<32 lowercase hex of os.urandom>.json
 #   body  {"v":1,"kind":"usage-drop","sent":"<YYYY-MM-DDTHH:MM:SSZ>",
 #          "guidance":[<phase 1's line, if due>],"skills":[<phase 2's lines>]}
-# exactly those keys. A `guidance` item is byte for byte the line the git route
+# exactly those keys (plus `hooks` when phase 3's lines are due and the switch
+# under CLOUD HOOK RUNS is on). A `guidance` item is byte for byte the line the git route
 # appends to cloud-guidance.jsonl (the record without `uploaded`); a `skills`
 # item is byte for byte a phase-2 shard line. When phase 1 and phase 2 are both
 # due they share an object; a body over 262144 bytes is split into several
@@ -232,6 +242,44 @@
 # O_NOFOLLOW): the watermarks, the pending lines and a lock taken without
 # waiting, never held across the network. A busy lock skips that Stop.
 #
+# CLOUD HOOK RUNS (phase 3, ADR 0021 addendum)
+# --------------------------------------------
+# Only when CLAUDE_CODE_REMOTE=true, like phase 2. A hosted session's git
+# hooks (installed by fleet-memory.sh, ADR 0021) run `.githooks/agent-checks`,
+# which appends one line per pre-commit or pre-push run to the run log
+# ($AGENT_CHECKS_LOG unless "off", else
+# ${XDG_STATE_HOME:-$HOME/.local/state}/agent-checks/runs.jsonl; the format is
+# under "Run log" in templates/agent-checks/agent-checks). On every Stop, after
+# phase 2's collection and before phase 1, this hook reads the lines added since
+# its last read (an offset, reset to 0 when the log shrinks or is replaced; a
+# line still without its newline waits) and records each valid one as
+#   {"v":1,"id":"<first 16 hex of sha256 of the raw line, no newline>",
+#    "ts":"<the line's ts>","kind":"hook","surface":"cloud",
+#    "session":"<16 hex, as phase 1>","event":"pre-commit"|"pre-push",
+#    "repo":"<owner>/<name>"|null,"checks":[<ids>],"failed":[<ids>],
+#    "runner":"<12 hex>"|null}
+# A line that does not parse, has another `v`, an undated `ts`, another event,
+# an id that is not kebab-case, a `failed` id outside `checks`, a `repo` or
+# `runner` of another shape, or more than 64 ids in a list is skipped silently;
+# no other key of the log line travels. Bounds: 50 lines per Stop, 1 MiB read
+# per Stop, 0.5 s, and 2000 lines per session. The lines share phase 2's
+# pending file, lock, backoff and state (keys hlog, hseen, hn, hoverflow), and
+# phase 3's own errors are caught where they arise, so they cannot delay or
+# fail phases 1 and 2. Two runs with the same bytes in the same second share
+# an id and count once (the id is the format's, by design).
+# Git route: appended, deduped by id, to
+#   events/<YYYY-MM of ts>/cloud-hooks/<session>.jsonl
+# in the same commit and push as phase 2's shard when both are due. On by
+# default: the census reads only files it knows.
+# S3 route: an optional envelope key `hooks` (a list of those lines), which
+# skills-evals' ingest accepts since skills-evals#982 (the private ingest
+# workflow's pin moved there in adam-agentskills-private#79). An older ingest
+# rejects any key outside {v,kind,sent,guidance,skills} for good, so the key
+# has a switch: S3_HOOKS_DEFAULT is True, and USAGE_SINK_HOOKS=0 turns it off
+# (1 turns it on when the default is off). While off, phase 3 collects nothing
+# on the S3 route and sends no `hooks` key, so an envelope is byte for byte
+# what it was without phase 3.
+#
 # ONCE PER SESSION, AND NEVER IN THE WAY
 # --------------------------------------
 # The hook runs on every Stop, so the common case is a fast exit: a done flag
@@ -254,6 +302,31 @@
 # 4/1.5/3/6 s caps and the backoff) by a factor in (0, 1]; it never grows one.
 
 exec 1>/dev/null 2>/dev/null
+
+# OWNER GATE (docs/decisions/0042-the-guidance-hooks-are-opt-in-on-a-durable-machine.md).
+# The fleet's repos are public and register this hook, so on a DURABLE machine
+# it records nothing, and writes no state, unless the owner signal is present.
+# It runs when ANY of these holds: a hosted session (CLAUDE_CODE_REMOTE=true or
+# a nonempty CLAUDE_CODE_REMOTE_SESSION_ID), FLEET_GUIDANCE_OWNER on (empty,
+# 0, false, no and off, in any case, are off), or the marker file
+# ${XDG_CONFIG_HOME:-$HOME/.config}/fleet-guidance/owner (XDG_CONFIG_HOME only
+# when absolute). The same rule as fleet-memory.sh's, less the two that only
+# a delivery has: FLEET_GUIDANCE_SKIP and a caller-chosen payload.
+guidance_record_wanted() {
+    local config_home="${XDG_CONFIG_HOME:-}"
+    [ "${CLAUDE_CODE_REMOTE:-}" = true ] && return 0
+    [ -n "${CLAUDE_CODE_REMOTE_SESSION_ID:-}" ] && return 0
+    case "${FLEET_GUIDANCE_OWNER:-}" in
+        ""|0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]) ;;
+        *) return 0 ;;
+    esac
+    case "$config_home" in
+        /*) ;;
+        *) [ -n "${HOME:-}" ] || return 1; config_home="$HOME/.config" ;;
+    esac
+    [ -f "$config_home/fleet-guidance/owner" ]
+}
+guidance_record_wanted || exit 0
 
 command -v python3 >/dev/null 2>&1 || exit 0
 
@@ -290,6 +363,10 @@ SOURCE_REGISTRY = re.compile(
 SOURCE_REF = re.compile(r"[0-9a-f]{40}")
 MAX_SOURCES = 16
 MAX_INSTALL_RECORD = 1 << 20
+# The registry whose skills a cloud `listing` judges, and the bare skill name
+# an install record entry must carry to count.
+LISTING_REGISTRY = "Adam-S-Daniel/adam-agentskills"
+SKILL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 START = time.monotonic()
 
 
@@ -319,6 +396,18 @@ MIN_CALL = 1.0 * SCALE          # a call with less time left than this is skippe
 
 # Phase 2 (see CLOUD SKILL RECORDS in the header).
 CLOUD_DIR = "cloud-skills"
+# Phase 3 (see CLOUD HOOK RUNS in the header).
+HOOKS_DIR = "cloud-hooks"
+HOOKS_PER_STOP = 50             # run-log lines recorded per Stop
+HOOKS_READ_CAP = 1 << 20        # bytes of the run log read per Stop
+HOOKS_BUDGET = 0.5 * SCALE      # seconds for all of phase 3's collection
+HOOKS_MAX_LIST = 64             # ids in one line's `checks`
+HOOK_ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+HOOK_RUNNER_RE = re.compile(r"[0-9a-f]{12}")
+HOOK_EVENTS = ("pre-commit", "pre-push")
+# The S3 envelope's `hooks` key: on, since the private ingest's pinned script
+# accepts it (skills-evals#982). USAGE_SINK_HOOKS=0 turns it off.
+S3_HOOKS_DEFAULT = True
 MAX_SCAN = 32 << 20             # bytes read from one transcript per Stop
 MAX_SUBAGENT_FILES = 64
 USES_PER_STOP = 50
@@ -416,10 +505,51 @@ def first_report(message):
     return None
 
 
-def read_transcript(path):
+_LISTED = re.compile(r"^- (?P<name>[^\s:]+(?::[^\s:]+)?)(?P<rest>.*)$")
+
+
+def listing_state(entry, installed=None):
+    """"full" or "truncated" for the entry holding the session's first
+    (isInitial) skill listing; None for any other entry. Claude Code cuts the
+    listing to a character budget and lists the last skills by name alone.
+
+    With `installed` (the registry skill names the install record lists), only
+    those skills are judged: "full" when every one is listed with a
+    description, "truncated" when any is listed by name alone or not at all.
+    Claude Code cuts from the end of the listing, where account and plugin
+    skills sit, so a cut that reaches none of the registry's skills leaves
+    them fully listed (skills-evals' removal exposure counts these sessions).
+
+    Without `installed`, any line listed by name alone, bare or namespaced,
+    reads "truncated". Stricter than skills-evals'
+    model_usage_census.listing_state, which judges only namespaced names: a
+    false "full" could let a used skill be removed."""
+    att = entry.get("attachment")
+    if not isinstance(att, dict) or att.get("type") != "skill_listing" \
+            or att.get("isInitial") is not True:
+        return None
+    content = att.get("content")
+    if not isinstance(content, str):
+        return None
+    described, bare = set(), set()
+    for line in content.split("\n"):
+        found = _LISTED.match(line)
+        if not found:
+            continue
+        if found.group("rest").lstrip(":").strip():
+            described.add(found.group("name"))
+        else:
+            bare.add(found.group("name"))
+    if installed:
+        return "full" if set(installed) <= described else "truncated"
+    return "truncated" if bare else "full"
+
+
+def read_transcript(path, installed=None):
     """(instruction files, entrypoint, cli version, assistant responses, first
-    check report: 8 hex, "none" or None)."""
-    files, surface, cli, assistant, report = None, None, None, set(), None
+    check report: 8 hex, "none" or None, listing: "full", "truncated" or None
+    when no initial skill listing is in the transcript)."""
+    files, surface, cli, assistant, report, listing = None, None, None, set(), None, None
     with open(path, encoding="utf-8", errors="replace") as handle:
         for raw in handle:
             try:
@@ -441,12 +571,14 @@ def read_transcript(path):
                     report = first_report(message)
             elif kind == "attachment":
                 att = entry.get("attachment")
+                if listing is None:
+                    listing = listing_state(entry, installed)
                 if isinstance(att, dict) and att.get("type") == "instructions":
                     listed = att.get("files")
                     files = files or []
                     if isinstance(listed, list):
                         files += [f for f in listed if isinstance(f, dict)]
-    return files, surface, cli, len(assistant), report
+    return files, surface, cli, len(assistant), report, listing
 
 
 def classify(files):
@@ -506,25 +638,58 @@ def guidance_version():
     return None
 
 
-def registry_sources():
-    """(sources, dropped) from skills-bootstrap.sh's install record, or
-    (None, None) when it has no usable `sources` list. Never raises."""
+def install_record():
+    """skills-bootstrap.sh's install record, parsed, or None when it is
+    missing, not a regular file, over 1 MiB, unreadable or not JSON. Never
+    raises."""
     try:
         home = os.environ.get("HOME") or os.path.expanduser("~")
         path = os.path.join(home, ".claude", "skills", ".skills-bootstrap-installed.json")
         info = os.lstat(path)
         if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_INSTALL_RECORD:
-            return None, None
+            return None
         # O_NOFOLLOW and O_NONBLOCK: the path may have been swapped for a link
         # or a FIFO since the lstat; fstat confirms what was opened.
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as handle:
             if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                return None, None
+                return None
             raw = handle.read(MAX_INSTALL_RECORD + 1)
         if len(raw) > MAX_INSTALL_RECORD:
-            return None, None
-        doc = json.loads(raw.decode("utf-8"))
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def installed_skills():
+    """The names of the skills the install record says skills-bootstrap.sh
+    installed from Adam-S-Daniel/adam-agentskills, or None when the record or
+    its `installed` list is missing or holds no such skill. Never raises."""
+    try:
+        doc = install_record()
+        listed = doc.get("installed") if isinstance(doc, dict) else None
+        if not isinstance(listed, list):
+            return None
+        names = set()
+        for item in listed:
+            if not isinstance(item, dict):
+                continue
+            registry, name = item.get("registry"), item.get("name")
+            found = SOURCE_REGISTRY.fullmatch(registry) if isinstance(registry, str) else None
+            if (found and "%s/%s" % (found.group(1), found.group(2)) == LISTING_REGISTRY
+                    and isinstance(name, str) and SKILL_NAME_RE.fullmatch(name)):
+                names.add(name)
+        return names or None
+    except Exception:
+        return None
+
+
+def registry_sources():
+    """(sources, dropped) from skills-bootstrap.sh's install record, or
+    (None, None) when it has no usable `sources` list. Never raises."""
+    try:
+        doc = install_record()
         listed = doc.get("sources") if isinstance(doc, dict) else None
         if not isinstance(listed, list):
             return None, None
@@ -678,15 +843,115 @@ def guidance_edit(line, when):
     return "events/%s/cloud-guidance.jsonl" % when.strftime("%Y-%m"), build
 
 
+def hook_ids(value):
+    """A list of kebab-case check ids (at most HOOKS_MAX_LIST, each 1-64
+    characters), else None."""
+    if not isinstance(value, list) or len(value) > HOOKS_MAX_LIST:
+        return None
+    for item in value:
+        if not isinstance(item, str) or len(item) > 64 or not HOOK_ID_RE.fullmatch(item):
+            return None
+    return value
+
+
+def hook_line(raw, sid):
+    """(id, month, line) for one agent-checks run-log line, or None when it is
+    malformed. `id` is the first 16 hex of the sha256 of the raw bytes, without
+    the newline. Keys are copied one by one after validation: nothing else in
+    the log line travels."""
+    try:
+        doc = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(doc, dict) or type(doc.get("v")) is not int or doc.get("v") != 1:
+        return None
+    when = parse_ts(doc.get("ts"))
+    event, repo, runner = doc.get("event"), doc.get("repo"), doc.get("runner")
+    checks, failed = hook_ids(doc.get("checks")), hook_ids(doc.get("failed"))
+    if when is None or event not in HOOK_EVENTS or checks is None or failed is None:
+        return None
+    if not set(failed) <= set(checks):
+        return None
+    if repo is not None and not (isinstance(repo, str) and OWNER_REPO_RE.fullmatch(repo)):
+        return None
+    if runner is not None and not (isinstance(runner, str) and HOOK_RUNNER_RE.fullmatch(runner)):
+        return None
+    ident = hashlib.sha256(raw).hexdigest()[:16]
+    out = {"v": 1, "id": ident, "ts": when.strftime(ISO), "kind": "hook", "surface": "cloud",
+           "session": sid, "event": event, "repo": repo, "checks": checks, "failed": failed,
+           "runner": runner}
+    return ident, when.strftime("%Y-%m"), json.dumps(out, separators=(",", ":"))
+
+
+def hook_log_path():
+    """The agent-checks run log (see "Run log" in templates/agent-checks/agent-checks),
+    or None when AGENT_CHECKS_LOG is off or no location can be named."""
+    raw = os.environ.get("AGENT_CHECKS_LOG") or ""
+    if raw == "off":
+        return None
+    if raw:
+        return raw
+    base = os.environ.get("XDG_STATE_HOME") or ""
+    if not base:
+        home = os.environ.get("HOME") or ""
+        if not home:
+            return None
+        base = os.path.join(home, ".local", "state")
+    return os.path.join(base, "agent-checks", "runs.jsonl")
+
+
+def read_hook_log(path, mark):
+    """(complete lines after the mark, offset after them, identity) or None.
+    No link, FIFO or device is followed or opened blocking; at most
+    HOOKS_READ_CAP bytes per call; a log that shrank or was replaced is read
+    from 0; a stretch of that size with no newline is skipped."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        ident = (info.st_dev, info.st_ino)
+        off = mark.get("off") if isinstance(mark.get("off"), int) and not isinstance(mark.get("off"), bool) else 0
+        if mark and (mark.get("dev"), mark.get("ino")) != ident:
+            off = 0
+        if off < 0 or off > info.st_size:
+            off = 0
+        handle.seek(off)
+        data = handle.read(HOOKS_READ_CAP)
+    last = data.rfind(b"\n")
+    if last < 0:
+        return [], off + (len(data) if len(data) >= HOOKS_READ_CAP else 0), ident
+    return data[:last].split(b"\n"), off, ident
+
+
+def is_hook_line(text):
+    """True for a phase-3 line (kind "hook"), false for a phase-2 skill line."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and doc.get("kind") == "hook"
+
+
+def s3_hooks_enabled():
+    """Whether the S3 envelope may carry a `hooks` key (see S3_HOOKS_DEFAULT)."""
+    return os.environ.get("USAGE_SINK_HOOKS", "1" if S3_HOOKS_DEFAULT else "0") == "1"
+
+
 def shard_edits(sid, lines):
-    """Phase 2's shards, one per month of the events' own timestamps, and how
-    to extend each with the lines whose id it does not hold yet."""
+    """Phase 2's and phase 3's shards, one per month of the events' own
+    timestamps and per kind (cloud-skills/, cloud-hooks/), and how to extend
+    each with the lines whose id it does not hold yet."""
     by_month = {}
     for ident, month, text in lines:
-        by_month.setdefault(month, []).append((ident, text))
+        directory = HOOKS_DIR if is_hook_line(text) else CLOUD_DIR
+        by_month.setdefault((month, directory), []).append((ident, text))
     edits = []
-    for month in sorted(by_month):
-        def build(old, items=by_month[month]):
+    for month, directory in sorted(by_month):
+        def build(old, items=by_month[(month, directory)]):
             have = set()
             for raw in old.split(b"\n"):
                 try:
@@ -705,7 +970,7 @@ def shard_edits(sid, lines):
             if old and not old.endswith(b"\n"):
                 old += b"\n"
             return old + "".join(t + "\n" for t in add).encode("utf-8")
-        edits.append(("events/%s/%s/%s.jsonl" % (month, CLOUD_DIR, sid), build))
+        edits.append(("events/%s/%s/%s.jsonl" % (month, directory, sid), build))
     return edits
 
 
@@ -876,18 +1141,21 @@ def sigv4_authorization(method, path, query, headers, payload_hash, region, serv
         key_id, scope, signed, signature)
 
 
-def sink_body(sent, guidance, skills):
+def sink_body(sent, guidance, skills, hooks=()):
     """One object's body, built from the exact lines: `guidance` is phase 1's
-    line as the git route appends it (or None), `skills` phase 2's lines."""
-    return ('{"v":1,"kind":"usage-drop","sent":"%s","guidance":[%s],"skills":[%s]}'
-            % (sent, guidance or "", ",".join(skills))).encode("utf-8")
+    line as the git route appends it (or None), `skills` phase 2's lines,
+    `hooks` phase 3's. The `hooks` key is present only when there are lines."""
+    tail = ',"hooks":[%s]' % ",".join(hooks) if hooks else ""
+    return ('{"v":1,"kind":"usage-drop","sent":"%s","guidance":[%s],"skills":[%s]%s}'
+            % (sent, guidance or "", ",".join(skills), tail)).encode("utf-8")
 
 
 def sink_batches(line, items):
     """[(guidance line or None, [(id, text)])], phase 1's line in the first,
     each body at most SINK_MAX_OBJECT bytes. A line too large for any object
     (none can be: every field is bounded) is left out and stays pending."""
-    overhead = len(sink_body("2000-01-01T00:00:00Z", None, []))
+    # The `hooks` key's `,"hooks":[]` counts whenever phase-3 lines may be sent.
+    overhead = len(sink_body("2000-01-01T00:00:00Z", None, [], [""] if s3_hooks_enabled() else []))
     batches, head, current = [], line, []
     size = overhead + (len(line.encode("utf-8")) if line is not None else 0)
     for ident, _month, text in items:
@@ -930,7 +1198,7 @@ def http_put(url, headers, body, cap):
     return 0 if worker.is_alive() else result[0]
 
 
-def sink_put(cfg, guidance, skills, deadline):
+def sink_put(cfg, guidance, skills, deadline, hooks=()):
     """Send one object: 200, 403, 412 (twice), another status, 0 for no
     answer, or -1 when the budget left no time. A 412 (the key exists)
     gets one more try under a new random key."""
@@ -944,7 +1212,7 @@ def sink_put(cfg, guidance, skills, deadline):
         key = "drop/%s/%s.json" % (when.strftime("%Y-%m-%d"), os.urandom(16).hex())
         if not (SINK_SENT_RE.fullmatch(sent) and SINK_KEY_RE.fullmatch(key)):
             return 0                 # a key or time the reader would refuse is never sent
-        body = sink_body(sent, guidance, skills)
+        body = sink_body(sent, guidance, skills, hooks)
         endpoint = seam("USAGE_SINK_ENDPOINT")
         if endpoint:
             # Test hook only (path style against a local server).
@@ -990,7 +1258,9 @@ def sink_upload(cfg, line, cloud, snap, held=None):
             outcome = "nocred"   # a malformed bucket, region or key id can never work
             return False if line is not None else None
         for head, items in sink_batches(guidance, snap or []):
-            status = sink_put(cfg, head, [t for _i, t in items], deadline)
+            texts = [t for _i, t in items]
+            status = sink_put(cfg, head, [t for t in texts if not is_hook_line(t)], deadline,
+                              [t for t in texts if is_hook_line(t)])
             if status == 200:
                 sent.update(i for i, _t in items)
                 uploaded = uploaded or head is not None
@@ -1025,6 +1295,10 @@ def upload(line, when, cloud=None):
     if cloud is not None:
         cloud.attempted = True
         snap = cloud.snapshot()
+        if sink is not None and snap and not s3_hooks_enabled():
+            # The sink's ingest may reject a `hooks` key: phase-3 lines stay
+            # pending and never leave the machine until the switch is on.
+            snap = [p for p in snap if not is_hook_line(p[2])] or None
         if sink is not None and line is None:
             held = cloud.held_guidance()
     if line is None and not snap and held is None:
@@ -1054,6 +1328,10 @@ def upload(line, when, cloud=None):
                 edits += shard_edits(cloud.sid, snap)
             message = {(True, False): "guidance-load event", (False, True): "cloud skill events",
                        (True, True): "guidance-load and cloud skill events"}[(line is not None, bool(snap))]
+            if snap and all(is_hook_line(p[2]) for p in snap):
+                message = "cloud hook runs" if line is None else "guidance-load event and cloud hook runs"
+            elif snap and any(is_hook_line(p[2]) for p in snap):
+                message += " and hook runs"
             outcome = git_commit(work, edits, deadline, message)
             if line is not None and snap and outcome != "ok" and cap_for(deadline) >= MIN_CALL:
                 # A phase-2 problem (an unreadable shard, say) must not cost
@@ -1589,14 +1867,18 @@ class Cloud:
         doc = doc if isinstance(doc, dict) else {}
         st = {"files": {}, "seen": [], "fails": 0, "next_try": 0, "nocred": False, "n": 0,
               "overflow": 0}
+        # Phase 3's keys are present only once it has read a run log.
         for key, kind in (("files", dict), ("seen", list), ("fails", int), ("next_try", (int, float)),
-                          ("nocred", bool), ("n", int), ("overflow", int)):
+                          ("nocred", bool), ("n", int), ("overflow", int),
+                          ("hlog", dict), ("hseen", list), ("hn", int), ("hoverflow", int)):
             if isinstance(doc.get(key), kind) and not (kind is int and isinstance(doc[key], bool)):
                 st[key] = doc[key]
         return st
 
     def save_state(self, st):
         st["seen"] = st["seen"][-2 * SESSION_CAP:]
+        if "hseen" in st:
+            st["hseen"] = st["hseen"][-2 * SESSION_CAP:]
         write_atomic(self.path + ".state.json", json.dumps(st, separators=(",", ":")).encode("utf-8"))
 
     def load_pending(self):
@@ -1720,6 +2002,62 @@ class Cloud:
         finally:
             os.close(fd)
 
+    def collect_hooks(self):
+        """Phase 3: record every new, valid agent-checks run-log line into the
+        pending file. Own lock, own tiny budget, and every error ends here: it
+        can neither delay nor fail phases 1 and 2. A missing log changes
+        nothing, not even the state file."""
+        if os.environ.get("CLAUDE_CODE_REMOTE") != "true":
+            return
+        if sink_config() is not None and not s3_hooks_enabled():
+            return                       # nowhere to send them yet: do not accumulate
+        path = hook_log_path()
+        if path is None or START + BUDGET - time.monotonic() < 2 * MIN_CALL:
+            return
+        end = min(time.monotonic() + HOOKS_BUDGET, START + BUDGET - MIN_CALL)
+        if not self.prepare():
+            return
+        fd = self.lock()
+        if fd is None:
+            return
+        try:
+            st = self.load_state()
+            mark = st.get("hlog") if isinstance(st.get("hlog"), dict) else {}
+            found = read_hook_log(path, mark)
+            if found is None:
+                return
+            lines, off, ident = found
+            seen, new, hseen = set(st.get("hseen", [])), [], list(st.get("hseen", []))
+            n, overflow = st.get("hn", 0), st.get("hoverflow", 0)
+            for raw in lines:
+                if len(new) >= HOOKS_PER_STOP or time.monotonic() > end:
+                    break
+                off += len(raw) + 1
+                if raw.endswith(b"\r"):
+                    raw = raw[:-1]
+                item = hook_line(raw, self.sid) if raw else None
+                if item is None or item[0] in seen:
+                    continue
+                if n >= SESSION_CAP:
+                    overflow += 1
+                    continue
+                n += 1
+                seen.add(item[0])
+                hseen.append(item[0])
+                new.append(item)
+            # A tail without a newline (a write in progress) stays for the next Stop.
+            new_mark = {"off": off, "dev": ident[0], "ino": ident[1]}
+            if new:
+                pending = self.load_pending()
+                have = {i for i, _m, _t in pending}
+                pending += [p for p in new if p[0] not in have]
+                self.save_pending(pending)
+            if new or new_mark != mark:
+                st.update(hlog=new_mark, hseen=hseen, hn=n, hoverflow=overflow)
+                self.save_state(st)
+        finally:
+            os.close(fd)
+
     def snapshot(self):
         """The pending lines to upload now, or None: nothing pending, a
         definite no-credential answer earlier, or still backing off."""
@@ -1806,7 +2144,7 @@ def phase1(states, digest, transcript, cloud):
     if os.path.exists(flag):
         return
     try:
-        files, surface, cli, responses, report = read_transcript(transcript)
+        files, surface, cli, responses, report, listing = read_transcript(transcript, installed_skills())
     except OSError:
         return
     if files is None:
@@ -1842,6 +2180,8 @@ def phase1(states, digest, transcript, cloud):
         "registry_sha": None,
     }
     record["sources"], record["sources_dropped"] = registry_sources()
+    if listing is not None:
+        record["listing"] = listing
     line = json.dumps(record, separators=(",", ":"))
     uploaded = None
     if remote:
@@ -1873,6 +2213,10 @@ def main():
         try:
             cloud = Cloud(states, digest, session, transcript)
             cloud.collect()          # every Stop, before phase 1's once-per-session return
+        except Exception:
+            pass
+        try:
+            cloud.collect_hooks()    # phase 3, after phase 2 and never in its way
         except Exception:
             pass
     try:

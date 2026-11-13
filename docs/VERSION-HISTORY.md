@@ -10,9 +10,16 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.174)
+## Version history (v0.1.0 → v0.1.175)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.175 — The scheduled-run health audit also reports open pull requests whose checks stay red.**
+The first-parent range since v0.1.174 holds five entries on main before this release PR: the merge commit of [#995](https://github.com/Adam-S-Daniel/cms-platform/pull/995) (the change below), the merge commits of [#1004](https://github.com/Adam-S-Daniel/cms-platform/pull/1004) (the `_agent-guidance` AGENTS.md sync) and [#994](https://github.com/Adam-S-Daniel/cms-platform/pull/994) (a `skills.lock` re-pin), and two Dependabot squash commits ([#998](https://github.com/Adam-S-Daniel/cms-platform/pull/998), parse5 8.1.0 in `e2e/`; [#999](https://github.com/Adam-S-Daniel/cms-platform/pull/999), `ruby/setup-ruby`).
+
+Red-PR lane. `scripts/audit-scheduled-runs.js` now lists `event=pull_request` runs from the audit window plus `--pr-red-hours` (24 by default, so 72h by default), takes each PR's newest head, and reports the PR when the newest run of some workflow on that head ended in `failure`, `startup_failure` or `timed_out` at least `--pr-red-hours` ago. Closed, draft and `on-hold` PRs are skipped (one `GET issues/{n}` per candidate, which the callers' existing `issues: write` grant covers), fork PRs are never reported, and only the PR number, the workflow file name and API-built URLs reach the issue. The lane shares the run-id dedupe, runner-starvation suppression and close gate with the other lanes; a probe failure reds the audit without losing the other lanes' findings. `--no-pr-scan` turns it off. It replaces the coverage of a retired daily Claude sweep at no token cost. Tests: 15 new cases in `e2e/scheduled-run-health.test.js`.
+
+Consumer effect. None to act on. The audit is the reusable fleet callers run (through `_agent-guidance`'s `.github/health-audit-platform-ref`), and a consumer's own `scheduled-run-health.yml` caller gains the lane with this pin; its tracking issue may now carry a "Pull requests with a check red for 24h or more" section.
 
 **v0.1.174 — JavaScript that writes HTML takes escaped values only, and a lint enforces it.**
 The first-parent range since v0.1.173 holds one entry on main before this release PR: the merge commit of [#983](https://github.com/Adam-S-Daniel/cms-platform/pull/983), the `_agent-guidance` sync that delivers the fleet's `.githooks/agent-checks` runner. This release PR carries [#982](https://github.com/Adam-S-Daniel/cms-platform/issues/982) itself.

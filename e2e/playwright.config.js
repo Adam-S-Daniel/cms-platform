@@ -167,6 +167,8 @@ const PLATFORM_META_SPECS = [
   // #644 — vm-sandboxes theme/admin SOURCE (the poller, the button and the
   // requestAnimationFrame shims) with document.hidden stubbed; same reason.
   "admin-hidden-tab.test.js",
+  // Reads theme/admin/media-search.js SOURCE (the Media search page); platform tree only.
+  "media-search.test.js",
   "admin-publish-duration-copy.test.js",
   // #649 — AST lint over theme/admin SOURCE (owner-facing copy; platform tree only).
   "admin-owner-copy-banned-words.test.js",
