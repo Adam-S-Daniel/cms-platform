@@ -92,11 +92,11 @@ def test_plain_text_is_kept_and_charset_honored():
     assert page.text == "café" and page.status == 200
 
 
-@pytest.mark.parametrize("ctype", ["application/pdf", "image/png", "application/json"])
+@pytest.mark.parametrize("ctype", ["image/png", "application/json"])
 def test_other_content_types_are_415_with_no_text(ctype):
     op = Opener({"https://a.example.com/f": Resp(b"%PDF-1.7", ctype)})
     page = fetch("https://a.example.com/f", opener=op, resolver=resolver_for({}))
-    assert (page.status, page.text) == (415, "")
+    assert (page.status, page.text, page.unreadable_type) == (415, "", True)
 
 
 def test_body_read_is_capped_at_3_mb():
@@ -194,3 +194,46 @@ def test_default_opener_does_not_follow_redirects():
     opener = fetch_mod._default_opener()
     handlers = [type(h).__name__ for h in opener.handlers]
     assert "_NoRedirect" in handlers and "HTTPRedirectHandler" not in handlers
+
+
+def make_pdf(text: str) -> bytes:
+    """A one-page PDF whose content stream draws `text` (ASCII, no parentheses)."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offsets = bytearray(b"%PDF-1.4\n"), []
+    for i, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+    return bytes(out)
+
+
+@pytest.mark.parametrize("ctype", ["application/pdf", "application/octet-stream"])
+def test_pdf_text_is_extracted(ctype):
+    pdf = make_pdf("Panel 4: Pat Rivera, Northwind Legal, 2026")
+    op = Opener({"https://a.example.com/f.pdf": Resp(pdf, ctype)})
+    page = fetch("https://a.example.com/f.pdf", opener=op, resolver=resolver_for({}))
+    assert page.status == 200 and not page.unreadable_type
+    assert "Pat Rivera, Northwind Legal, 2026" in page.text
+
+
+@pytest.mark.parametrize("body", [b"%PDF-1.7 not really a pdf", b"PK\x03\x04 a zip file"])
+def test_unreadable_pdf_is_415_not_a_crash(body):
+    op = Opener({"https://a.example.com/f.pdf": Resp(body, "application/pdf")})
+    page = fetch("https://a.example.com/f.pdf", opener=op, resolver=resolver_for({}))
+    assert (page.status, page.text, page.unreadable_type) == (415, "", True)
+
+
+def test_oversized_pdf_is_not_parsed(monkeypatch):
+    monkeypatch.setattr(fetch_mod, "MAX_PDF_BYTES", 100)
+    op = Opener({"https://a.example.com/f.pdf": Resp(make_pdf("x" * 200), "application/pdf")})
+    page = fetch("https://a.example.com/f.pdf", opener=op, resolver=resolver_for({}))
+    assert page.unreadable_type and page.text == ""

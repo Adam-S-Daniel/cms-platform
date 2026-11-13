@@ -79,6 +79,27 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-11-13 — cms-platform/platform-release-and-bump — edit
+
+- Motivation: the skill's one pointer to `github-actions-sha-pinning` would dangle once that skill is removed (the entry below).
+- Change: the pointer now cites `docs/PIN-CONSISTENCY.md`; no rule changed (PR #1017).
+- Eval: none: a broken-path correctness fix (its pointer would dangle), no rule changed (ADR 0033).
+- Outcome: pending merge.
+
+## 2026-11-13 — cms-platform/github-actions-sha-pinning — remove
+
+- Motivation: skills-evals verdict `retire-pending` (remove it, queued) as of 2026-11-13: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
+- Change: deleted `skills/github-actions-sha-pinning/`; the facts other files relied on already live in AGENTS.md (no `actions.lock` here), `docs/PIN-CONSISTENCY.md` (platform refs stay on the release tag, no version comment) and `docs/CI-INVARIANTS.md` (Dependabot cooldown), so the two pointers (AGENTS.md, `platform-release-and-bump`) now cite those docs and its freshness-allow entries were dropped (PR #1017).
+- Eval: the skills-evals evals explorer, https://adamdaniel.ai/tools/evals/ (verdict `retire-pending` as of 2026-11-13: remove, queued behind consumer-repo-provisioning; the owner asked on 2026-11-13 that every remove decision act without him).
+- Outcome: pending merge.
+
+## 2026-11-13 — cms-platform/consumer-repo-provisioning — remove
+
+- Motivation: skills-evals verdict `retire`: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
+- Change: deleted `skills/consumer-repo-provisioning/`; its body moved to `docs/CONSUMER-PROVISIONING.md` (section headings kept) and every pointer to it (workflow error strings, the audit script, repo-settings.yml, README, other docs, the scaffolder output) now cites that doc; its two freshness-allow entries and its REFERENCE_HEAVY listing were dropped (PR #1016).
+- Eval: https://github.com/Adam-S-Daniel/skills-evals/issues/998 (verdict `retire`).
+- Outcome: pending merge.
+
 ## 2026-10-28 — cms-platform/(13 skills) — edit
 
 - Motivation: the 2026-10-28 prompt-audit sweep (https://github.com/Adam-S-Daniel/cms-platform/issues/900) found stale or contradicted statements in instruction files: preview-environments (deploy-preview.yml is `workflow_call` only), post-failure-comment (e2e marker is per matrix slot; a "prior revisions" note), code-quality (two self-ci lanes missing), platform-release-and-bump (hand-built candidate drafts), admin-config-render (canary "not optional" vs the `base_collections` keep-list), consumer-repo-provisioning (diff-against-prior-version phrasing), cms-stuck-pr-triage / browser-testing / ci-watcher-loops (incident IDs and dated evidence inside rules), aws-bootstrap (obsolete v0.1.125 entry), test-canary (long description).

@@ -119,9 +119,28 @@ class FakeGitHub:
                         True)
 
 
+class FakeBrowser:
+    """Stands in for BrowserSession: serves `pages` (url -> text) with status 200."""
+
+    def __init__(self, pages=None):
+        self.pages, self.fetched, self.entered, self.exited = pages or {}, [], 0, 0
+
+    def __enter__(self):
+        self.entered += 1
+        return self
+
+    def __exit__(self, *exc):
+        self.exited += 1
+        return False
+
+    def fetch(self, url):
+        self.fetched.append(url)
+        return page(url, self.pages[url]) if url in self.pages else page(url, "", 0)
+
+
 class Harness:
     def __init__(self, site, *, candidates=None, env=None, client=None, gh_error=None,
-                 list_error=None):
+                 list_error=None, browser_pages=None):
         self.site = site
         payload = {"candidates": candidates if candidates is not None else
                    [CONFIRMED, DUPLICATE, EARLIER_PR, UNCONFIRMED, MONTH_ONLY_EVENT, BAD]}
@@ -133,6 +152,7 @@ class Harness:
         self.fetched = []
         self.sent = []
         self.out = io.StringIO()
+        self.browser = FakeBrowser(browser_pages)
 
     def github(self, token):
         self.gh = FakeGitHub(token, prior={"https://paper.example.com/story"}, error=self.gh_error,
@@ -151,7 +171,7 @@ class Harness:
                           "--mode", mode, "--today", "2026-11-02", *extra],
                          env=self.env, client_factory=lambda key: self.client,
                          fetcher=self.fetch, github_factory=self.github, send=self.send,
-                         out=self.out)
+                         out=self.out, browser_factory=lambda: self.browser)
         self.stdout = self.out.getvalue()
         return self
 
@@ -181,10 +201,13 @@ def test_live_run_opens_one_pr_and_emails_the_digest(site):
     assert set(PAGES) <= set(h.fetched)
 
     [(subject, body, kw)] = h.sent
-    assert subject == "1 new find for Example Site to review"
-    assert "https://github.example.com/o/r/pull/1" in body
-    assert "Lonely Claim" in body and "no independent second source" in body
-    assert "Data Futures Forum" in body and "an event needs a full YYYY-MM-DD date" in body
+    assert subject == "site.example.com new mentions: 1 to add, 2 to double-check"
+    # A non-technical reader gets the editor's review page, not the pull request.
+    assert "https://site.example.com/admin/#/workflow" in body
+    assert "github.example.com" not in body and "pull request" not in body.lower()
+    assert "PREVIEW" not in body
+    assert "Lonely Claim" in body and "Only one website backed it up" in body
+    assert "Data Futures Forum" in body and "details such as an exact date were missing" in body
     assert kw == dict(host="smtp.fastmail.com", port=587, user="bot@example.com", password="pw",
                       mail_from="bot@example.com",
                       mail_to=["owner@example.com", "editor@example.net"])
@@ -203,8 +226,10 @@ def test_email_only_lists_would_open_and_opens_nothing(site):
     assert "mode=email-only" in h.stdout and "prs_opened=0" in h.stdout
     assert h.gh.opened == []
     [(subject, body, _)] = h.sent
-    assert subject == "1 confirmed find for Example Site (email-only mode)"
-    assert "Would add: _media/1-open-data-in-practice.md" in body
+    assert subject == ("site.example.com new mentions: 1 to add, "
+                       "2 to double-check (preview)")
+    assert "nothing on the website was changed" in body and "PREVIEW RUN VS. NORMAL RUN" in body
+    assert "Open Data in Practice" in body
     h.assert_counts_only()
 
 
@@ -213,7 +238,7 @@ def test_live_without_a_token_falls_back_to_email_only(site):
     h = Harness(site, env=env).run()
     assert h.code == 0 and h.gh is None
     assert "live mode needs GITHUB_TOKEN" in h.stdout and "mode=email-only" in h.stdout
-    assert "(email-only mode)" in h.sent[0][0]
+    assert h.sent[0][0].endswith("(preview)")
 
 
 def test_unconfigured_site_is_a_no_op(tmp_path):
@@ -276,7 +301,7 @@ def test_github_error_still_emails_then_fails(site):
     assert h.code == 1
     assert "::error::GitHub API POST /repos/{repo}/pulls returned HTTP 403" in h.stdout
     [(_, body, _)] = h.sent
-    assert "the pull request could not be opened (HTTP 403)" in body
+    assert "creating the draft failed" in body
     h.assert_counts_only()
 
 
@@ -293,7 +318,7 @@ def test_a_crashing_candidate_does_not_abort_the_run(site):
     assert h.code == 0
     assert "unconfirmed=1" in h.stdout and "prs_opened=1" in h.stdout
     [(_, body, _)] = h.sent
-    assert "internal error while checking" in body
+    assert "Something went wrong while checking it." in body
     assert "boom" not in h.stdout and "Traceback" not in h.stdout
     h.assert_counts_only()
 
@@ -367,3 +392,50 @@ def test_unlistable_prior_prs_are_a_notice_in_email_only_mode(site):
     # Without the PR check the earlier-proposed find is no longer a duplicate.
     assert "duplicates=1" in h.stdout and len(h.sent) == 1
     h.assert_counts_only()
+
+
+class BlockingHarness(Harness):
+    """CONFIRMED's primary answers 403 to urllib; its second source is fine."""
+
+    def fetch(self, url):
+        self.fetched.append(url)
+        if url == CONFIRMED["primary_url"]:
+            return page(url, "", 403)
+        return page(url, PAGES.get(url, ""), 200 if url in PAGES else 404)
+
+
+def test_a_403_source_is_rescued_by_the_browser(site):
+    h = BlockingHarness(site, candidates=[CONFIRMED],
+                        browser_pages={CONFIRMED["primary_url"]: PAGE_A}).run()
+    assert h.code == 0
+    assert "confirmed=1 prs_opened=1 unconfirmed=0 browser_retries=1 browser_rescued=1" in h.stdout
+    assert h.browser.fetched == [CONFIRMED["primary_url"]]  # only the eligible URL
+    assert h.browser.entered == 1 and h.browser.exited == 1
+    h.assert_counts_only()
+
+
+def test_pass_two_is_not_attempted_when_pass_one_confirms(site):
+    h = Harness(site, candidates=[CONFIRMED]).run()
+    assert "confirmed=1 prs_opened=1 unconfirmed=0 browser_retries=0 browser_rescued=0" in h.stdout
+    assert h.browser.fetched == [] and h.browser.entered == 0
+
+
+def test_a_retry_that_still_fails_is_counted_but_not_rescued(site):
+    h = BlockingHarness(site, candidates=[CONFIRMED]).run()
+    assert "confirmed=0 prs_opened=0 unconfirmed=1 browser_retries=1 browser_rescued=0" in h.stdout
+    h.assert_counts_only()
+
+
+def test_ineligible_problems_are_not_retried(site):
+    # A 404 is not a browser problem; the second source here is fine.
+    h = Harness(site, candidates=[{**CONFIRMED, "primary_url": "https://gone.example.com/x"}]).run()
+    assert h.browser.fetched == []
+    assert "browser_retries=0" in h.stdout
+
+
+def test_an_unavailable_browser_skips_the_retry_and_the_run_continues(site):
+    h = BlockingHarness(site, candidates=[CONFIRMED])
+    h.browser = FakeBrowser()
+    h.browser.fetch = lambda url: None
+    h.run()
+    assert h.code == 0 and "unconfirmed=1 browser_retries=1 browser_rescued=0" in h.stdout
