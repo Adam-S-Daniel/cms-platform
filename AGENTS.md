@@ -89,6 +89,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/ADMIN-AUTH-SECURITY.md` | sign-in, `oauth-proxy/` (a release does NOT deploy it; each site's daily `oauth-proxy-build` probe goes red until someone does), a `message` listener, the Decap SRI hash. |
 | `docs/CONSUMER-COMPATIBILITY.md` | an e2e spec, an org OAuth save failure, bundle parity, a nudge's contexts. |
 | `docs/PIN-CONSISTENCY.md` | pin consistency, the pin-comment lint, `platform-bump.yml`. |
+| `docs/CONSUMER-PROVISIONING.md` | the secrets, PATs, App credentials and repo variables a consumer site needs; platform-repo secrets (`REPO_SETTINGS_READ_*`, `BUMP_DISPATCH_*`); a workflow failing on a missing secret. |
 | `docs/FLEET-CALLER-CURRENCY.md` | how a fleet repo's `scheduled-run-health` caller stays current: the self-resolving checkout, the currency lane, a fleet repo's cms-platform Dependabot `ignore`. |
 | `docs/CI-INVARIANTS.md` | a required check, a scheduled workflow, the label audit, `site-verify.yml`, `site-agent-checks.yml`, the webServer, a loop. |
 | `docs/E2E-PARALLELISM.md` | e2e workers, sharding, the browser install. |

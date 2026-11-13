@@ -36,7 +36,7 @@ rewrites `.github/workflows/*` and pushes, so its credential MUST carry
 workflow … without 'workflows' permission`) — the live half of #13. That
 credential is the CMS automation App's per-run installation token when the
 consumer has provisioned it, else the `CMS_PLATFORM_PAT` fine-grained PAT
-(#238; the `consumer-repo-provisioning` skill has the provisioning steps).
+(#238; `docs/CONSUMER-PROVISIONING.md` has the provisioning steps).
 It also seeds any workflow caller the release newly made platform-dictated —
 copying the missing caller from `examples/site/.github/workflows/` at the new
 ref, re-pinned to it — so the workflow-set-parity check (introduced v0.1.20,

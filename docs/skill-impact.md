@@ -79,6 +79,13 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-11-13 — cms-platform/consumer-repo-provisioning — remove
+
+- Motivation: skills-evals verdict `retire`: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
+- Change: deleted `skills/consumer-repo-provisioning/`; its body moved to `docs/CONSUMER-PROVISIONING.md` (section headings kept) and every pointer to it (workflow error strings, the audit script, repo-settings.yml, README, other docs, the scaffolder output) now cites that doc; its two freshness-allow entries and its REFERENCE_HEAVY listing were dropped (PR #1016).
+- Eval: https://github.com/Adam-S-Daniel/skills-evals/issues/998 (verdict `retire`).
+- Outcome: pending merge.
+
 ## 2026-10-28 — cms-platform/(13 skills) — edit
 
 - Motivation: the 2026-10-28 prompt-audit sweep (https://github.com/Adam-S-Daniel/cms-platform/issues/900) found stale or contradicted statements in instruction files: preview-environments (deploy-preview.yml is `workflow_call` only), post-failure-comment (e2e marker is per matrix slot; a "prior revisions" note), code-quality (two self-ci lanes missing), platform-release-and-bump (hand-built candidate drafts), admin-config-render (canary "not optional" vs the `base_collections` keep-list), consumer-repo-provisioning (diff-against-prior-version phrasing), cms-stuck-pr-triage / browser-testing / ci-watcher-loops (incident IDs and dated evidence inside rules), aws-bootstrap (obsolete v0.1.125 entry), test-canary (long description).
