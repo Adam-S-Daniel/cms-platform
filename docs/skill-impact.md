@@ -88,7 +88,7 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ## 2026-11-13 — cms-platform/github-actions-sha-pinning — remove
 
-- Motivation: skills-evals verdict `retire` as of 2026-11-13: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
+- Motivation: skills-evals verdict `retire-pending` (remove it, queued) as of 2026-11-13: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
 - Change: deleted `skills/github-actions-sha-pinning/`; the facts other files relied on already live in AGENTS.md (no `actions.lock` here), `docs/PIN-CONSISTENCY.md` (platform refs stay on the release tag, no version comment) and `docs/CI-INVARIANTS.md` (Dependabot cooldown), so the two pointers (AGENTS.md, `platform-release-and-bump`) now cite those docs and its freshness-allow entries were dropped (PR #1017).
 - Eval: the skills-evals evals explorer, https://adamdaniel.ai/tools/evals/ (verdict `retire-pending` as of 2026-11-13: remove, queued behind consumer-repo-provisioning; the owner asked on 2026-11-13 that every remove decision act without him).
 - Outcome: pending merge.
