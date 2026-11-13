@@ -273,7 +273,7 @@ def test_digest_preview_run_says_what_differs_from_a_normal_run():
 
 @pytest.mark.parametrize("problem,expected", [
     (("unreadable-type", "https://events.example.com/talks/open-data"),
-     "• The main link is a file (such as a PDF) the search can't read yet."),
+     "• The main link is a file the search can't read (such as an image or a locked PDF)."),
     (("http-status", "https://events.example.com/talks/open-data", "406"),
      "• The main link turned away the search's automatic check."),
     (("http-status", "https://events.example.com/talks/open-data", "0"),

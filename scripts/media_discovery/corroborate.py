@@ -79,14 +79,56 @@ def _jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
-def _supports(candidate: Candidate, norm_text: str, *, need_title: bool) -> bool:
-    title = normalize(candidate.title)
+# Words too common to tell one event or article from another.
+_STOPWORDS = frozenset("""
+a an and are as at be by for from in into is it of on or the this to with what why how
+our your you we new about after over under vs via its their his her
+""".split())
+TITLE_WORDS_SHARE = 0.6
+QUOTE_MIN_CHARS = 20
+
+
+def _title_words(title: str) -> list[str]:
+    """The distinctive words of a normalized title: no stopwords, no bare numbers."""
+    words = re.findall(r"[^\W_]+", title)
+    return list(dict.fromkeys(w for w in words if w not in _STOPWORDS and not w.isdigit()))
+
+
+def _has_word(word: str, norm_text: str) -> bool:
+    return re.search(rf"(?<![^\W_]){re.escape(word)}(?![^\W_])", norm_text) is not None
+
+
+def _names_the_item(title: str, norm_text: str) -> bool:
+    """The exact title, or most of its distinctive words: a page rarely repeats a
+    title the model wrote ("2026 SAU at AUA") word for word."""
+    if title and title in norm_text:
+        return True
+    words = _title_words(title)
+    if not words:
+        return False
+    found = sum(_has_word(w, norm_text) for w in words)
+    return found >= max(1, -(-len(words) * TITLE_WORDS_SHARE // 1))
+
+
+def _quote_on_page(candidate: Candidate, url: str, norm_text: str) -> bool:
+    """A verbatim quote the model cited from this very page is on it, and the page
+    shares at least one distinctive word of the title or the outlet's name."""
+    quotes = [normalize(e.get("quote", "")) for e in candidate.evidence if e.get("url") == url]
+    if not any(len(q) >= QUOTE_MIN_CHARS and q in norm_text for q in quotes):
+        return False
+    words = _title_words(normalize(candidate.title)) + _title_words(normalize(candidate.outlet))
+    return any(_has_word(w, norm_text) for w in words)
+
+
+def _supports(candidate: Candidate, norm_text: str, *, need_title: bool, url: str = "") -> bool:
     outlet = normalize(candidate.outlet)
-    has_title = bool(title) and title in norm_text
+    has_title = _names_the_item(normalize(candidate.title), norm_text)
     has_outlet = (candidate.kind in TALK_KINDS and not need_title
                   and bool(outlet) and outlet in norm_text)
+    has_quote = not need_title and _quote_on_page(candidate, url, norm_text)
     year = candidate.date[:4]
-    return (has_title or has_outlet) and re.search(rf"(?<!\d){year}(?!\d)", norm_text) is not None
+    return ((has_title or has_outlet or has_quote)
+            and re.search(rf"(?<!\d){year}(?!\d)", norm_text) is not None)
 
 
 def _domain(*urls: str) -> str:
@@ -137,7 +179,7 @@ def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> 
         ok_status = 200 <= page.status < 300
         identity = check_identity(page.text, cfg.person) if ok_status else None
         norm = normalize(page.text)
-        supports = ok_status and _supports(candidate, norm, need_title=is_primary)
+        supports = ok_status and _supports(candidate, norm, need_title=is_primary, url=url)
         sh = _shingles(norm)
         cluster = next((cid for d, s, cid in clusters
                         if d == domain or _jaccard(sh, s) >= SAME_CLUSTER_JACCARD), None)

@@ -12,6 +12,7 @@ is not caught. The fetched text is only ever matched against the candidate,
 never printed to a log, which bounds what such a fetch could leak.
 """
 
+import io
 import ipaddress
 import socket
 import urllib.error
@@ -26,6 +27,9 @@ MAX_BYTES = 3 * 1024 * 1024
 MAX_REDIRECTS = 5
 USER_AGENT = "cms-platform-media-discovery/1"
 ACCEPTED_TYPES = ("text/html", "application/xhtml+xml", "text/plain")
+PDF_TYPES = ("application/pdf", "application/x-pdf")
+MAX_PDF_BYTES = 15 * 1024 * 1024
+MAX_PDF_PAGES = 40
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
 
 
@@ -74,10 +78,33 @@ def _allowed(url: str, resolver) -> bool:
     return _host_is_public(parts.hostname, port, resolver)
 
 
+def pdf_to_text(raw: bytes) -> str | None:
+    """The text of a PDF's first MAX_PDF_PAGES pages, or None when it is not a
+    readable PDF (no %PDF- header, encrypted, malformed, or pypdf missing). The
+    bytes come from the open web, so any parser failure is data, not a crash."""
+    if not raw.startswith(b"%PDF-"):
+        return None
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        if reader.is_encrypted:
+            return None
+        parts = [page.extract_text() or "" for page in reader.pages[:MAX_PDF_PAGES]]
+    except Exception:  # noqa: BLE001 - an unreadable PDF is a skipped source
+        return None
+    return "\n".join(parts)
+
+
 def _body(resp, final_url: str, url: str) -> FetchedPage:
     headers = resp.headers
     content_type = headers.get_content_type() if headers is not None else ""
     status = getattr(resp, "status", None) or resp.getcode()
+    if content_type in PDF_TYPES or content_type == "application/octet-stream":
+        raw = resp.read(MAX_PDF_BYTES + 1)
+        text = pdf_to_text(raw) if len(raw) <= MAX_PDF_BYTES else None
+        if text is None:
+            return FetchedPage(url, final_url, 415, "", unreadable_type=True)
+        return FetchedPage(url, final_url, status, text)
     if content_type not in ACCEPTED_TYPES:
         return FetchedPage(url, final_url, 415, "", unreadable_type=True)
     raw = resp.read(MAX_BYTES)
@@ -103,7 +130,7 @@ def fetch(url: str, *, opener=None, resolver=None) -> FetchedPage:
                 return FetchedPage(url, current, 0, "")
             req = urllib.request.Request(current, headers={
                 "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,application/pdf;q=0.8",
             })
             try:
                 resp = opener.open(req, timeout=TIMEOUT_SECONDS)

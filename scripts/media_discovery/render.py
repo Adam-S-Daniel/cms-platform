@@ -228,7 +228,7 @@ def _heading(cand: Candidate) -> list[str]:
 def _problem_text(problem: Problem, person: str) -> str | None:
     code, detail = problem.code, problem.detail
     if code == "unreadable-type":
-        return "is a file (such as a PDF) the search can't read yet."
+        return "is a file the search can't read (such as an image or a locked PDF)."
     if code == "http-status":
         return ("couldn't be reached." if detail == "0"
                 else "turned away the search's automatic check.")

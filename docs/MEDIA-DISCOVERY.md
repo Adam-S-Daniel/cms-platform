@@ -73,7 +73,10 @@ date, a bare month counting as the month's last day) is today or later, and
 
 **A source qualifies** (`corroborate.verify`) when all of these hold:
 
-- it answered HTTP 2xx with an HTML or plain-text body;
+- it answered HTTP 2xx with an HTML, plain-text or PDF body. A PDF (served as
+  `application/pdf`, or as `application/octet-stream` starting `%PDF-`) is read
+  with pypdf: at most 15 MB and its first 40 pages; an encrypted or malformed
+  one counts as unreadable, never as a crash;
 - neither the cited URL nor the final URL after redirects is on a blocked
   domain (compared by registrable domain);
 - **identity** (`identity.py`): one of the configured names appears as a whole
@@ -81,11 +84,16 @@ date, a bare month counting as the month's last day) is today or later, and
   marker within `near_chars` characters of it, and no exclusion marker within
   `near_chars` of that same occurrence. A marker written in all capitals (an
   acronym) must match case exactly;
-- **support**: the normalized page text (NFKC, ASCII quotes and dashes,
-  casefolded, whitespace collapsed) contains the candidate's normalized title,
-  and the candidate's year appears as a standalone number. For the two talk
-  kinds a supporting page may name the outlet instead of the title; the
-  primary page must always carry the title.
+- **support**: the candidate's year appears in the normalized page text
+  (NFKC, ASCII quotes and dashes, casefolded, whitespace collapsed) as a
+  standalone number, and the page names the item. It names the item when it
+  contains the normalized title, or at least 60% (rounded up) of the title's
+  distinctive words as whole words (stopwords and bare numbers left out), since
+  a page rarely repeats a title the model wrote ("2026 SAU at AUA") word for
+  word. A supporting page may instead name the outlet (the two talk kinds
+  only), or carry one of the model's verbatim evidence quotes for that same
+  URL (20 or more characters) plus at least one distinctive word of the title
+  or outlet. The primary page must always name the item.
 
 **Independence.** Sources are grouped into clusters: two pages are in the same
 cluster when they share a registrable domain (the last two labels, or three
