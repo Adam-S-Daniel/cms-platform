@@ -469,11 +469,13 @@ test.describe("platform-main: required contexts and PR-time jobs cannot drift ap
   });
 
   // A stacked PR targets another PR's branch, and retargeting it onto main
-  // fires only `edited`, which no required publisher listens for (#222). A
-  // publisher filtered on `branches:` therefore never reports for a stacked
-  // PR's head sha, and the merge waits until someone pushes a new one (#1022).
-  // Unfiltered, the opened/synchronize run on the stacked base already
-  // reported the context against the sha that later merges into main.
+  // fires only `edited`, which the #222 callers (the secrets scan among them)
+  // deliberately do not run on. A publisher filtered on `branches:` therefore
+  // never reports for a stacked PR's head sha, and the merge waits until
+  // someone pushes a new one (#1022). Unfiltered, the opened/synchronize run
+  // on the stacked base already reported the context against the sha that
+  // later merges into main; secrets-scan-stacked-range.test.js checks that
+  // the scan in that run covers the parent branch's commits too.
   test("every required context is also reported on a STACKED pull request (#1022)", () => {
     const required = requiredContextSet(manifest(), PLATFORM_REPO);
     const offenders = platformPublishers()
