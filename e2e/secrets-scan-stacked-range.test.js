@@ -21,7 +21,9 @@ function scanStepScript() {
 }
 
 function git(cwd, ...args) {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+  // Ignore the developer's global git config (hooksPath, signing, …).
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", env });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
 }
