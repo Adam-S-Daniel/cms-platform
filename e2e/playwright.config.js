@@ -687,6 +687,10 @@ const PLATFORM_META_SPECS = [
   // stalled one for 39 min, blocking a canary PR and failing a prod loop).
   // Platform-internal, self-CI only.
   "playwright-install-bounded.test.js",
+  // Reads every platform workflow DEFINITION to assert each Playwright browser
+  // cache key names the runner image (a 24.04 WebKit build restored on 26.04
+  // failed every webkit-iphone16 test). Platform-internal, self-CI only.
+  "playwright-browser-cache-image-key.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +
