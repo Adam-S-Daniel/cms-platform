@@ -10,9 +10,18 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.177)
+## Version history (v0.1.0 → v0.1.178)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.178 — The Playwright browser caches are keyed on the runner image, and a stacked PR now reports `scan / scan`.**
+The first-parent range since v0.1.177 holds five entries on main before this release PR: the merge commits of [#1031](https://github.com/Adam-S-Daniel/cms-platform/pull/1031) (the browser cache key fix below) and [#1027](https://github.com/Adam-S-Daniel/cms-platform/pull/1027) (the scan fix below), the squash commit of [#1026](https://github.com/Adam-S-Daniel/cms-platform/pull/1026) (addressable 2.9.1 in the single-page e2e fixture) and two `_agent-guidance` AGENTS.md syncs ([#1028](https://github.com/Adam-S-Daniel/cms-platform/pull/1028), [#1030](https://github.com/Adam-S-Daniel/cms-platform/pull/1030)).
+
+Browser caches. `ubuntu-latest` moved to Ubuntu 26.04 on 2026-11-15. Playwright downloads a separate browser build per OS release but installs it under a revision-only directory, so caches keyed on `runner.os` restored the 24.04 WebKit build on 26.04 runners, and every `webkit-iphone16` fixture-e2e test failed at launch. Each `ms-playwright` cache key now includes the image's `ImageOS`, and a workflow lint fails any browser cache key that does not.
+
+Stacked PRs. `self-secrets-scan.yml` no longer filters `pull_request` to `main`, so a PR stacked on another PR reports the required `scan / scan` instead of waiting for a new commit after the retarget. A stacked PR scans from its fork point on the default branch.
+
+Consumer effect. None to act on beyond the pin: the e2e harness and reusables are checked out at the pinned release.
 
 **v0.1.177 — The prod media round trip finds the media library under its new "Images & files" name.**
 The first-parent range since v0.1.176 holds two entries on main before this release PR: the merge commits of [#1024](https://github.com/Adam-S-Daniel/cms-platform/pull/1024) (the fix below) and [#1023](https://github.com/Adam-S-Daniel/cms-platform/pull/1023) (the `_agent-guidance` AGENTS.md sync).
