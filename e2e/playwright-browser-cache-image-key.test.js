@@ -13,8 +13,9 @@
 // (self-fixture-e2e runs 43752616657 and 43755499612; passing run 43711522558
 // was on 24.04, same Playwright 1.64.1).
 //
-// The key must interpolate an earlier step's output whose `run:` reads the
-// runner's `ImageOS` variable. `runner.os` is not enough, and `env.ImageOS` is
+// The key must interpolate an earlier step's output that the step writes from
+// the runner's `ImageOS` variable, and that step must not be skippable apart
+// from the cache step. `runner.os` is not enough, and `env.ImageOS` is
 // empty in expressions (it is a runner variable, not workflow `env`).
 //
 // Platform-internal: reads the platform's own workflow definitions.
@@ -23,7 +24,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { listWorkflows, parseYaml } = require("./workflow-yaml-utils");
 
-const STEP_OUTPUT_RE = /steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+/g;
+// `<name>=${ImageOS...}` or `<name>=$ImageOS` in a step's `run:`.
+const IMAGE_OUTPUT_RE = /(?:^|[\s"'])([A-Za-z0-9_-]+)=\$\{?ImageOS\b/gm;
+const STEP_OUTPUT_RE = /steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)/g;
 
 function browserCacheSteps() {
   const found = [];
@@ -51,14 +54,17 @@ test("every Playwright browser cache key names the runner image", () => {
   const offenders = [];
   for (const { file, jobName, steps, index, step } of browserCacheSteps()) {
     const key = String(step.with.key || "");
-    const earlierImageSteps = new Set(
-      steps
-        .slice(0, index)
-        .filter((s) => s && s.id && /\bImageOS\b/.test(String(s.run || "")))
-        .map((s) => s.id),
+    // The referenced output must be one an earlier step writes FROM ImageOS
+    // (`<name>=${ImageOS...}`), and that step must run whenever the cache step
+    // does: no `if:`, or the cache step's own `if:`.
+    const writesImageOs = (s, name) =>
+      [...String(s.run || "").matchAll(IMAGE_OUTPUT_RE)].some((m) => m[1] === name);
+    const runsWithCache = (s) => s.if === undefined || s.if === step.if;
+    const earlier = steps.slice(0, index);
+    const ok = [...key.matchAll(STEP_OUTPUT_RE)].some(([, id, name]) =>
+      earlier.some((s) => s && s.id === id && writesImageOs(s, name) && runsWithCache(s)),
     );
-    const referenced = [...key.matchAll(STEP_OUTPUT_RE)].map((m) => m[1]);
-    if (!referenced.some((id) => earlierImageSteps.has(id))) {
+    if (!ok) {
       offenders.push(`${file} job ${jobName} step "${step.name || index}": key ${key}`);
     }
   }
