@@ -25,7 +25,7 @@ on:
       # compares the caller's `secrets:` map against the template at that
       # consumer's pinned ref.
       app_private_key:
-        description: "The CMS automation GitHub App's private key (with vars.CMS_AUTOMATION_APP_ID on the caller). Without it the sync PR is opened by GITHUB_TOKEN and fires no CI (#238)."
+        description: "The CMS automation GitHub App's private key (with vars.CMS_AUTOMATION_APP_ID on the caller). Without both the run fails naming them: GITHUB_TOKEN cannot open the sync PR (#871)."
         required: false
 
 permissions:
@@ -51,15 +51,17 @@ jobs:
         with:
           node-version: "20"
           package-manager-cache: false
-      # Credential for the PR, resolved App → PAT → GITHUB_TOKEN (#238). The
-      # branch push itself rides the checkout's own GITHUB_TOKEN (no workflow
-      # file is written here); what needs a non-GITHUB_TOKEN identity is the
-      # `gh pr create`, so the PR's `opened` event fires the site's CI. The
+      # Credential for the PR: the CMS automation App, and nothing else (#238,
+      # #871). The branch push itself rides the checkout's own GITHUB_TOKEN (no
+      # workflow file is written here); `gh pr create` needs the App's token.
+      # GITHUB_TOKEN is no fallback: with "Allow GitHub Actions to create and
+      # approve pull requests" off (`can_approve_pull_request_reviews: false`,
+      # which repo-settings.yml keeps on purpose) it cannot create a pull
+      # request, and one it did create would fire no CI. So a repo without the
+      # App fails here, naming both knobs, before anything is pushed. The
       # script is already on disk from the platform checkout above, so this
-      # mints from `.cms-platform/scripts/` at the pinned platform_ref — and
-      # a ref that predates the script means a reusable that predates this
-      # step, so the guard below is belt-and-braces, not a live branch.
-      - name: Mint a GitHub App installation token (when the App is provisioned)
+      # mints from `.cms-platform/scripts/` at the pinned platform_ref.
+      - name: Mint a GitHub App installation token
         id: app
         env:
           APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
@@ -67,17 +69,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
-            # WARN, not error — unlike platform-bump. This credential is not
-            # load-bearing here: nothing writes a workflow file, the branch push
-            # rides checkout's own GITHUB_TOKEN, and the only cost of falling
-            # through is that the sync PR fires no CI. Failing a weekly sync
-            # over a cosmetic degradation would be worse than reporting it.
-            echo "::warning::No CMS automation App on this repo (vars.CMS_AUTOMATION_APP_ID + secrets.CMS_AUTOMATION_APP_PRIVATE_KEY) — the sync PR will be opened by GITHUB_TOKEN and will NOT fire this repo's CI. The CMS_PLATFORM_PAT fallback was removed in v0.1.103."
-            exit 0
+            echo "::error::No CMS automation App on this repo: set the variable CMS_AUTOMATION_APP_ID and the secret CMS_AUTOMATION_APP_PRIVATE_KEY (docs/CONSUMER-PROVISIONING.md in cms-platform). The sync PR can only be opened with the App's token; GITHUB_TOKEN cannot create a pull request here, so there is no fallback."
+            exit 1
           fi
           if [ ! -f .cms-platform/scripts/mint-app-token.js ]; then
-            echo "::warning::.cms-platform/scripts/mint-app-token.js missing at this platform_ref — the sync PR will be opened by GITHUB_TOKEN and will NOT fire CI."
-            exit 0
+            echo "::error::.cms-platform/scripts/mint-app-token.js is missing at this platform_ref, so no App token can be minted and the sync PR cannot be opened. Pin platform_ref to a release that ships it."
+            exit 1
           fi
           # Scoped DOWN: this one repo, PR write + the contents read `gh pr
           # create` needs. No workflows permission — nothing here writes one.
@@ -87,7 +84,7 @@ jobs:
             --permissions contents=read,pull_requests=write
       - name: Sync guard files and open a PR if changed
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           REF: ${{ inputs.platform_ref }}
           PLATFORM: ${{ inputs.platform_repo }}
         run: |

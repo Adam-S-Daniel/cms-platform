@@ -96,10 +96,12 @@ If a consumer still holds a `CMS_PLATFORM_PAT` secret, **delete the secret**,
 don't just let the PAT expire: `||` in a GitHub expression falls through on
 *empty*, not on *invalid*, so a dead-but-present value wins a fallback and 401s.
 
-Without the App, `platform-bump` **fails loudly** naming both knobs — its
-credential is load-bearing, since the bump rewrites `.github/workflows/*` and
-`GITHUB_TOKEN` cannot hold `workflows:write` — while `dev-hooks-sync` **warns**
-and opens its PR on `GITHUB_TOKEN`, which fires no CI. (The removal and the
+Without the App, both **fail loudly** naming both knobs. `platform-bump`
+rewrites `.github/workflows/*` and `GITHUB_TOKEN` cannot hold `workflows:write`.
+`dev-hooks-sync` opens a pull request, and `GITHUB_TOKEN` cannot create one
+while "Allow GitHub Actions to create and approve pull requests" is off
+(`can_approve_pull_request_reviews: false`, which `repo-settings.yml` keeps on
+purpose), so its old `GITHUB_TOKEN` fallback was removed (#871). (The removal and the
 consumers' verified cut-over: `docs/VERSION-HISTORY.md` v0.1.103; the deleted
 `dependabot-comment-sync` consumer: `docs/CI-INVARIANTS.md`.)
 
@@ -110,9 +112,9 @@ two reusables that edit `.github/workflows/*`, `platform-bump` and
 `dev-hooks-sync`: when both knobs below are set on the consumer, the reusable
 mints a ~1 h installation token per run (`scripts/mint-app-token.js`, pure node
 + stdlib `crypto`, fetched from the platform at the release the bump targets).
-There is no PAT fallback: without the App, `platform-bump` fails with an
-`::error::` naming both knobs, and `dev-hooks-sync` warns and opens its PR as
-`GITHUB_TOKEN`, which fires no CI.
+There is no PAT fallback and no `GITHUB_TOKEN` fallback: without the App,
+`platform-bump` and `dev-hooks-sync` each fail with an `::error::` naming both
+knobs (#871).
 
 Why an App and not another PAT: a fine-grained PAT cannot span owners, so the
 PAT was one token per consumer, and each expired on its own calendar — taking

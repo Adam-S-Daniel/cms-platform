@@ -1375,6 +1375,15 @@ address. This diagnostic does not add one.
   1280 and squeezes the controls at 1024; the toolbar is `flex-wrap: nowrap`
   on desktop. A full-width row under the toolbar was measured to cost nothing
   at any width.
+- **A way to preview an entry while the site is in coming-soon mode**
+  ([#658](https://github.com/Adam-S-Daniel/cms-platform/issues/658)). On a
+  gated site (jodidaniel.com, `site_live: false`) production shows the
+  coming-soon page and so does a draft's own preview deployment, because each
+  preview is built from its branch with the gate as that branch has it. The
+  two ways to change that were to build previews with the gate open, or to add
+  a preview-only bypass. Owner decision, 2026-11-17: the site is fine without
+  that capability, so neither is built. The gate banner already tells the
+  editor that visitors see the coming-soon page.
 
 ---
 

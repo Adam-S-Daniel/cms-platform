@@ -56,8 +56,11 @@ keeps "never onboarded" distinguishable from "misconfigured". `repo-settings-app
 carries the same shape today, and so do `platform-bump.yml` and
 `dev-hooks-sync.yml`, which since #238 read `CMS_AUTOMATION_APP_ID` /
 `CMS_AUTOMATION_APP_PRIVATE_KEY` as the CMS automation App that replaces the
-consumer's `CMS_PLATFORM_PAT` (App → PAT → `GITHUB_TOKEN`; lint-locked by
-`e2e/app-token-platform-writers.test.js`). Whether a consumer has provisioned
+consumer's `CMS_PLATFORM_PAT` (no PAT fallback since v0.1.103, and no
+`GITHUB_TOKEN` fallback in `dev-hooks-sync.yml` since #871: without the App
+both fail with an `::error::` naming the two knobs, which is the one exception
+to "never a crash" here, because neither can do its work on `GITHUB_TOKEN`;
+lint-locked by `e2e/app-token-platform-writers.test.js`). Whether a consumer has provisioned
 the App is exactly the thing this section says cannot be read from a session:
 look for the `::notice::Minted …` line in a bump run's log, not at the
 settings page.
