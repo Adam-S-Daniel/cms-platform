@@ -164,7 +164,7 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
 
   // A site whose `main` holds a layout, a post and an upload, and a work
   // tree checked out at `pr`, which applies `prFiles` (null deletes).
-  function checkoutAfter(prFiles, base = "main") {
+  function checkoutAfter(prFiles, base = "main", mainFiles = {}) {
     sb = createSandbox("salience-step-");
     const src = sb.initRepo("src");
     sb.commit(
@@ -173,6 +173,7 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
         "_layouts/post.html": POST,
         "_posts/2026-01-01-old.md": "old post body\n",
         "assets/images/uploads/a.png": "png bytes of a\n",
+        ...mainFiles,
       },
       "main",
     );
@@ -189,7 +190,7 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
   // Runs the step and returns the raw result. `stubs` (name -> sh body) are
   // put first on PATH; mktemp files land in a private TMPDIR returned as
   // `tmp` so a leak is observable.
-  function execute(workflowFile, stepName, work, stubs = {}, base = "main") {
+  function execute(workflowFile, stepName, work, stubs = {}, base = "main", fromCms = "false") {
     const [found] = findRunSteps(() => true).filter(
       (f) => f.workflow === workflowFile && f.step.name === stepName,
     );
@@ -203,7 +204,7 @@ test.describe("salience workflow steps over real git (cms-platform#539, renames)
       cwd: work,
       scratch: path.join(sb.root, `run-${found.job}`),
       env: { ...sb.env, TMPDIR: tmp, PATH: `${bin}:${path.dirname(process.execPath)}:${sb.env.PATH}` },
-      stepEnv: { BASE: base, BASE_REF: base },
+      stepEnv: { BASE: base, BASE_REF: base, VR_FROM_CMS: fromCms },
     });
     return { ...r, tmp };
   }
@@ -318,6 +319,66 @@ exec '${REAL_GIT}' "$@"`,
       expect(fs.readdirSync(r.tmp)).toEqual([]);
     });
   }
+
+  // cms-platform#1044: a Decap save to a tool entry that already exists is
+  // content; adding, moving or re-pointing one is not. `npm` is stubbed (no
+  // network): `yaml` already resolves from this checkout's e2e/node_modules,
+  // and the stub records that the step asked for it.
+  const TOOL = (fm, body = "About the tool.\n") =>
+    `---\n${Object.entries(fm).map(([k, v]) => `${k}: ${v}`).join("\n")}\n---\n${body}`;
+  const EVALS = { title: "Evals", slug: "evals", embed_src: "/assets/tools/skills-evals/" };
+  const NPM_STUB = 'touch "$TMPDIR/../npm-ran"; exit 0';
+
+  function decideTool(prFiles, fromCms, mainFiles = { "_tools/evals.md": TOOL(EVALS) }) {
+    const work = checkoutAfter(prFiles, "main", mainFiles);
+    const r = execute(...VISUAL, work, { npm: NPM_STUB }, "main", fromCms);
+    expect(r.status, `exit status; stderr: ${r.stderr}`).toBe(0);
+    return { verdict: r.output.trim(), npmRan: fs.existsSync(path.join(sb.root, "npm-ran")) };
+  }
+
+  test("visual-regression: a CMS edit to an existing tool's title and body is not salient", () => {
+    const { verdict, npmRan } = decideTool(
+      { "_tools/evals.md": TOOL({ ...EVALS, title: "Improvement Loop Explorer" }, "New text.\n") },
+      "true",
+    );
+    expect(verdict).toBe("salient=false");
+    expect(npmRan, "the step installs yaml for the front-matter check").toBe(true);
+  });
+
+  test("visual-regression: the same edit from a non-CMS branch is salient, without installing yaml", () => {
+    const { verdict, npmRan } = decideTool(
+      { "_tools/evals.md": TOOL({ ...EVALS, title: "Improvement Loop Explorer" }) },
+      "false",
+    );
+    expect(verdict).toBe("salient=true");
+    expect(npmRan).toBe(false);
+  });
+
+  for (const field of ["slug", "embed_src"]) {
+    test(`visual-regression: a CMS edit that changes ${field} is salient`, () => {
+      const { verdict } = decideTool({ "_tools/evals.md": TOOL({ ...EVALS, [field]: "/other/" }) }, "true");
+      expect(verdict).toBe("salient=true");
+    });
+  }
+
+  test("visual-regression: a new tool entry from the CMS is salient", () => {
+    const { verdict, npmRan } = decideTool({ "_tools/new-tool.md": TOOL({ ...EVALS, slug: "new-tool" }) }, "true");
+    expect(verdict).toBe("salient=true");
+    expect(npmRan, "no modified entry, nothing to compare").toBe(false);
+  });
+
+  test("visual-regression: renaming a tool entry from the CMS is salient", () => {
+    const { verdict } = decideTool(MOVE("_tools/evals.md", "_tools/evals-2.md", TOOL(EVALS)), "true");
+    expect(verdict).toBe("salient=true");
+  });
+
+  test("visual-regression: a CMS tool edit beside a layout change is salient", () => {
+    const { verdict } = decideTool(
+      { "_tools/evals.md": TOOL({ ...EVALS, title: "X" }), "_layouts/post.html": "changed\n" },
+      "true",
+    );
+    expect(verdict).toBe("salient=true");
+  });
 
   test("visual-regression: moving a layout out of _layouts/ is salient", () => {
     const work = checkoutAfter(MOVE("_layouts/post.html", "uploads/post.html", POST));
