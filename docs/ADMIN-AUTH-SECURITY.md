@@ -1107,8 +1107,51 @@ access tokens. The proxy hands over `access_token` alone and drops
 `refresh_token` and `expires_in` (`_exchange_code`;
 `TestGitHubAppTokenResponse`).
 
-**Recommendation: expiring.** Fall back to expiry off only if spike step 11
-shows an unsaved edit lost across a re-login.
+**Recommendation: expiring.** Spike step 11 did show an unsaved edit lost
+(2026-11-18, adamdaniel.ai), and the owner chose to fix that instead of turning
+expiry off: see the next section.
+
+### Signing in again without a reload
+
+The first run of spike step 11 failed, and could never have passed as written.
+Once the token is dead, Save fails (*Failed to persist entry: API_ERROR: Bad
+credentials*), and the automatic save fails with it, because
+`autosave-on-hide.js` only clicks Save. The step then reloaded and expected
+Decap to offer the edit back, but `confirm-wrap-local-backup.js` suppresses
+that offer on purpose: Decap drops the restored work in a race
+(decaporg/decap-cms#6989, still in 3.17.3). So the reload lost the edit, and
+the after-reload message said the work had been saved automatically.
+
+`theme/admin/sign-in-renewal.js` removes the need for the reload. The typed
+work is still in Decap's in-memory draft, so:
+
+1. `publish-via-auto-merge.js`'s fetch wrap (still the only one) hands each
+   GitHub API response to the shim. A 401 whose body says *Bad credentials*
+   marks that token dead.
+2. Two seconds later, if that token is still the stored session, a notice
+   appears in flow at the top of the page with a **Sign in again** button. A
+   page load with a dead stored token does not get the notice: Decap removes
+   the stored session and shows its own login page.
+3. The button runs the same popup handshake as the reviews dashboards. The
+   `message` listener checks the proxy's origin and the popup it opened before
+   reading anything.
+4. The new token is accepted only if `GET /user` says it is the same account.
+   It replaces the token in `localStorage["decap-cms-user"]`, and the fetch
+   wrap swaps the old token for it on every later `api.github.com` request,
+   because Decap keeps the old one in memory. Requests to any other host are
+   never touched.
+5. Save now works on the open entry.
+
+While a token is known dead and not yet replaced, requests carrying it are
+answered in the page with the same 401, so the polling shims do not fill the
+console with failed requests. If the editor reloads anyway, the after-reload
+message says the sign-in ended before the last changes could be saved.
+
+Checked 2026-11-18 with the real Decap 3.17.3 bundle in Chromium against a
+stand-in for the GitHub API (not Firefox or WebKit, and not yet against
+GitHub itself): the draft stayed on screen, and the next Save sent every
+request with the new token. `e2e/sign-in-renewal.test.js` covers the shim and
+its hook.
 
 ### Org-owned consumers (#26) and the restriction detector
 
@@ -1161,7 +1204,7 @@ mirrors today's one OAuth App per site and needs no proxy change.
 3. Label writes on PRs with Pull requests: write and no Issues permission.
 4. Save, media upload, publish and delete end to end.
 5. The posts-list GraphQL query.
-6. A re-login after expiry restoring an unsaved edit.
+6. An unsaved edit surviving the sign-in ending (signing in again in place).
 7. Anything refusing for lack of Workflows.
 8. The org install path, on the org-owned consumer.
 
@@ -1199,7 +1242,11 @@ Setup, owner only:
      bash oauth-proxy/deploy.sh )
    ```
 
-4. Set the App's callback URL to the `CallbackEndpoint` the deploy printed.
+4. Set the App's callback URL (GitHub's form calls it *Redirect URI*, not
+   *Callback URL*) to the `CallbackEndpoint` the deploy printed. Do not run the
+   deploy again afterwards with a different secret: that replaces the secret
+   the proxy holds, and sign-in fails with *The client_id and/or client_secret
+   passed are incorrect* until the two match again.
 5. In the site repo, on a branch `spike/github-app-signin`, set
    `cms.oauth_base_url` in `_config.yml` to the printed `ApiUrl`, open a PR and
    wait for `https://preview-pr<N>.<apex>`.
@@ -1208,17 +1255,17 @@ Checklist, all on that preview:
 
 | # | Do | Pass |
 |---|---|---|
-| 1 | `/admin/` → *Login with GitHub* | GitHub's page names the App and its repository permissions; the collections load. *"Your GitHub user account does not have access to this repo"* is risk 1: stop, no-go. |
+| 1 | `/admin/` → *Login with GitHub* | GitHub's page names the App (it lists no repository permissions; those belong to the installation); the collections load. *"Your GitHub user account does not have access to this repo"* is risk 1: stop, no-go. |
 | 2 | Console: `u = JSON.parse(localStorage['decap-cms-user']); [u.token.slice(0, 4), Object.keys(u)]` | `ghu_`, and no `refresh_token` key |
 | 3 | Console: `fetch('https://api.github.com/repos/<owner>/<another-private-repo>', {headers: {Authorization: 'token ' + u.token}}).then(r => r.status)` | `404`: the token cannot see a repo the App is not installed on |
 | 4 | New entry → Save | a `cms/…` PR opens against `spike/github-app-signin` with `decap-cms/draft` |
 | 5 | Add an image to it → Save | the image is in the PR's diff |
-| 6 | Move it to Ready | the label changes; no error toast |
+| 6 | Turn on *Show on site* → Save | the PR keeps `decap-cms/draft`; no error toast. (The editor has one Publish button and no Status menu, so there is no separate "move to Ready".) |
 | 7 | Publish | the PR merges into the spike branch, or is labeled `cms/ready` by the shim; no *workflows* refusal anywhere |
 | 8 | Posts list and the deploy pill; then in the console: `fetch('https://api.github.com/graphql', {method: 'POST', headers: {Authorization: 'bearer ' + u.token}, body: JSON.stringify({query: '{repository(owner:"<owner>",name:"<repo>"){ref(qualifiedName:"refs/heads/main"){target{... on Commit{history(first:1){nodes{committedDate associatedPullRequests(first:1){nodes{number}}}}}}}}}'})}).then(r => r.json())` | dates, PR links and a pill state render, and the response has `data` and no `errors` key. GraphQL reports a permission gap as HTTP 200 with `errors`, not as a 401, so the status code alone proves nothing. |
 | 9 | `/admin/reviews/` and `/admin/reviews/health.html` → sign in | waiting runs and the health table load |
 | 10 | Approve the spike PR's parked `regression-review` gate, if any | *Regression approved*, and the run moves on. A 403 is risk 2. |
-| 11 | Open the entry, type without saving; in a terminal revoke the token: `curl -u <app-client-id> -X DELETE https://api.github.com/applications/<app-client-id>/token -d '{"access_token":"<token from step 2>"}'` (the client secret is the password); Save; reload; sign in again | the Save fails, and after signing in again Decap offers the unsaved edit back |
+| 11 | Open the entry, type without saving; in a terminal revoke the token: `curl -u <app-client-id> -X DELETE https://api.github.com/applications/<app-client-id>/token -d '{"access_token":"<token from step 2>"}'` (the client secret is the password; a 401 from this call means the secret is wrong, and revoking the App at <https://github.com/settings/apps/authorizations> ends the token too); Save; **do not reload**; choose *Sign in again* in the notice at the top; Save | the first Save fails, the notice appears within a few seconds, and after signing in again the typed edit is still on screen and the second Save succeeds |
 | 12 | Delete the spike entry from the posts list | the file leaves the spike branch |
 | 13 | On the org-owned consumer: an org owner creates the same App under the org and installs it; repeat 1–3 there | sign-in works, no *OAuth App access restrictions* banner |
 

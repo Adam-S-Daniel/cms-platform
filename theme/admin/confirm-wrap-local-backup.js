@@ -268,6 +268,17 @@
       // non-technical owner after a reload, so no tool names and nothing that
       // sounds broken. The facts are the same: Save and the automatic save
       // (tab close, short idle) keep the work; only Publish reaches the site.
+      // The one case where "saved automatically" is false: the sign-in had
+      // ended, so neither Save nor the automatic save could reach GitHub
+      // (sign-in-renewal.js sets this flag and clears it once the sign-in is
+      // renewed in place). Say so instead of reassuring.
+      if (signInHadEnded()) {
+        toast(
+          "Your sign-in ended before your last changes could be saved, so they may be missing here. " +
+            "Next time, choose Sign in again at the top of the page before reloading.",
+        );
+        return false;
+      }
       toast(
         "Your work is saved automatically when you pause or close the tab, and when you press Save. " +
           "Nothing reaches " +
@@ -288,6 +299,18 @@
     if (!answer && msg === LEAVE_STRING && inPop) inPop.cancelled = true;
     return answer;
   };
+
+  // Read once and cleared: the message describes the reload that just happened.
+  function signInHadEnded() {
+    try {
+      var key = "cms-sign-in-expired";
+      if (!window.sessionStorage || window.sessionStorage.getItem(key) !== "1") return false;
+      window.sessionStorage.removeItem(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   function toast(msg) {
     try {

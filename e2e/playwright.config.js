@@ -194,6 +194,9 @@ const PLATFORM_META_SPECS = [
   "editor-component-image.test.js",
   // #732 — platform-only code widget registration and initialization regression.
   "code-block-language.test.js",
+  // #516 row 11 — vm-sandboxes theme/admin/sign-in-renewal.js and the fetch
+  // wrap that calls it, and reads the production shell's script order.
+  "sign-in-renewal.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",

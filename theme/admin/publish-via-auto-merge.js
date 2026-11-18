@@ -425,9 +425,41 @@
       }
     }
 
-    if (!matcher) return origFetch.call(this, input, init);
+    // Sign-in renewal (sign-in-renewal.js, loaded just before this file). It
+    // wraps nothing itself because this is the only fetch wrap. `prepare`
+    // returns null for a request it has no reason to change, so the
+    // pass-through below still hands on the caller's ORIGINAL arguments.
+    var renewal = window.CMSSignInRenewal;
+    var sent;
+    if (renewal) {
+      var prepared = null;
+      try {
+        prepared = renewal.prepare(input, init);
+      } catch {
+        prepared = null;
+      }
+      if (prepared && prepared.response) return Promise.resolve(prepared.response);
+      if (prepared) {
+        input = prepared.input;
+        init = prepared.init;
+      }
+      var sentInput = input;
+      var sentInit = init;
+      sent = origFetch.call(this, input, init).then(function (res) {
+        try {
+          renewal.observe(sentInput, sentInit, res);
+        } catch {
+          /* never let the sign-in check break a request */
+        }
+        return res;
+      });
+    } else {
+      sent = origFetch.call(this, input, init);
+    }
 
-    return origFetch.call(this, input, init).then(function (res) {
+    if (!matcher) return sent;
+
+    return sent.then(function (res) {
       // The `merge` matcher recovers on BOTH the ruleset rejection (422
       // "rule violations") AND a not-yet-mergeable response (405/409):
       // Decap's "Publish Now" PUT /merge returns 405 when the required

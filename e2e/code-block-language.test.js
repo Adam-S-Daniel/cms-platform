@@ -7,7 +7,7 @@ const SRC = fs.readFileSync(path.join(__dirname, "../theme/admin/code-block-lang
 let parseHTML;
 test.beforeAll(async () => { ({ parse: parseHTML } = await import("parse5")); });
 
-function load() {
+function load(liveRegistry = true) {
   class StockControl {
     constructor(props) {
       this.props = props;
@@ -52,9 +52,12 @@ function load() {
     control: StockControl, preview: function Preview() {}, schema: { type: "object" },
     allowMapValue: true, globalStyles: "stock styles", codeMirrorConfig: { extraKeys: {} },
   };
+  const stock = Object.assign({}, widget);
   const registrations = [];
   vm.runInNewContext(SRC, {
-    window: { CMS: { getWidget: () => widget, registerWidget: w => {
+    // `liveRegistry: false` models a registry that hands out copies, where
+    // the in-place swap cannot be seen and the shim must register instead.
+    window: { CMS: { getWidget: () => (liveRegistry ? widget : Object.assign({}, stock)), registerWidget: w => {
       // Same option-spread order as Decap's public object registration API.
       const { name, controlComponent: control, previewComponent: preview, schema,
         allowMapValue, globalStyles, ...options } = w;
@@ -62,7 +65,9 @@ function load() {
     } } },
     document: { readyState: "complete" }, Date, setTimeout() {},
   });
-  return { widget, registered: registrations[0], registrations };
+  // What Decap would now hand the editor for "code".
+  const registered = liveRegistry ? widget : registrations[0];
+  return { widget: stock, registered, registrations };
 }
 
 test("stock deferred initialization loses a new block's first selection but preserves existing mounts", () => {
@@ -122,8 +127,20 @@ test("preexisting languages and standalone code fields keep stock initialization
   expect(standalone.changes).toEqual([]);
 });
 
-test("widget registration retains the stock preview and configuration", () => {
+test("the control is swapped in place, without a second registration, keeping the stock preview and configuration", () => {
   const { widget, registered, registrations } = load();
+  // A second registerWidget("code") logs "Multiple widgets registered with
+  // name "code"" on every admin load.
+  expect(registrations).toHaveLength(0);
+  for (const [key, value] of Object.entries(widget)) {
+    if (key !== "control") expect(registered[key]).toBe(value);
+  }
+  expect(registered.control).not.toBe(widget.control);
+  expect(new registered.control({})).toBeInstanceOf(widget.control);
+});
+
+test("a registry that hands out copies falls back to one public registration", () => {
+  const { widget, registered, registrations } = load(false);
   expect(registrations).toHaveLength(1);
   expect(registered.name).toBe("code");
   for (const [key, value] of Object.entries(widget)) {

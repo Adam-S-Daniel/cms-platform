@@ -5,8 +5,8 @@
  * (#732). Keep the stock widget and serializer; initialize that flag for an
  * empty-language editor component after the stock mount has run.
  *
- * Register through Decap's public widget API, preserving its preview, schema,
- * allowMapValue and CodeMirror options. Standalone code fields are unchanged.
+ * Replace only the control, preserving the preview, schema, allowMapValue and
+ * CodeMirror options. Standalone code fields are unchanged.
  */
 (function () {
   "use strict";
@@ -27,6 +27,17 @@
           this.setState({ isLangInitialized: true });
         }
       }
+    }
+    // Swap the control on the registered widget itself when the registry
+    // hands out its live entry (it does in 3.17.3): registering "code" a
+    // second time works but logs "Multiple widgets registered with name
+    // "code"" on every admin load. Checked by reading it back; anything else
+    // falls through to the public registration below.
+    try {
+      widget.control = CodeBlockControl;
+      if (cms.getWidget("code") === widget && widget.control === CodeBlockControl) return true;
+    } catch {
+      /* a frozen entry: register instead */
     }
     var registration = Object.assign({}, widget, {
       name: "code",
