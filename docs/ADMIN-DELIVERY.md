@@ -118,9 +118,9 @@ targets that feature branch and receives no separate deployment status (see
 [Publishing UX, preview-only edits](PUBLISHING-UX.md#35-on-a-preview-the-website-is-the-wrong-noun)).
 The note supplies no invented URL and promises no deployment for those drafts.
 
-[Issue #726](https://github.com/Adam-S-Daniel/cms-platform/issues/726) still
-requires the owner's decision on whether this content-preview limitation
-satisfies the related Tools concern or a fuller build-backed preview is needed.
+**Owner decision (2026-11-17):** this content preview is enough for Tools and
+other site-owned collections; no build-backed in-editor preview is planned
+([issue #726](https://github.com/Adam-S-Daniel/cms-platform/issues/726), closed).
 The platform mitigation documents the boundary without executing Liquid in
 the browser. [preview-pane.test.js](../e2e/preview-pane.test.js) covers neutral
 Liquid variables and tags, renamed Markdown fields, unchanged widget input,
