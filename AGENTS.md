@@ -210,8 +210,9 @@ deleted in v0.1.83. → `docs/SYNC.md` § Skills, `docs/VERSION-HISTORY.md` v0.1
 
 ### Skill changes are recorded, and evals gate them
 
-The rules are in `docs/skill-impact.md`'s header; python-unit-tests checks
-them (warn-only for now) with `scripts/skill_gates/check_skill_gates.py`.
+The rules are in `docs/skill-impact.md`'s header; python-unit-tests enforces
+them with `scripts/skill_gates/check_skill_gates.py`: a finding fails the job.
+A small wording fix takes the light entry: `Eval: wording-only: …`.
 
 ## Every cross-post target gets text in ITS format, never raw Markdown
 
