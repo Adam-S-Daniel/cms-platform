@@ -10,9 +10,24 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.178)
+## Version history (v0.1.0 → v0.1.179)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.179 — The editor signs in again in the same tab when the GitHub sign-in ends, so typed work is not lost.**
+The first-parent range since v0.1.178 holds fourteen entries on main before this release PR: the squash commits of [#1050](https://github.com/Adam-S-Daniel/cms-platform/pull/1050) (the sign-in fix below), [#1047](https://github.com/Adam-S-Daniel/cms-platform/pull/1047) (visual review below), [#1045](https://github.com/Adam-S-Daniel/cms-platform/pull/1045) (skill gates below), [#1043](https://github.com/Adam-S-Daniel/cms-platform/pull/1043) (dev-hooks-sync below), three docs-only PRs ([#1042](https://github.com/Adam-S-Daniel/cms-platform/pull/1042), [#1046](https://github.com/Adam-S-Daniel/cms-platform/pull/1046), [#1048](https://github.com/Adam-S-Daniel/cms-platform/pull/1048)), four Dependabot bumps ([#1037](https://github.com/Adam-S-Daniel/cms-platform/pull/1037) parse5 8.1.1, [#1038](https://github.com/Adam-S-Daniel/cms-platform/pull/1038) `@playwright/test` 1.65.0, [#1040](https://github.com/Adam-S-Daniel/cms-platform/pull/1040) serve 14.2.7, [#1041](https://github.com/Adam-S-Daniel/cms-platform/pull/1041) ruby/setup-ruby) and three `_agent-guidance` syncs ([#1033](https://github.com/Adam-S-Daniel/cms-platform/pull/1033), [#1034](https://github.com/Adam-S-Daniel/cms-platform/pull/1034), [#1035](https://github.com/Adam-S-Daniel/cms-platform/pull/1035)).
+
+Sign-in ending mid-edit ([#1049](https://github.com/Adam-S-Daniel/cms-platform/issues/1049), found in the #516 trial). With a dead token Save and the automatic save both failed, and the reload needed to sign in again lost the draft, because `confirm-wrap-local-backup.js` suppresses Decap's backup-restore offer on purpose (decaporg/decap-cms#6989). New `theme/admin/sign-in-renewal.js` shows a "Sign in again" notice in flow at the top of the production admin shell, runs the OAuth-proxy popup handshake (origin and source checked first), accepts the new token only for the same account, stores it, and has `publish-via-auto-merge.js`'s fetch wrap (still the only one) swap the old token on later `api.github.com` requests. A token GitHub has called *Bad credentials* is answered locally from then on instead of being re-sent. After a reload that followed an ended sign-in, the message no longer says the work was saved automatically. `e2e/sign-in-renewal.test.js` (13 tests); one manual run with the real Decap 3.17.3 bundle in Chromium against a stand-in for GitHub, none yet against GitHub itself. Detail: `docs/ADMIN-AUTH-SECURITY.md`, "Signing in again without a reload".
+
+Code widget. `code-block-language.js` swaps the control on the registered widget in place, so Decap no longer logs `Multiple widgets registered with name "code"` on every admin load.
+
+Visual review (#1047). A CMS edit to an existing tool entry skips the visual-regression review, like other content-only edits.
+
+dev-hooks-sync (#1043, closing #871). The reusable fails naming both App knobs when the CMS automation App is not configured, instead of falling back to `GITHUB_TOKEN` and failing later at `gh pr create`.
+
+Skill gates (#1045). `check_skill_gates.py` findings fail python-unit-tests, and a wording fix can take a light `Eval: wording-only: …` entry. Platform-only.
+
+Consumer effect. The production `/admin` gains the sign-in notice script; it does nothing until a GitHub API call returns 401 *Bad credentials*. A consumer without `CMS_AUTOMATION_APP_ID` and its private key now sees `dev-hooks-sync` fail instead of warn.
 
 **v0.1.178 — The Playwright browser caches are keyed on the runner image, and a stacked PR now reports `scan / scan`.**
 The first-parent range since v0.1.177 holds five entries on main before this release PR: the merge commits of [#1031](https://github.com/Adam-S-Daniel/cms-platform/pull/1031) (the browser cache key fix below) and [#1027](https://github.com/Adam-S-Daniel/cms-platform/pull/1027) (the scan fix below), the squash commit of [#1026](https://github.com/Adam-S-Daniel/cms-platform/pull/1026) (addressable 2.9.1 in the single-page e2e fixture) and two `_agent-guidance` AGENTS.md syncs ([#1028](https://github.com/Adam-S-Daniel/cms-platform/pull/1028), [#1030](https://github.com/Adam-S-Daniel/cms-platform/pull/1030)).
