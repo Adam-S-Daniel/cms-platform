@@ -675,15 +675,24 @@ name `v0.1.160`:
 | adamdaniel.ai | [`_config.yml`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/_config.yml) | [`platform.lock`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock) | [`/admin/`](https://adamdaniel.ai/admin/) and [`/admin/reviews/`](https://adamdaniel.ai/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
 | jodidaniel.com | [`_config.yml`](https://github.com/jodidaniel/jodidaniel.com/blob/main/_config.yml) | [`platform.lock`](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock) | [`/admin/`](https://jodidaniel.com/admin/) and [`/admin/reviews/`](https://jodidaniel.com/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
 
-The pins alone do not activate the feature. The owner needs to choose whether
-to retain the current apex exposure knowingly or authorize a per-site
-migration. The recommendation is to pilot the dedicated origin on the
-user-owned consumer, validate it using the [runbook](#runbook-per-site), then
-migrate both consumers. That is a recommendation, not an owner-approved
-decision. No AWS settings, DNS or certificate state, OAuth allowlist,
-interactive sign-in, or token revocation was verified in this check, and no
-infrastructure rollout was performed. Until each site completes real
-per-site validation and revokes pre-cutover credentials, [#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517)
+The pins alone do not activate the feature. On 2026-11-17 the owner approved
+the migration for both consumers
+([#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517)). Runbook
+step 1 and the wrapper default for step 3 are in one PR per site:
+[adamdaniel.ai#4977](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4977)
+and [jodidaniel.com#534](https://github.com/jodidaniel/jodidaniel.com/pull/534).
+Each sets `cms.admin_origin` and makes the site's
+`infrastructure/bootstrap/deploy.sh` default `ADMIN_DOMAIN` to `admin.<apex>`.
+Neither changes anything live: the setting is inert until the bootstrap
+redeploy.
+
+What remains needs the owner's AWS credentials, a browser and the OAuth App
+settings, so no agent session has done it: [runbook](#runbook-per-site) steps
+2 to 7 per site (the proxy deploy listing both origins, the bootstrap
+redeploy, the checks, real sign-ins, the proxy deploy without the apex, and
+revoking every pre-cutover token). No AWS settings, DNS or certificate state,
+OAuth allowlist, interactive sign-in, or token revocation has been verified.
+Until each site completes that and revokes pre-cutover credentials, #517
 remains open. The remaining exposure is described in [What it closes, and
 what it does not](#what-it-closes-and-what-it-does-not).
 
@@ -1176,11 +1185,11 @@ Setup, owner only:
    `POST /app-manifests/{code}/conversions` exchanges, with no credentials,
    for the private key and the client secret.
 2. Install it on the site repo only.
-3. Deploy a separate spike proxy from this branch:
+3. Deploy a separate spike proxy from `main`, which carries the spike kit:
 
    ```bash
    cd ~/repos/cms-platform && git fetch origin \
-     && git checkout --detach origin/feat/github-app-signin-evaluation
+     && git checkout --detach origin/main
    read -rs GITHUB_CLIENT_SECRET   # the App's client secret; not echoed
    ( export GITHUB_CLIENT_SECRET STACK_NAME=<prefix>-oauth-proxy-app-spike \
        GITHUB_CLIENT_ID=<app-client-id> ALLOWED_ORIGINS='https://preview-*.<apex>' \
