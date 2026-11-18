@@ -227,6 +227,141 @@ def test_covered_touch_counts_but_starting_none_fails(tmp_path):
     assert code == 1, out
 
 
+# ---------------------------------------------------------------------------
+# the light entry: `wording-only` (cms-platform#946)
+# ---------------------------------------------------------------------------
+
+FRONT = "---\nname: {name}\ndescription: {desc}\n---\n\n"
+
+
+def skill_text(lines, name=SKILL, desc="Polish widgets."):
+    return FRONT.format(name=name, desc=desc) + "".join(f"{line}\n" for line in lines)
+
+
+def wording_repo(tmp_path: Path, before, after, eval_text="wording-only: one phrase reworded",
+                 kind="edit", after_desc="Polish widgets.", light=False) -> Path:
+    """main holds SKILL.md with `before` body lines; the pr branch rewrites it
+    to `after` and appends an entry with `eval_text`."""
+    repo = make_repo(tmp_path)
+    _git(repo, "checkout", "-q", "main")
+    _write(skill_dir(repo, SKILL) / "SKILL.md", skill_text(before))
+    commit(repo, "frontmatter base")
+    _git(repo, "checkout", "-q", "-B", "pr", "main")
+    _write(skill_dir(repo, SKILL) / "SKILL.md", skill_text(after, desc=after_desc))
+    new = entry(kind, eval_text)
+    if light:
+        new = (f"## 2026-10-30 — {BUNDLE}/{SKILL} — edit\n\n"
+               f"- Change: invented.\n- Eval: {eval_text}\n")
+    impact(repo, new, OLD_ENTRY, OTHER_OLD)
+    commit(repo)
+    return repo
+
+
+BODY = [f"line {n}" for n in range(30)]
+
+
+def reworded(count):
+    return [f"line {n}, reworded" if n < count else line for n, line in enumerate(BODY)]
+
+
+def test_wording_only_edit_of_a_covered_skill_passes_without_a_run(tmp_path):
+    repo = wording_repo(tmp_path, BODY, reworded(1))
+    code, out = gate(repo, census_file(tmp_path, "covered"))
+    assert code == 0, out
+    assert "warning" not in out
+
+
+def test_wording_only_light_entry_needs_only_change_and_eval(tmp_path):
+    repo = wording_repo(tmp_path, BODY, reworded(1), light=True)
+    code, out = gate(repo, census_file(tmp_path, "covered"))
+    assert code == 0, out
+
+
+def test_wording_only_passes_at_every_census_status(tmp_path):
+    for n, status in enumerate(("covered", "skipped", "gap")):
+        sub = tmp_path / str(n)
+        sub.mkdir()
+        repo = wording_repo(sub, BODY, reworded(1))
+        code, out = gate(repo, census_file(sub, status))
+        assert code == 0, (status, out)
+
+
+def test_wording_only_at_the_line_bound_passes_and_one_over_fails(tmp_path):
+    half = csg.WORDING_MAX_CHANGED_LINES // 2
+    at, over = tmp_path / "at", tmp_path / "over"
+    at.mkdir()
+    over.mkdir()
+    code, out = gate(wording_repo(at, BODY, reworded(half)), census_file(at, "covered"))
+    assert code == 0, out
+    code, out = gate(wording_repo(over, BODY, reworded(half + 1)), census_file(over, "covered"))
+    assert code == 1, out
+    assert "the Eval line says `wording-only`, but the edit is " in out
+    assert f"{2 * (half + 1)} added plus deleted lines" in out
+
+
+def test_wording_only_with_a_frontmatter_change_fails(tmp_path):
+    repo = wording_repo(tmp_path, BODY, BODY, after_desc="Polish widgets and gadgets.")
+    code, out = gate(repo, census_file(tmp_path, "covered"))
+    assert code == 1, out
+    assert "changes the SKILL.md frontmatter" in out
+
+
+def test_wording_only_ignores_a_frontmatter_reformat(tmp_path):
+    """Same parsed value, different spelling: the trigger did not change."""
+    repo = make_repo(tmp_path)
+    _git(repo, "checkout", "-q", "main")
+    _write(skill_dir(repo, SKILL) / "SKILL.md", skill_text(BODY))
+    commit(repo, "frontmatter base")
+    _git(repo, "checkout", "-q", "-B", "pr", "main")
+    _write(skill_dir(repo, SKILL) / "SKILL.md",
+           f'---\nname: "{SKILL}"\ndescription: "Polish widgets."\n---\n\n'
+           + "".join(f"{line}\n" for line in BODY))
+    impact(repo, entry("edit", "wording-only: quoted the frontmatter values"),
+           OLD_ENTRY, OTHER_OLD)
+    commit(repo)
+    code, out = gate(repo, census_file(tmp_path, "covered"))
+    assert code == 0, out
+
+
+def test_oversize_wording_only_with_a_run_is_judged_by_the_run(tmp_path):
+    repo = wording_repo(tmp_path, BODY, reworded(15),
+                        eval_text="wording-only, and routine run `20261030T101010Z-0a1b2c`")
+    code, out = gate(repo, census_file(tmp_path, "covered"))
+    assert code == 0, out
+
+
+def test_wording_only_must_start_the_eval_line(tmp_path):
+    repo = wording_repo(tmp_path, BODY, reworded(1), eval_text="not run; wording-only")
+    code, out = gate(repo, census_file(tmp_path, "covered"))
+    assert code == 1, out
+    assert "census lists the skill as covered" in out
+
+
+def test_wording_only_counts_only_on_an_edit_entry(tmp_path):
+    repo = wording_repo(tmp_path, BODY, reworded(1), kind="rename")
+    code, out = gate(repo, census_file(tmp_path, "covered"))
+    assert code == 1, out
+
+
+def test_wording_only_does_not_graduate_a_new_skill(tmp_path):
+    repo = make_repo(tmp_path)
+    _write(skill_dir(repo, "brand-new") / "SKILL.md", skill_text(BODY, name="brand-new"))
+    impact(repo, entry("create", "wording-only: copied from elsewhere", skill="brand-new"),
+           OLD_ENTRY, OTHER_OLD)
+    commit(repo)
+    code, out = gate(repo)
+    assert code == 1, out
+
+
+def test_frontmatter_parses_the_leading_block_only():
+    assert csg.frontmatter("---\nname: a\ndescription: b\n---\n\nbody\n---\nx: 1\n") == {
+        "name": "a", "description": "b"}
+    assert csg.frontmatter("# no frontmatter\n") is None
+    assert csg.frontmatter(None) is None
+    assert csg.frontmatter("---\nname: a\n") is None  # never closed
+    assert csg.frontmatter("---\na: [unclosed\n---\n") == "a: [unclosed"
+
+
 NEGATED = ("not yet run (target 8/8)", "skipped, previous 21/21", "not exempt; outstanding",
            "did not run; routine run `20261030T101010Z-0a1b2c` predates this edit",
            "nothing run yet, 3/3 planned")

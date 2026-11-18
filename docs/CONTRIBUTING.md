@@ -119,12 +119,13 @@ checks on a plain PR). It runs six FAST lanes on `pull_request` + `push` to `mai
    `oauth-proxy/test_lambda.py`; hard-fail; REQUIRED since #525). On a pull
    request that changes `skills/`, `docs/skill-impact.md` or
    `scripts/skill_gates/` (an in-job salience step; the job always reports), it
-   then runs `scripts/skill_gates/check_skill_gates.py --warn-only --base HEAD^1
-   --head HEAD` on the PR merge commit: the skill graduation and touch gates,
-   whose rules are in `docs/skill-impact.md`'s header. Warn-only for now: its
-   findings are `::warning::` lines and a step-summary section, never a
-   failure. Run it locally, enforcing, with
-   `python3 scripts/skill_gates/check_skill_gates.py --base origin/main --head HEAD`.
+   then runs `scripts/skill_gates/check_skill_gates.py --base HEAD^1 --head HEAD`
+   on the PR merge commit: the skill graduation and touch gates, whose rules
+   are in `docs/skill-impact.md`'s header. Enforcing since #946: a finding
+   fails the job, and so does a check that could not run (a census that cannot
+   be read stays a warning). Run it locally with
+   `python3 scripts/skill_gates/check_skill_gates.py --base origin/main --head HEAD`;
+   add `--warn-only` for a dry run that always exits 0.
 
 `self-secrets-scan.yml` (#126) runs alongside it as its own workflow,
 gitleaks-scanning the platform repo's diff on `pull_request`, incrementally on
