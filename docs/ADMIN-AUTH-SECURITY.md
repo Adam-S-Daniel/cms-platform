@@ -666,35 +666,30 @@ admin origin.
 
 ### Rollout status and owner decision
 
-Read-only HTTPS checks on 2026-10-07 found neither consumer opted in. Both
-configuration files omit `cms.admin_origin`, and both `platform.lock` files
-name `v0.1.160`:
+Both consumers serve the editor from `admin.<apex>` since 2026-11-18. The
+owner approved the migration on 2026-11-17
+([#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517), which has
+the per-step record).
 
-| Consumer | Configuration | Platform pin | Public route observations |
+| Consumer | Site PR (step 1, wrapper default) | Editor | OAuth App |
 |---|---|---|---|
-| adamdaniel.ai | [`_config.yml`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/_config.yml) | [`platform.lock`](https://github.com/Adam-S-Daniel/adamdaniel.ai/blob/main/platform.lock) | [`/admin/`](https://adamdaniel.ai/admin/) and [`/admin/reviews/`](https://adamdaniel.ai/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
-| jodidaniel.com | [`_config.yml`](https://github.com/jodidaniel/jodidaniel.com/blob/main/_config.yml) | [`platform.lock`](https://github.com/jodidaniel/jodidaniel.com/blob/main/platform.lock) | [`/admin/`](https://jodidaniel.com/admin/) and [`/admin/reviews/`](https://jodidaniel.com/admin/reviews/) both returned HTTP 200 with an empty `redirect_url`. |
+| adamdaniel.ai | [adamdaniel.ai#4977](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4977) | `https://admin.adamdaniel.ai/admin/` | "adamdaniel.ai CMS", owned by the `Adam-S-Daniel` user account |
+| jodidaniel.com | [jodidaniel.com#534](https://github.com/jodidaniel/jodidaniel.com/pull/534) | `https://admin.jodidaniel.com/admin/` | "jodidaniel.com CMS", owned by the `Adam-S-Daniel` user account, not the `jodidaniel` organization that owns the repository |
 
-The pins alone do not activate the feature. On 2026-11-17 the owner approved
-the migration for both consumers
-([#517](https://github.com/Adam-S-Daniel/cms-platform/issues/517)). Runbook
-step 1 and the wrapper default for step 3 are in one PR per site:
-[adamdaniel.ai#4977](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/4977)
-and [jodidaniel.com#534](https://github.com/jodidaniel/jodidaniel.com/pull/534).
-Each sets `cms.admin_origin` and makes the site's
-`infrastructure/bootstrap/deploy.sh` default `ADMIN_DOMAIN` to `admin.<apex>`.
-Neither changes anything live: the setting is inert until the bootstrap
-redeploy.
+What was verified, and by whom:
 
-What remains needs the owner's AWS credentials, a browser and the OAuth App
-settings, so no agent session has done it: [runbook](#runbook-per-site) steps
-2 to 7 per site (the proxy deploy listing both origins, the bootstrap
-redeploy, the checks, real sign-ins, the proxy deploy without the apex, and
-revoking every pre-cutover token). No AWS settings, DNS or certificate state,
-OAuth allowlist, interactive sign-in, or token revocation has been verified.
-Until each site completes that and revokes pre-cutover credentials, #517
-remains open. The remaining exposure is described in [What it closes, and
-what it does not](#what-it-closes-and-what-it-does-not).
+- **Steps 0, 2, 3, 4 and 6** ran from an agent session on the owner's machine
+  with the owner's AWS sign-in. On each site the bootstrap change set changed
+  only `AdminDomainName`, added the five `Admin*` resources and removed or
+  replaced nothing; every step 4 check passed; each proxy stack now lists the
+  admin host and `preview-*` only, with its stored credentials unchanged by
+  hash.
+- **Steps 5 and 7** (real sign-ins, a fresh sign-in after step 6, and "Revoke
+  all user tokens" on both OAuth Apps) are the owner's report. No agent
+  session observed them.
+
+The remaining exposure is described in [What it closes, and what it does
+not](#what-it-closes-and-what-it-does-not).
 
 ### Runbook, per site
 
@@ -725,9 +720,15 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://<apex>/admin/not-found.html"
 #    BOOTSTRAP_STACK_NAME (default <prefix>-bootstrap), never site-params.env's
 #    STACK_NAME, which names the proxy (infrastructure/README.md, "The
 #    STACK_NAME collision"). Expect Add lines for the Admin* resources in the
-#    printed change set; the script refuses a removal or a replacement. A new
-#    certificate is validated and a new distribution deployed: allow several
-#    minutes.
+#    printed change set; the script refuses a removal or a replacement. In-place
+#    Modify lines are expected for the production distribution (the apex /admin
+#    redirect), the preview regression CORS policy and, when the stack was last
+#    deployed from an older template, whatever that template has gained since
+#    (both 2026-11-18 rollouts picked up the admin policy's frame-src entries).
+#    The script does NOT pause: it executes a change set with no removal or
+#    replacement as soon as it is created, so to read one first, create it by
+#    hand or run with the execute call blocked. A new certificate is validated
+#    and a new distribution deployed: allow several minutes.
 bash infrastructure/bootstrap/deploy.sh   # the site's delegating wrapper
 
 # 4. Verify with GET (curl -I sends HEAD, which the admin host serves on purpose)
