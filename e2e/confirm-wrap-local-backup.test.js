@@ -102,6 +102,23 @@ test.describe("confirm-wrap-local-backup.js (unit)", () => {
     expect(appended).toHaveLength(1);
   });
 
+  test("after a sign-in that ended before saving, the reload message does not claim the work was saved", () => {
+    const { sandbox, confirm, appended, nativeCalls } = bootShim(true);
+    const session = new Map([["cms-sign-in-expired", "1"]]);
+    sandbox.window.sessionStorage = {
+      getItem: (k) => (session.has(k) ? session.get(k) : null),
+      removeItem: (k) => session.delete(k),
+    };
+    expect(confirm(BACKUP_STRING)).toBe(false);
+    expect(nativeCalls).toHaveLength(0);
+    expect(appended[0].textContent).toContain("sign-in ended before your last changes could be saved");
+    expect(appended[0].textContent).not.toContain("saved automatically");
+    // Told once: the next reload gets the usual message again.
+    expect(session.has("cms-sign-in-expired")).toBe(false);
+    expect(confirm(BACKUP_STRING)).toBe(false);
+    expect(appended[1].textContent).toContain("saved automatically");
+  });
+
   test("any OTHER message delegates to the captured original confirm and returns ITS value (true)", () => {
     const { confirm, nativeCalls, appended } = bootShim(true);
     const result = confirm("Are you sure you want to unpublish this entry?");

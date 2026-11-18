@@ -17,7 +17,7 @@ function declaration(rule, name) {
 test("top-right toasts use the measured notice edge and preserve the phone midpoint", () => {
   const rules = [];
   notices.walkRules((rule) => {
-    if (rule.selector === 'body.cms-notice-band:has(> #cms-branch-binding-banner, > #cms-site-gate-banner)\n  [class*="Toastify__toast-container--top-right"]') rules.push(rule);
+    if (rule.selector === 'body.cms-notice-band:has(> #cms-sign-in-expired-banner, > #cms-branch-binding-banner, > #cms-site-gate-banner)\n  [class*="Toastify__toast-container--top-right"]') rules.push(rule);
   });
   expect(rules).toHaveLength(1);
   expect(rules[0].parent.type).toBe("root");

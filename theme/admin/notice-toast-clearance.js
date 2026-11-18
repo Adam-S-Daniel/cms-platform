@@ -1,10 +1,10 @@
-/* Keep Decap's top-right toasts below the in-flow branch and site-gate
- * notices. Their height changes with viewport width and translated copy, so
+/* Keep Decap's top-right toasts below the in-flow sign-in, branch and
+ * site-gate notices. Their height changes with viewport width and translated copy, so
  * a fixed offset can put "Entry saved" over the coming-soon message. */
 (function () {
   "use strict";
 
-  var ids = ["cms-branch-binding-banner", "cms-site-gate-banner"];
+  var ids = ["cms-sign-in-expired-banner", "cms-branch-binding-banner", "cms-site-gate-banner"];
   var prop = "--cms-admin-notice-bottom";
 
   function sync() {
