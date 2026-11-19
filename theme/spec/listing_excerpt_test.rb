@@ -107,6 +107,26 @@ class ListingExcerptUnitTest < Minitest::Test
                  L.sanitize('<div style="position:fixed;inset:0">Oops <!-- c --> never closed')
   end
 
+  # A listing is a list. In a browser an <li> closes the listing's own item,
+  # so an excerpt that kept one split a post into extra rows.
+  def test_list_markup_is_unwrapped_so_an_excerpt_cannot_close_the_listing_item
+    assert_equal 'injected item', L.sanitize('<li>injected item</li>')
+    out = L.sanitize('<ul><li>one</li><li>two <strong>bold</strong></li></ul><ol><li>three</li></ol>')
+    refute_match(/<\/?(?:ul|ol|li)\b/i, out)
+    assert_includes out, 'two <strong>bold</strong>'
+  end
+
+  def test_every_element_removed_with_its_contents_leaves_no_text_behind
+    # <embed> is on the list too but is a void element: it has no contents.
+    %w[script style iframe object svg math video audio canvas template noscript form button
+       select textarea title applet].each do |name|
+      out = L.sanitize("<p>before</p><#{name}>INSIDE-#{name}</#{name}><p>after</p>")
+      refute_includes out, "INSIDE-#{name}", name
+      refute_match(/<#{name}\b/i, out, name)
+      assert_includes out, '<p>after</p>', name
+    end
+  end
+
   def test_text_is_escaped_on_the_way_out
     assert_equal '<p>a &lt; b &amp; 5 &gt; 3</p>', L.sanitize('<p>a &lt; b &amp; 5 &gt; 3</p>')
   end
@@ -142,6 +162,9 @@ class ListingExcerptBuildTest < Minitest::Test
     '2024-01-07' => ['Body opens with an embed', {},
                      "<iframe src=\"https://example.com/embed\" width=\"560\" height=\"315\"></iframe>\n\nSecond."],
     '2024-01-08' => ['Ordinary quote', {}, "> A quoted *line* with a [link](https://example.com/).\n\nSecond."],
+    '2024-01-09' => ['Body opens with a list item', {}, "<li>injected item</li>\n\nSecond paragraph."],
+    '2024-01-10' => ['Body opens with a list', {}, "- first\n- second\n\nSecond paragraph."],
+    '2024-01-11' => ['Claims to be typed', { 'excerpt_typed' => true }, "Some **bold** opening.\n\nSecond."],
   }.freeze
 
   def setup
@@ -208,6 +231,25 @@ class ListingExcerptBuildTest < Minitest::Test
   def test_the_hook_marks_only_posts_whose_front_matter_set_an_excerpt
     typed = @site.posts.docs.select { |d| d.data['excerpt_typed'] == true }.map { |d| d.data['title'] }
     assert_equal ['Typed complete script', 'Typed script mention', 'Typed style and comment'], typed.sort
+  end
+
+  # The hook decides, never the post: `excerpt_typed: true` in front matter on
+  # a post with no typed excerpt printed its rendered excerpt as escaped
+  # markup.
+  def test_a_post_cannot_declare_its_own_excerpt_typed
+    claimed = @site.posts.docs.find { |d| d.data['title'] == 'Claims to be typed' }
+    assert_equal false, claimed.data['excerpt_typed']
+    refute_nil REXML::XPath.first(item('Claims to be typed'), './/strong'), 'its cut excerpt keeps its formatting'
+  end
+
+  # REXML reads the page as XML, where an <li> nests. A browser closes the
+  # listing's own item at an <li>, so this one is read as a browser reads it.
+  def test_the_list_has_exactly_one_row_per_post_as_a_browser_parses_it
+    require 'nokogiri'
+    doc = Nokogiri::HTML5.parse(File.read(File.join(@destination, 'tags', 'notes', 'index.html')))
+    rows = doc.css('ul.post-list > li')
+    assert_equal POSTS.size, rows.size, 'an excerpt must not add rows to the listing'
+    assert_equal POSTS.size, doc.css('ul.post-list > li.post-item').size
   end
 
   def test_every_post_is_still_listed_and_the_page_still_ends_with_its_footer

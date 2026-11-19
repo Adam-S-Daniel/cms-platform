@@ -1756,7 +1756,7 @@ is the one way to print it:
 - **An excerpt cut from the body is reduced to an allowlist by the Sanitize
   gem.** Sanitizing HTML is a library's job, never code written here (the
   owner's rule above), so the filter holds only the allowlist as Sanitize
-  configuration: paragraphs, block quotes, lists, emphasis, inline code, and
+  configuration: paragraphs, block quotes, emphasis, inline code, and
   links and images with an http, https, mailto or relative address. Sanitize
   parses with Nokogiri's HTML5 parser, the algorithm a browser uses, so what
   it judges is what the browser builds. The theme gemspec declares
