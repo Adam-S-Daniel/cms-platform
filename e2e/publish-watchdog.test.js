@@ -22,7 +22,7 @@ const SCRIPT = path.join(ROOT, "scripts/publish-watchdog.js");
 const REUSABLE = path.join(ROOT, ".github/workflows/publish-watchdog.yml");
 const CALLER_DIR = path.join(ROOT, "examples/site/.github/workflows");
 const CALLER = path.join(CALLER_DIR, "publish-watchdog.yml");
-const { classifyPublish, issueMarker, renderIssue, planSweep } = require(SCRIPT);
+const { classifyPublish, issueMarker, renderIssue, planSweep, watchPublish } = require(SCRIPT);
 
 const NOW = Date.parse("2026-11-19T12:00:00Z");
 const iso = (minutesAgo) => new Date(NOW - minutesAgo * 60000).toISOString();
@@ -216,6 +216,23 @@ test.describe("classifyPublish", () => {
     expect(v.failing).toEqual([{ name: "build", conclusion: "failure", url: "https://example.com/b" }]);
   });
 
+  test("the watcher's own check run is ignored, so it never counts as pending", () => {
+    const own = run("publish-watchdog / watch", "in_progress", null);
+    const done = run("build", "completed", "success", { completed_at: iso(1) });
+    expect(classify({ checkRuns: [own, done] }).state).toBe("in-flight");
+    const old = run("build", "completed", "success", { completed_at: iso(30) });
+    expect(classify({ checkRuns: [own, old] }).state).toBe("stuck");
+    // an in-progress run of any other name still counts
+    expect(classify({ checkRuns: [run("other", "in_progress", null), old] }).state).toBe("in-flight");
+    // a custom prefix replaces the default
+    expect(classify({ checkRuns: [own, old], selfCheckPrefix: "zzz" }).state).toBe("in-flight");
+  });
+
+  test("a failing check named like the watcher is also dropped", () => {
+    const v = classify({ checkRuns: [run("publish-watchdog / watch", "completed", "failure")] });
+    expect(v.failing).toEqual([]);
+  });
+
   test("graceMinutes defaults to 15", () => {
     const runs = [run("build", "completed", "success", { completed_at: iso(16) })];
     expect(classify({ checkRuns: runs, graceMinutes: undefined }).state).toBe("stuck");
@@ -242,6 +259,12 @@ test.describe("renderIssue and issueMarker", () => {
   test("with no failing checks it says every check finished", () => {
     const { body } = renderIssue({ repo: "o/r", pr: makePr(), verdict: { state: "stuck", reason: "x", failing: [] } });
     expect(body).toContain("Every check finished");
+  });
+
+  test("a timeout verdict says how long it waited", () => {
+    const { body } = renderIssue({ repo: "o/r", pr: makePr(), verdict: { state: "stuck", reason: "x", failing: [], waitedMinutes: 25 } });
+    expect(body).toContain("not gone live after 25 minutes");
+    expect(body).toContain(issueMarker(7));
   });
 
   test("a hostile title and branch name never reach the issue", () => {
@@ -318,6 +341,149 @@ test.describe("planSweep", () => {
   });
 });
 
+test.describe("watchPublish", () => {
+  // A scripted sequence of states with a fake clock: sleep() advances time, so
+  // no real timers run. The last state repeats once the script runs out.
+  function harness(states, { watchMinutes = 25, pollSeconds = 20, graceMinutes = 3 } = {}) {
+    let t = NOW;
+    let i = 0;
+    const calls = { opened: [], closed: [], slept: 0, sleeps: 0, polls: 0 };
+    const out = {
+      calls,
+      go: () =>
+        watchPublish({
+          prNumber: 7,
+          watchMinutes,
+          pollSeconds,
+          graceMinutes,
+          now: () => t,
+          sleep: async (ms) => {
+            calls.slept += ms;
+            calls.sleeps++;
+            t += ms;
+          },
+          fetchState: async () => {
+            calls.polls++;
+            const st = states[Math.min(i++, states.length - 1)];
+            return typeof st === "function" ? st(t) : st;
+          },
+          act: {
+            openIssue: async (pr, verdict) => calls.opened.push({ pr: pr.number, verdict }),
+            closeIssue: async (n, p) => calls.closed.push([n, p]),
+          },
+        }),
+    };
+    return out;
+  }
+  const base = { requiredContexts: ["build"], files: ["_posts/2026-11-18-real-post.md"], openIssues: [] };
+  const pending = () => ({ ...base, pr: makePr(), checkRuns: [run("build", "in_progress", null), run("publish-watchdog / watch", "in_progress", null)] });
+  const merged = (openIssues = []) => ({ ...base, openIssues, pr: makePr({ state: "closed" }), checkRuns: [] });
+  const failed = () => ({ ...base, pr: makePr(), checkRuns: [run("build", "completed", "failure"), run("slow", "in_progress", null)] });
+
+  test("merges on the 3rd poll: resolved, no issue", async () => {
+    const h = harness([pending(), pending(), merged()]);
+    const r = await h.go();
+    expect(r.outcome).toBe("resolved");
+    expect(h.calls.polls).toBe(3);
+    expect(h.calls.sleeps).toBe(2);
+    expect(h.calls.opened).toEqual([]);
+    expect(h.calls.closed).toEqual([]);
+  });
+
+  test("a required check fails on the 2nd poll: exactly one issue, no further polls", async () => {
+    const h = harness([pending(), failed(), failed()]);
+    const r = await h.go();
+    expect(r.outcome).toBe("stuck");
+    expect(h.calls.polls).toBe(2);
+    expect(h.calls.opened).toHaveLength(1);
+    expect(h.calls.opened[0].verdict.failing[0].name).toBe("build");
+  });
+
+  test("an unarmed draft is ignored with zero sleeps", async () => {
+    const h = harness([{ ...pending(), pr: makePr({ draft: true, auto_merge: null }) }]);
+    const r = await h.go();
+    expect(r.outcome).toBe("ignored");
+    expect(h.calls.sleeps).toBe(0);
+    expect(h.calls.opened).toEqual([]);
+  });
+
+  test("a fixture-only PR is ignored at once", async () => {
+    const h = harness([{ ...pending(), files: ["_e2e/a.md"] }]);
+    expect((await h.go()).outcome).toBe("ignored");
+    expect(h.calls.sleeps).toBe(0);
+  });
+
+  test("in flight until the deadline: timeout issue, slept time within one poll of watchMinutes", async () => {
+    const h = harness([pending()]);
+    const r = await h.go();
+    expect(r.outcome).toBe("timeout");
+    expect(h.calls.opened).toHaveLength(1);
+    expect(h.calls.opened[0].verdict.waitedMinutes).toBe(25);
+    expect(h.calls.slept).toBeLessThanOrEqual(25 * 60000);
+    expect(h.calls.slept).toBeGreaterThan(25 * 60000 - 20000);
+  });
+
+  test("never sleeps past the deadline when the poll does not divide the watch time", async () => {
+    const h = harness([pending()], { watchMinutes: 1, pollSeconds: 45 });
+    await h.go();
+    // polls at 0 and 45 s sleep; the poll at 90 s is past the deadline and does not
+    expect(h.calls.sleeps).toBe(2);
+    expect(h.calls.polls).toBe(3);
+  });
+
+  test("watchMinutes 0 times out at once with no sleep", async () => {
+    const h = harness([pending()], { watchMinutes: 0 });
+    expect((await h.go()).outcome).toBe("timeout");
+    expect(h.calls.sleeps).toBe(0);
+  });
+
+  test("an existing open issue with the marker means no second issue", async () => {
+    const withIssue = (st) => ({ ...st, openIssues: [{ number: 50, body: issueMarker(7) }] });
+    const h1 = harness([withIssue(failed())]);
+    expect((await h1.go()).outcome).toBe("stuck");
+    expect(h1.calls.opened).toEqual([]);
+    const h2 = harness([withIssue(pending())]);
+    expect((await h2.go()).outcome).toBe("timeout");
+    expect(h2.calls.opened).toEqual([]);
+  });
+
+  test("a merged PR with an open watchdog issue closes that issue", async () => {
+    const h = harness([merged([{ number: 50, body: issueMarker(7) }, { number: 51, body: issueMarker(8) }])]);
+    expect((await h.go()).outcome).toBe("resolved");
+    expect(h.calls.closed).toEqual([[50, 7]]);
+  });
+
+  test("its own pending check run is not counted as pending", async () => {
+    const settled = {
+      ...base,
+      pr: makePr(),
+      checkRuns: [
+        run("build", "completed", "success", { completed_at: iso(10) }),
+        run("publish-watchdog / watch", "in_progress", null),
+      ],
+    };
+    const h = harness([settled]);
+    expect((await h.go()).outcome).toBe("stuck");
+    expect(h.calls.sleeps).toBe(0);
+  });
+
+  test("a failed poll is retried on the next poll", async () => {
+    const h = harness([() => { throw new Error("boom"); }, merged()]);
+    const r = await h.go();
+    expect(r.outcome).toBe("resolved");
+    expect(r.failures).toBe(1);
+    expect(h.calls.sleeps).toBe(1);
+  });
+
+  test("every poll failing reports unknown, never an issue", async () => {
+    const h = harness([() => { throw new Error("boom"); }], { watchMinutes: 1 });
+    const r = await h.go();
+    expect(r.outcome).toBe("unknown");
+    expect(r.failures).toBe(r.polls);
+    expect(h.calls.opened).toEqual([]);
+  });
+});
+
 test.describe("CLI with a stub gh", () => {
   function setup({ pulls, failPulls = false, failIssueWithLabels = false, openIssues = [] }) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-"));
@@ -327,6 +493,7 @@ test.describe("CLI with a stub gh", () => {
     fs.mkdirSync(log);
     const put = (name, value) => fs.writeFileSync(path.join(fix, name), JSON.stringify(value));
     put("pulls.json", pulls);
+    put("pr.json", Array.isArray(pulls) ? pulls[0] : pulls);
     put("repo.json", { default_branch: "main" });
     put("rules.json", [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "build" }] } }]);
     put("checks.json", { check_runs: [run("build", "completed", "failure")] });
@@ -348,6 +515,7 @@ case "$ep" in
     if [ -f "${fix}/fail-pulls" ]; then echo "SECRET-RESPONSE-BODY"; echo "gh: HTTP 500 SECRET-RESPONSE-BODY" >&2; exit 1; fi
     cat "${fix}/pulls.json" ;;
   repos/o/r/pulls/*/files*) cat "${fix}/files.json" ;;
+  repos/o/r/pulls/[0-9]*) cat "${fix}/pr.json" ;;
   repos/o/r/commits/*/check-runs*) cat "${fix}/checks.json" ;;
   repos/o/r/rules/branches/*) cat "${fix}/rules.json" ;;
   repos/o/r/issues\\?*) cat "${fix}/issues.json" ;;
@@ -424,6 +592,51 @@ esac`,
     expect(JSON.parse(logged(env, "body-2.json")).labels).toEqual(["publish-stuck"]);
   });
 
+  test("--watch on a stuck PR opens exactly one issue and exits 0", () => {
+    const env = setup({ pulls: stuckPulls() });
+    const r = runCli(env, ["--watch", "7"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("outcome stuck");
+    expect(writes(env)).toHaveLength(1);
+    expect(JSON.parse(logged(env, "body-1.json")).body).toContain("<!-- publish-watchdog:pr=7 -->");
+  });
+
+  test("--watch with an existing marked issue opens nothing", () => {
+    const env = setup({ pulls: stuckPulls(), openIssues: [{ number: 50, body: "<!-- publish-watchdog:pr=7 -->" }] });
+    const r = runCli(env, ["--watch", "7"]);
+    expect(r.status).toBe(0);
+    expect(writes(env)).toEqual([]);
+  });
+
+  test("--watch --dry-run writes nothing", () => {
+    const env = setup({ pulls: stuckPulls() });
+    const r = runCli(env, ["--watch", "7", "--dry-run"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("would open an issue");
+    expect(writes(env)).toEqual([]);
+  });
+
+  test("--watch reaching its deadline while in flight opens a timeout issue", () => {
+    const env = setup({ pulls: stuckPulls() });
+    fs.writeFileSync(path.join(env.dir, "fix", "checks.json"), JSON.stringify({ check_runs: [run("build", "in_progress", null)] }));
+    const r = runCli(env, ["--watch", "7", "--watch-minutes", "0"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("outcome timeout");
+    expect(JSON.parse(logged(env, "body-1.json")).body).toContain("not gone live after 0 minutes");
+  });
+
+  test("--watch where every poll fails exits 1 without echoing the body", () => {
+    const env = setup({ pulls: stuckPulls() });
+    fs.writeFileSync(path.join(env.dir, "fix", "fail-pulls"), "");
+    // the single-PR endpoint fails too: point the stub's pr read at the failing list path
+    const gh = path.join(env.bin, "gh");
+    fs.writeFileSync(gh, '#!/bin/sh\necho "SECRET-RESPONSE-BODY"\necho "gh: HTTP 500 SECRET-RESPONSE-BODY" >&2\nexit 1\n');
+    const r = runCli(env, ["--watch", "7", "--watch-minutes", "0"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("::error::");
+    expect(r.stdout + r.stderr).not.toContain("SECRET-RESPONSE-BODY");
+  });
+
   test("a list failure exits 1 without echoing the response body", () => {
     const env = setup({ pulls: stuckPulls(), failPulls: true });
     const r = runCli(env);
@@ -440,42 +653,52 @@ test.describe("workflow files", () => {
   const callerText = fs.readFileSync(CALLER, "utf8");
   const caller = parseYaml(callerText);
 
-  test("caller workflow_run names equal the name: of examples/site callers that run on pull_request", () => {
-    const byName = new Map();
-    for (const f of fs.readdirSync(CALLER_DIR)) {
-      const w = parseYaml(fs.readFileSync(path.join(CALLER_DIR, f), "utf8"));
-      byName.set(w.name, w);
-    }
-    const names = caller.on.workflow_run.workflows;
-    expect(names.length).toBeGreaterThanOrEqual(9);
-    for (const n of names) {
-      expect(byName.has(n), `no examples/site caller is named ${n}`).toBe(true);
-      expect(Object.keys(byName.get(n).on), `${n} must trigger on pull_request`).toContain("pull_request");
-    }
-    expect(caller.on.workflow_run.types).toEqual(["completed"]);
+  test("neither workflow declares workflow_run", () => {
+    expect(Object.keys(caller.on)).not.toContain("workflow_run");
+    expect(Object.keys(reusable.on)).not.toContain("workflow_run");
   });
 
-  test("caller has an hourly off-peak schedule, a coerced dry_run dispatch and no cancel-in-progress", () => {
-    const cron = caller.on.schedule[0].cron;
-    expect(cron).toMatch(/^([1-9]|[1-5][0-9]) \* \* \* \*$/);
+  test("caller triggers: pull_request on main, 6-hourly off-peak schedule, coerced dry_run dispatch", () => {
+    expect(Object.keys(caller.on).sort()).toEqual(["pull_request", "schedule", "workflow_dispatch"]);
+    expect(caller.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "labeled"]);
+    expect(caller.on.pull_request.branches).toEqual(["main"]);
+    expect(caller.on.schedule[0].cron).toMatch(/^([1-9]|[1-5][0-9]) \*\/6 \* \* \*$/);
     expect(caller.on.workflow_dispatch.inputs.dry_run.type).toBe("string");
     expect(callerText).toContain("fromJSON(inputs.dry_run)");
-    expect(callerText).not.toContain("cancel-in-progress: true");
     expect(caller["run-name"]).toContain("github.event_name");
   });
 
-  test("caller job if restricts workflow_run to same-repo cms/ failures", () => {
-    const cond = caller.jobs.watchdog.if;
-    expect(cond).toContain("github.event_name != 'workflow_run'");
-    expect(cond).toContain("startsWith(github.event.workflow_run.head_branch, 'cms/')");
-    expect(cond).toContain("head_repository.full_name == github.repository");
-    expect(cond).toContain("event == 'pull_request'");
-    expect(cond).toContain("conclusion != 'success'");
-    expect(cond).toContain("conclusion != 'skipped'");
+  test("caller job if restricts pull_request to same-repository cms/ branches", () => {
+    const cond = caller.jobs["publish-watchdog"].if;
+    expect(cond).toContain("github.event_name != 'pull_request'");
+    expect(cond).toContain("github.event.pull_request.head.repo.full_name == github.repository");
+    expect(cond).toContain("startsWith(github.event.pull_request.head.ref, 'cms/')");
+  });
+
+  test("caller wires mode and pr_number to the reusable and cancels superseded watchers", () => {
+    const w = caller.jobs["publish-watchdog"].with;
+    expect(w.mode).toContain("'watch'");
+    expect(w.mode).toContain("'sweep'");
+    expect(w.pr_number).toContain("github.event.pull_request.number");
+    expect(caller.concurrency["cancel-in-progress"]).toBe(true);
+    expect(caller.concurrency.group).toContain("github.event.pull_request.number");
+    expect(caller.concurrency.group).toContain("'sweep'");
+  });
+
+  test("reusable job is named watch with a timeout above watch_minutes", () => {
+    expect(Object.keys(reusable.jobs)).toEqual(["watch"]);
+    const watchMinutes = Number(reusable.on.workflow_call.inputs.watch_minutes.default);
+    expect(reusable.jobs.watch["timeout-minutes"]).toBeGreaterThan(watchMinutes + 5);
+  });
+
+  test("reusable passes mode and pr_number to the script only through env", () => {
+    const step = reusable.jobs.watch.steps.find((st) => st.name === "Look for stuck publishes");
+    expect(step.env.WATCHDOG_MODE).toBe("${{ inputs.mode }}");
+    expect(step.env.WATCHDOG_PR_NUMBER).toBe("${{ inputs.pr_number }}");
   });
 
   test("caller calls the reusable at a release tag and its permissions cover the reusable's", () => {
-    expect(caller.jobs.watchdog.uses).toMatch(/^Adam-S-Daniel\/cms-platform\/\.github\/workflows\/publish-watchdog\.yml@v\d+\.\d+\.\d+$/);
+    expect(caller.jobs["publish-watchdog"].uses).toMatch(/^Adam-S-Daniel\/cms-platform\/\.github\/workflows\/publish-watchdog\.yml@v\d+\.\d+\.\d+$/);
     expect(caller.permissions).toEqual(reusable.permissions);
   });
 
@@ -487,12 +710,14 @@ test.describe("workflow files", () => {
       issues: "write",
     });
     expect(Object.keys(reusable.on)).toEqual(["workflow_call"]);
-    expect(Object.keys(reusable.jobs)).toHaveLength(1);
-    expect(reusable.jobs.watchdog["timeout-minutes"]).toBeGreaterThan(0);
   });
 
   test("reusable inputs have the documented defaults", () => {
     const i = reusable.on.workflow_call.inputs;
+    expect(i.mode.default).toBe("sweep");
+    expect(i.pr_number.default).toBe("");
+    expect(i.watch_minutes.default).toBe("25");
+    expect(i.poll_seconds.default).toBe("20");
     expect(i.grace_minutes.default).toBe("15");
     expect(i.issue_label.default).toBe("publish-stuck");
     expect(i.work_label.default).toBe("agent-ready");

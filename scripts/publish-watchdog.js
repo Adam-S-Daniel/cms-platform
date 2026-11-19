@@ -9,6 +9,11 @@
  * told anyone; the post sat unpublished for a day. The only net was the daily
  * scheduled-run-health audit, which reports a PR left red for 24 hours.
  *
+ * Two modes. `--watch <n>` (run from a pull_request event) polls ONE PR for up to
+ * 25 minutes and alerts as soon as it is stuck; the default sweep (every 6
+ * hours) catches anything a watcher missed. No workflow_run trigger: it is
+ * privileged and may not hold a write token (contributor trust boundary).
+ *
  * THE FIX: classify each armed `cms/` pull request as ignored / in-flight /
  * stuck, and open ONE GitHub issue per stuck PR (the issue notification is the
  * alert; the work label queues it for the fleet worker). An issue closes by
@@ -22,12 +27,17 @@
  *
  * Usage: node scripts/publish-watchdog.js --repo <owner>/<name> [--dry-run]
  *   [--grace-minutes N] [--issue-label L] [--work-label L] [--now <ISO time>]
+ *   [--watch <pr number> [--watch-minutes N] [--poll-seconds N]] [--self-check-prefix P]
  */
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { hasE2eSlugSignature } = require("../e2e/public-content.js");
 
 const DEFAULT_GRACE_MINUTES = 15;
+const WATCH_GRACE_MINUTES = 3;
+// The watcher's own check run is named "publish-watchdog / watch"; counting it
+// would make the watcher wait on itself forever.
+const DEFAULT_SELF_CHECK_PREFIX = "publish-watchdog";
 const FAILING_CONCLUSIONS = new Set([
   "failure",
   "cancelled",
@@ -80,7 +90,15 @@ function newestPerName(checkRuns) {
   return [...best.values()];
 }
 
-function classifyPublish({ pr, checkRuns, requiredContexts, files, nowMs, graceMinutes } = {}) {
+function classifyPublish({
+  pr,
+  checkRuns,
+  requiredContexts,
+  files,
+  nowMs,
+  graceMinutes,
+  selfCheckPrefix = DEFAULT_SELF_CHECK_PREFIX,
+} = {}) {
   const grace = graceMinutes === undefined || graceMinutes === null ? DEFAULT_GRACE_MINUTES : graceMinutes;
   const ignored = (reason) => ({ state: "ignored", reason, failing: [] });
   const labels = labelNames(pr);
@@ -98,7 +116,10 @@ function classifyPublish({ pr, checkRuns, requiredContexts, files, nowMs, graceM
   }
   if (!isArmed(pr, labels)) return ignored("Nobody has pressed Publish yet.");
 
-  const newest = newestPerName(checkRuns);
+  const others = (checkRuns || []).filter(
+    (r) => !(selfCheckPrefix && String(r.name).startsWith(selfCheckPrefix)),
+  );
+  const newest = newestPerName(others);
   const failing = newest
     .filter(
       (r) =>
@@ -140,7 +161,9 @@ function renderIssue({ repo, pr, verdict }) {
   const prUrl = `https://github.com/${repo}/pull/${pr.number}`;
   const failing = (verdict && verdict.failing) || [];
   const checks =
-    failing.length > 0
+    verdict && verdict.waitedMinutes !== undefined
+      ? `It has not gone live after ${verdict.waitedMinutes} minutes of waiting.`
+      : failing.length > 0
       ? "These checks failed:\n\n" +
         failing.map((f) => `- [${f.name}](${f.url}): ${f.conclusion}`).join("\n")
       : "Every check finished, but the pull request did not merge.";
@@ -161,7 +184,7 @@ function renderIssue({ repo, pr, verdict }) {
   return { title: `Publish stuck: pull request #${pr.number} has not gone live`, body };
 }
 
-function planSweep({ prs, openIssues, nowMs, graceMinutes }) {
+function planSweep({ prs, openIssues, nowMs, graceMinutes, selfCheckPrefix }) {
   const stuck = new Map();
   for (const entry of prs || []) {
     const verdict = classifyPublish({
@@ -171,6 +194,7 @@ function planSweep({ prs, openIssues, nowMs, graceMinutes }) {
       files: entry.files,
       nowMs,
       graceMinutes,
+      selfCheckPrefix,
     });
     if (verdict.state === "stuck") stuck.set(entry.pr.number, { pr: entry.pr, verdict });
   }
@@ -186,6 +210,79 @@ function planSweep({ prs, openIssues, nowMs, graceMinutes }) {
     if (!stuck.has(n)) close.push({ issueNumber, prNumber: n });
   }
   return { open, close };
+}
+
+function markedIssue(openIssues, prNumber) {
+  for (const issue of openIssues || []) {
+    const m = /<!-- publish-watchdog:pr=(\d+) -->/.exec(issue.body || "");
+    if (m && Number(m[1]) === Number(prNumber)) return issue;
+  }
+  return null;
+}
+
+// Poll one pull request until it resolves, is ignored, is stuck, or the watch
+// time runs out. All I/O and time are injected. It sleeps only while the PR is
+// in flight and the deadline has not passed, so it can neither spin nor sleep
+// past the deadline.
+async function watchPublish({
+  prNumber,
+  fetchState,
+  act,
+  sleep,
+  now,
+  watchMinutes = 25,
+  pollSeconds = 20,
+  graceMinutes = WATCH_GRACE_MINUTES,
+  selfCheckPrefix = DEFAULT_SELF_CHECK_PREFIX,
+}) {
+  const deadline = now() + watchMinutes * 60000;
+  let polls = 0;
+  let failures = 0;
+  let last = null;
+  for (;;) {
+    let state = null;
+    polls++;
+    try {
+      state = await fetchState();
+      last = state;
+    } catch (err) {
+      failures++;
+    }
+    if (state) {
+      const { pr, openIssues } = state;
+      const marked = markedIssue(openIssues, prNumber);
+      if (pr.state !== "open") {
+        if (marked) await act.closeIssue(marked.number, prNumber);
+        return { outcome: "resolved", polls, failures };
+      }
+      const verdict = classifyPublish({
+        pr,
+        checkRuns: state.checkRuns,
+        requiredContexts: state.requiredContexts,
+        files: state.files,
+        nowMs: now(),
+        graceMinutes,
+        selfCheckPrefix,
+      });
+      if (verdict.state === "ignored") return { outcome: "ignored", polls, failures };
+      if (verdict.state === "stuck") {
+        if (!marked) await act.openIssue(pr, verdict);
+        return { outcome: "stuck", polls, failures };
+      }
+    }
+    if (now() >= deadline) {
+      if (!last) return { outcome: "unknown", polls, failures };
+      const verdict = {
+        state: "stuck",
+        reason: `It has not gone live after ${watchMinutes} minutes.`,
+        failing: [],
+        waitedMinutes: watchMinutes,
+      };
+      if (!markedIssue(last.openIssues, prNumber)) await act.openIssue(last.pr, verdict);
+      return { outcome: "timeout", polls, failures };
+    }
+    await sleep(pollSeconds * 1000);
+  }
 }
 
 // ── gh-backed plumbing ──────────────────────────────────────────────────────
@@ -232,15 +329,138 @@ function listPages(what, endpointBase, maxPages = 20) {
   return all;
 }
 
-function main(argv) {
+function createIssue(repo, pr, verdict, issueLabel, workLabel) {
+  const { title, body } = renderIssue({ repo, pr, verdict });
+  const labels = [issueLabel];
+  if (workLabel) labels.push(workLabel);
+  let created;
+  try {
+    created = ghApi(`opening an issue for #${pr.number}`, `repos/${repo}/issues`, {
+      method: "POST",
+      body: { title, body, labels },
+    });
+  } catch (err) {
+    if (!workLabel) throw err;
+    created = ghApi(`opening an issue for #${pr.number} (retry)`, `repos/${repo}/issues`, {
+      method: "POST",
+      body: { title, body, labels: [issueLabel] },
+    });
+  }
+  console.log(`  opened issue #${created && created.number} for pull request #${pr.number}`);
+}
+
+function closeWatchdogIssue(repo, issueNumber, prNumber) {
+  ghApi(`commenting on issue #${issueNumber}`, `repos/${repo}/issues/${issueNumber}/comments`, {
+    method: "POST",
+    body: { body: `Pull request #${prNumber} is no longer stuck (it went live or was closed). Closing.` },
+  });
+  ghApi(`closing issue #${issueNumber}`, `repos/${repo}/issues/${issueNumber}`, {
+    method: "PATCH",
+    body: { state: "closed", state_reason: "completed" },
+  });
+}
+
+function listOpenIssues(repo, issueLabel) {
+  return listPages(
+    "listing open issues",
+    `repos/${repo}/issues?state=open&labels=${encodeURIComponent(issueLabel)}`,
+  ).filter((i) => !i.pull_request);
+}
+
+function readRequiredContexts(repo) {
+  try {
+    const meta = ghApi("reading the default branch", `repos/${repo}`);
+    const rules = ghApi(
+      "reading branch rules",
+      `repos/${repo}/rules/branches/${encodeURIComponent(meta.default_branch)}`,
+    );
+    const out = [];
+    for (const rule of rules || []) {
+      if (rule.type !== "required_status_checks") continue;
+      for (const c of (rule.parameters && rule.parameters.required_status_checks) || []) out.push(c.context);
+    }
+    return out;
+  } catch (err) {
+    console.log(`::warning::${err.message}; treating every failing check as required.`);
+    return null;
+  }
+}
+
+async function watchMain({ repo, prNumber, dryRun, issueLabel, workLabel, opts, nowFn }) {
+  let requiredContexts;
+  let haveRequired = false;
+  const fetchState = async () => {
+    const pr = ghApi(`reading pull request #${prNumber}`, `repos/${repo}/pulls/${prNumber}`);
+    if (pr.state !== "open") {
+      return { pr, checkRuns: [], requiredContexts: null, files: null, openIssues: listOpenIssues(repo, issueLabel) };
+    }
+    if (!haveRequired) {
+      requiredContexts = readRequiredContexts(repo);
+      haveRequired = true;
+    }
+    const runs = ghApi(
+      `reading check runs for #${prNumber}`,
+      `repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`,
+    );
+    let files = null;
+    try {
+      const list = ghApi(`reading files for #${prNumber}`, `repos/${repo}/pulls/${prNumber}/files?per_page=100`);
+      files = Array.isArray(list) && list.length < 100 ? list.map((f) => f.filename) : null;
+    } catch (err) {
+      console.log(`::warning::${err.message}`);
+    }
+    return {
+      pr,
+      checkRuns: (runs && runs.check_runs) || [],
+      requiredContexts,
+      files,
+      openIssues: listOpenIssues(repo, issueLabel),
+    };
+  };
+  const act = dryRun
+    ? {
+        openIssue: async (pr) => console.log(`  would open an issue for pull request #${pr.number}`),
+        closeIssue: async (n, p) => console.log(`  would close issue #${n} (pull request #${p})`),
+      }
+    : {
+        openIssue: async (pr, verdict) => createIssue(repo, pr, verdict, issueLabel, workLabel),
+        closeIssue: async (n, p) => closeWatchdogIssue(repo, n, p),
+      };
+  try {
+    const result = await watchPublish({
+      prNumber,
+      fetchState,
+      act,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      now: nowFn,
+      ...opts,
+    });
+    console.log(
+      `Publish watchdog: pull request #${prNumber} outcome ${result.outcome} ` +
+        `(${result.polls} poll(s), ${result.failures} failed).`,
+    );
+    if (result.failures > 0 && result.failures === result.polls) {
+      console.error(`::error::every poll of the watch failed for pull request #${prNumber}.`);
+      return 1;
+    }
+    return 0;
+  } catch (err) {
+    console.error(`::error::${err.message}`);
+    return 1;
+  }
+}
+
+async function main(argv) {
   const repo = flag(argv, "--repo");
   if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
     console.error("::error::publish-watchdog needs --repo <owner>/<name>.");
     return 1;
   }
   const dryRun = argv.includes("--dry-run");
+  const watchRaw = flag(argv, "--watch");
   const graceRaw = flag(argv, "--grace-minutes");
-  const graceMinutes = graceRaw === undefined ? DEFAULT_GRACE_MINUTES : Number(graceRaw);
+  const defaultGrace = watchRaw === undefined ? DEFAULT_GRACE_MINUTES : WATCH_GRACE_MINUTES;
+  const graceMinutes = graceRaw === undefined ? defaultGrace : Number(graceRaw);
   if (!Number.isFinite(graceMinutes) || graceMinutes < 0) {
     console.error("::error::--grace-minutes must be a non-negative number.");
     return 1;
@@ -252,6 +472,35 @@ function main(argv) {
   if (!Number.isFinite(nowMs)) {
     console.error("::error::--now is not a parseable time.");
     return 1;
+  }
+
+  if (watchRaw !== undefined) {
+    const prNumber = Number(watchRaw);
+    const watchMinutes = flag(argv, "--watch-minutes") === undefined ? 25 : Number(flag(argv, "--watch-minutes"));
+    const pollSeconds = flag(argv, "--poll-seconds") === undefined ? 20 : Number(flag(argv, "--poll-seconds"));
+    if (!Number.isInteger(prNumber) || prNumber < 1) {
+      console.error("::error::--watch needs a pull request number.");
+      return 1;
+    }
+    if (!Number.isFinite(watchMinutes) || watchMinutes < 0 || !Number.isFinite(pollSeconds) || pollSeconds < 1) {
+      console.error("::error::--watch-minutes must be >= 0 and --poll-seconds >= 1.");
+      return 1;
+    }
+    const selfCheckPrefix = flag(argv, "--self-check-prefix");
+    return watchMain({
+      repo,
+      prNumber,
+      dryRun,
+      issueLabel,
+      workLabel,
+      opts: {
+        watchMinutes,
+        pollSeconds,
+        graceMinutes,
+        ...(selfCheckPrefix === undefined ? {} : { selfCheckPrefix }),
+      },
+      nowFn: nowRaw === undefined ? () => Date.now() : () => nowMs,
+    });
   }
 
   let candidates;
@@ -330,7 +579,14 @@ function main(argv) {
     return 1;
   }
 
-  const plan = planSweep({ prs: entries, openIssues, nowMs, graceMinutes });
+  const selfRaw = flag(argv, "--self-check-prefix");
+  const plan = planSweep({
+    prs: entries,
+    openIssues,
+    nowMs,
+    graceMinutes,
+    ...(selfRaw === undefined ? {} : { selfCheckPrefix: selfRaw }),
+  });
   console.log(
     `Publish watchdog: ${candidates.length} cms pull request(s), ${armed.length} armed, ` +
       `${plan.open.length} to open, ${plan.close.length} to close.`,
@@ -346,35 +602,8 @@ function main(argv) {
   }
 
   try {
-    for (const { pr, verdict } of plan.open) {
-      const { title, body } = renderIssue({ repo, pr, verdict });
-      const labels = [issueLabel];
-      if (workLabel) labels.push(workLabel);
-      let created;
-      try {
-        created = ghApi(`opening an issue for #${pr.number}`, `repos/${repo}/issues`, {
-          method: "POST",
-          body: { title, body, labels },
-        });
-      } catch (err) {
-        if (!workLabel) throw err;
-        created = ghApi(`opening an issue for #${pr.number} (retry)`, `repos/${repo}/issues`, {
-          method: "POST",
-          body: { title, body, labels: [issueLabel] },
-        });
-      }
-      console.log(`  opened issue #${created && created.number} for pull request #${pr.number}`);
-    }
-    for (const c of plan.close) {
-      ghApi(`commenting on issue #${c.issueNumber}`, `repos/${repo}/issues/${c.issueNumber}/comments`, {
-        method: "POST",
-        body: { body: `Pull request #${c.prNumber} is no longer stuck (it went live or was closed). Closing.` },
-      });
-      ghApi(`closing issue #${c.issueNumber}`, `repos/${repo}/issues/${c.issueNumber}`, {
-        method: "PATCH",
-        body: { state: "closed", state_reason: "completed" },
-      });
-    }
+    for (const { pr, verdict } of plan.open) createIssue(repo, pr, verdict, issueLabel, workLabel);
+    for (const c of plan.close) closeWatchdogIssue(repo, c.issueNumber, c.prNumber);
   } catch (err) {
     console.error(`::error::${err.message}`);
     return 1;
@@ -387,10 +616,11 @@ module.exports = {
   issueMarker,
   renderIssue,
   planSweep,
+  watchPublish,
   isTestFixturePath,
   DEFAULT_GRACE_MINUTES,
 };
 
 if (require.main === module) {
-  process.exit(main(process.argv.slice(2)));
+  main(process.argv.slice(2)).then((code) => process.exit(code));
 }

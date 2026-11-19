@@ -1836,17 +1836,35 @@ minutes** (the issue notification is the alert; `agent-ready` queues it for the
 fleet worker).
 
 `publish-watchdog.yml` (reusable; thin caller `examples/site/.github/workflows/
-publish-watchdog.yml`) runs `scripts/publish-watchdog.js` on a failed run of a
-gating workflow for a same-repository `cms/` PR, and hourly. An open, non-draft
-`cms/` PR that someone armed (auto-merge set, or the `cms/ready` or
-`decap-cms/pending_publish` label) is **stuck** when a newest check run
-(newest per name) failed, was cancelled, timed out, needed action or failed to
-start AND is a required context (any failure counts when the rules cannot be
-read), or when every check finished at least `grace_minutes` (15) ago and it
-still has not merged. Pending checks keep it in flight. An unparseable
-timestamp never makes a PR stuck by itself: an unknown must not raise an alert.
-One issue per PR, found by a hidden marker; it closes with a comment when the PR
-goes live, closes, or is pushed again and is back in flight.
+publish-watchdog.yml`) runs `scripts/publish-watchdog.js` in two modes. **Watch**:
+a `pull_request` event (`opened`, `synchronize`, `reopened`, `labeled`) on a
+same-repository `cms/` branch starts a watcher that polls that one PR every 20
+seconds for up to 25 minutes (`labeled` is the moment Publish arrives). It ends
+at once when the PR is draft, unarmed or a fixture (a later `labeled` event
+starts a new watcher), and closes its issue when the PR merges or closes. **Sweep**:
+every 6 hours (and by hand) it checks every open armed `cms/` PR, catching what a
+watcher missed.
+
+An open, non-draft `cms/` PR that someone armed (auto-merge set, or the
+`cms/ready` or `decap-cms/pending_publish` label) is **stuck** when a newest
+check run (newest per name) failed, was cancelled, timed out, needed action or
+failed to start AND is a required context (any failure counts when the rules
+cannot be read), or when every check finished at least the grace period ago (3
+minutes while watching live, 15 in a sweep) and it still has not merged. A
+watcher still in flight after its 25 minutes also opens an issue ("not gone live
+after 25 minutes"). Check runs named `publish-watchdog...` are dropped first, or
+the watcher would wait on itself. An unparseable timestamp never makes a PR
+stuck by itself: an unknown must not raise an alert. One issue per PR, found by a
+hidden marker; it closes with a comment when the PR goes live, closes, or is
+pushed again and is back in flight.
+
+**Why not `workflow_run`?** It is a privileged trigger, and the contributor
+trust boundary (`e2e/contributor-trust-boundary-rules.js`) forbids a
+write-capable `GITHUB_TOKEN` under one. **Why not a PAT?** GitHub does not
+notify an author of their own issue, and the notification is the alert. **Why
+not cron alone?** These repos' crons lag by hours. **The job is deliberately NOT
+a required check**: it watches the required checks, and requiring it would make a
+publish wait on its own watcher (hence its concurrency group may cancel).
 
 **Test fixtures are ignored** (every changed file under `_e2e/`, named `e2e-*`,
 or an e2e-slug post under `_posts/`; an unreadable or empty file list is not

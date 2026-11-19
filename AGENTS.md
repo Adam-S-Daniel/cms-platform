@@ -440,7 +440,11 @@ TARGET=prod PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
 
 A stuck Decap publish (a required check failed on an armed `cms/` PR, or every
 check finished and it has not merged) opens one `publish-stuck` issue within
-minutes: `publish-watchdog.yml`, `scripts/publish-watchdog.js`, thin caller
-`examples/site/.github/workflows/publish-watchdog.yml`. Rule, what counts as
-stuck, why fixtures are ignored and why the issue omits title and branch:
-`docs/CI-INVARIANTS.md` § "Publish watchdog".
+minutes: a `pull_request` watcher plus a 6-hourly sweep (`publish-watchdog.yml`,
+`scripts/publish-watchdog.js`, thin caller `examples/site/.github/workflows/
+publish-watchdog.yml`). No `workflow_run` (trust boundary: no write token under
+a privileged trigger), no PAT (GitHub does not notify an author of their own
+issue). **Its job `publish-watchdog / watch` is deliberately NOT a required
+check**: it watches the required checks, and requiring it would make a publish
+wait on its own watcher. Rule and rationale: `docs/CI-INVARIANTS.md` § "Publish
+watchdog".
