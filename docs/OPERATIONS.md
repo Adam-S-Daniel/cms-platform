@@ -166,6 +166,38 @@ cd e2e/fixture-site && bundle config set --local path vendor/bundle && bundle in
 precisely what does NOT travel with a clone, so this is a one-time step on every
 fresh checkout, not a fix someone forgot to commit.
 
+## One release at a time, and nothing merges to a site while it validates
+
+`release.yml` records each consumer's `main` commit and each candidate pull
+request's head when validation starts, and refuses to tag if either has moved
+when it ends ("Consumer revisions changed during validation", "Candidate or
+production changed during validation"). Anything that merges to a site's
+`main` in that window fails the release: a platform bump from another release
+still being adopted, a post published from the editor, a loop's fixture pull
+request. On 2026-11-19 two sessions were releasing at once, and v0.1.181 failed
+twice this way ([run 44562667770](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/44562667770),
+[run 44566535234](https://github.com/Adam-S-Daniel/cms-platform/actions/runs/44566535234))
+before one session carried it.
+
+Before dispatching:
+
+- Check no other `release.yml` run is in progress, and that the previous
+  release's bump has merged on BOTH sites
+  (`gh pr list --repo <site> --search "head:platform/bump-"`).
+- Check nothing is in flight on either site
+  (`gh run list --repo <site> --json status --jq '[.[]|select(.status!="completed")]|length'`);
+  a bump's push starts the real-prod loops, which open and merge fixture
+  pull requests for several minutes afterwards.
+- Hold your own site pull requests: convert an armed `cms/` pull request to a
+  draft until the release run finishes, then mark it ready again.
+- If `main` already carries a release PR whose dispatch failed and whose
+  session has gone quiet, say so on that PR before taking it over, so two
+  sessions do not dispatch the same version.
+
+With the content route a publish takes about two minutes, so an author's post
+landing inside a release's validation window is now more likely than it was.
+The release fails safe (no tag); dispatch it again.
+
 ## Pages and feeds revalidate; only assets cache for a day
 
 `deploy-production.yml` uploads the site in two passes, because one
