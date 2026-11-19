@@ -376,7 +376,7 @@ function runLoader({ href, siteUrl, adminOrigin }) {
   };
   vm.createContext(sandbox);
   vm.runInContext(loader.body, sandbox);
-  return inserted;
+  return { inserted, window: sandbox.window };
 }
 
 test.describe("preview.html loads the fallback only where /admin/ is served", () => {
@@ -389,15 +389,38 @@ test.describe("preview.html loads the fallback only where /admin/ is served", ()
     ["admin origin set, preview host", "https://preview-pr7.site.example.com/preview/", admin, true],
     ["admin origin set, local build", "http://localhost:4000/preview/", admin, true],
     ["admin origin is the apex itself", `${site}/preview/`, `${site}/`, true],
+    ["admin origin in capitals, production apex", `${site}/preview/`, "HTTPS://ADMIN.SITE.EXAMPLE.COM/", false],
   ];
   for (const [name, href, adminOrigin, loads] of cases) {
     test(name, () => {
-      const inserted = runLoader({ href, siteUrl: site, adminOrigin });
+      const { inserted, window } = runLoader({ href, siteUrl: site, adminOrigin });
       expect(inserted.length).toBe(loads ? 1 : 0);
       if (loads) {
         expect(inserted[0].src).toBe("/admin/draft-media-fallback.js");
         expect(inserted[0].async).toBe(false);
+      } else {
+        expect(window.CMSDraftMediaReady).toBeUndefined();
       }
     });
   }
+
+  // The inserted script does not block the parser, so the render script's
+  // update() waits on CMSDraftMediaReady; it must settle on load AND error.
+  for (const event of ["onload", "onerror"]) {
+    test(`CMSDraftMediaReady settles and clears on ${event}`, async () => {
+      const { inserted, window } = runLoader({ href: `${site}/preview/`, siteUrl: site, adminOrigin: "" });
+      const ready = window.CMSDraftMediaReady;
+      expect(typeof ready.then).toBe("function");
+      inserted[0][event]();
+      await ready;
+      expect(window.CMSDraftMediaReady).toBeNull();
+    });
+  }
+
+  test("update() waits for the helper before using it", () => {
+    const html = fs.readFileSync(PREVIEW_LAYOUT, "utf8");
+    const body = html.slice(html.indexOf("function update(data)"));
+    expect(body.indexOf("window.CMSDraftMediaReady")).toBeGreaterThan(-1);
+    expect(body.indexOf("window.CMSDraftMediaReady")).toBeLessThan(body.indexOf("window.CMSDraftMedia;"));
+  });
 });

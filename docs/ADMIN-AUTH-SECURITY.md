@@ -781,9 +781,11 @@ wait out the wildcard's TTL, rerun step 3, and delete the placeholder after.
 **Rollback**: put the apex back in `AllowedOrigins` and deploy the proxy, then
 remove `ADMIN_DOMAIN` and rerun step 3 (the admin distribution, certificate,
 record and both functions go; the production certificate is untouched). The
-redirects are 302s, so no browser keeps them. `cms.admin_origin` can stay: it
-is inert while the editor is served from the apex. Editors sign in again on the
-apex.
+redirects are 302s, so no browser keeps them. Also remove `cms.admin_origin`
+from `_config.yml`: the editor ignores it while served from the apex, but the
+public `/preview/` page reads it at build time and skips its draft-image helper
+on the apex while it is set (#1078), so Live Preview on the apex would show a
+broken image for an unpublished upload. Editors sign in again on the apex.
 
 ## Security headers
 

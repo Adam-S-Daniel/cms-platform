@@ -196,6 +196,15 @@ layout: default
     var s = document.createElement("script");
     s.src = me.getAttribute("data-src");
     s.async = false;
+    // An inserted script does not block the parser, so the render script
+    // below can run first; update() waits on this until the helper has
+    // loaded (or failed), then finds window.CMSDraftMedia as before.
+    window.CMSDraftMediaReady = new Promise(function (resolve) {
+      s.onload = s.onerror = function () {
+        window.CMSDraftMediaReady = null;
+        resolve();
+      };
+    });
     me.parentNode.insertBefore(s, me.nextSibling);
   })();
 </script>
@@ -410,6 +419,11 @@ layout: default
   // then gives an image that already failed (the featured image keeps its
   // element and src across saves) one attempt with the branch now known.
   function update(data) {
+    var pending = window.CMSDraftMediaReady;
+    if (pending && typeof pending.then === "function") {
+      pending.then(function () { update(data); });
+      return;
+    }
     var media = window.CMSDraftMedia;
     if (media && typeof media.setEntry === "function") {
       media.setEntry({ collection: data.collection, slug: data.slug });
