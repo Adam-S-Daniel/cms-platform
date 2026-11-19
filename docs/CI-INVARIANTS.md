@@ -1631,7 +1631,7 @@ absent from `examples/site/` as EXTRA on a required check. So it is a platform
 seam: the `site-verify.yml` reusable plus a dictated thin caller of the same
 name, which `platform-bump` seeds into both consumers on the next bump (#315).
 
-Four decisions in it that are not obvious from the YAML:
+Five decisions in it that are not obvious from the YAML:
 
 - **Convention, not configuration.** No inputs, no secrets. If the caller's
   tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
@@ -1643,6 +1643,21 @@ Four decisions in it that are not obvious from the YAML:
   the verifier or self-tests exist; absent self-tests produce a notice and
   succeed. Both consumers have verifiers, and adamdaniel.ai has self-tests.
   Generalizing to a non-Ruby verifier waits for a second case.
+- **A content-only pull request skips the SELF-TESTS, and only those.** The
+  self-tests prove the verifier still tells good edits from real defects by
+  rebuilding scratch copies of the site; a post cannot change the verifier,
+  a layout or the theme. On adamdaniel.ai they were over three of the job's
+  seven minutes on every publish. The build, the verifier and the escaping
+  lint always run: they are the gate a content pull request has in place of
+  the browser matrix (`CONTENT-PUBLISH-LATENCY.md` § What shipped). The job
+  fetches `e2e/content-route.js`, the modules it requires and the composite
+  in its sparse checkout; `e2e/site-verify.test.js` holds that list and the
+  one `if:`. The verifier step sets `SITE_VERIFY_SELF_TESTS_HANDLED=true`, so
+  a verifier whose default entrypoint also runs its self-tests for a bare
+  local run can leave them alone here instead of running them a second time
+  (adamdaniel.ai's does once
+  [adamdaniel.ai PR 5008](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/5008)
+  is merged; until then it ignores the variable and nothing is saved there).
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through

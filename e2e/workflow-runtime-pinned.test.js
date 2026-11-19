@@ -293,6 +293,7 @@ test("the node-needing composites in this repo are discovered", () => {
   expect([...nodeActions].sort()).toEqual([
     "await-prod-deploy",
     "cms-recursion-gate",
+    "content-route",
     "install-playwright-browsers",
     "post-failure-comment",
   ]);
