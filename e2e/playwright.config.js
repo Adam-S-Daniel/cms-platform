@@ -744,6 +744,10 @@ const PLATFORM_META_SPECS = [
   // 26.04 from 2026-10-19). Reads the PLATFORM's own workflow and composite
   // action definitions — a consumer has neither.
   "workflow-runtime-pinned.test.js",
+  // await-prod-deploy follows redirects when it reads prod commit.json (a site
+  // with its own admin host 302s <apex>/admin/*). Reads the PLATFORM's own
+  // composite action definition — a consumer has none.
+  "await-prod-deploy-follows-redirects.test.js",
   // #145 — reads the canonical examples/site thin-caller DEFINITIONS + the
   // platform's own self-dependabot-auto-merge.yml / self-secrets-scan.yml to
   // lock the base-retarget `edited` trigger + caller-job gate. Platform-

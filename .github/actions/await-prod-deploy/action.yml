@@ -186,7 +186,7 @@ runs:
         rel=""
         end=$(( $(date +%s) + AD_REFLECT_TIMEOUT_S ))
         while [ "$(date +%s)" -lt "$end" ]; do
-          live="$(curl -fsS --max-time 15 "$AD_COMMIT_URL" 2>/dev/null | jget sha || true)"
+          live="$(curl -fsSL --max-time 15 "$AD_COMMIT_URL" 2>/dev/null | jget sha || true)"
           if [ "$live" = "$AD_SHA" ]; then
             echo "$AD_COMMIT_URL now serves $AD_SHA — prod is live with the merge; proceeding."
             echo "::endgroup::"; exit 0
