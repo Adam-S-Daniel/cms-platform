@@ -45,7 +45,8 @@ is a stack parameter — nothing is hardcoded to a specific domain.
   (`HSTS_MAX_AGE_SECONDS`, default one year) and `HstsScope` (`HSTS_SCOPE`,
   default `this-host-only`) tune them; the rollout runbook is in
   `docs/ADMIN-AUTH-SECURITY.md`. An account holds at most 20 custom response
-  headers policies, two per site.
+  headers policies, four per site (baseline, admin, tool apps, and the
+  preview's `regression.json` CORS policy).
 
 ## Deploying
 

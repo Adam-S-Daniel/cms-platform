@@ -152,11 +152,13 @@ case "$*" in
     esac ;;
   "cloudformation describe-stacks "*"ParameterKey=='PublicCspConnectSrc'"*)
     case "\${STUB_DEPLOYED_CONNECT_SRC-}" in
+      missing-stack) echo "An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id example does not exist" >&2; exit 254 ;;
       denied) echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
       *) echo "\${STUB_DEPLOYED_CONNECT_SRC-}" ;;
     esac ;;
   "cloudformation describe-stacks "*"ParameterKey=='ToolAppsCsp'"*)
     case "\${STUB_DEPLOYED_TOOL_APPS_CSP-}" in
+      missing-stack) echo "An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id example does not exist" >&2; exit 254 ;;
       denied) echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
       *) echo "\${STUB_DEPLOYED_TOOL_APPS_CSP-}" ;;
     esac ;;
@@ -884,3 +886,40 @@ for (const [key, stubVar] of [
   });
 }
 
+// A first deploy has no stack to read: the free-text values default to empty
+// and the deploy goes ahead. Making "does not exist" fatal for them would
+// break every new site's bootstrap.
+test("a stack that does not exist yet: the free-text parameters default to empty", () => {
+  const r = runDeploy({
+    changes: SAFE_CHANGES,
+    ALLOW_STACK_CREATE: "1",
+    STUB_DEPLOYED_CSP: "missing-stack",
+    STUB_DEPLOYED_PUBLIC_CSP: "missing-stack",
+    STUB_DEPLOYED_CONNECT_SRC: "missing-stack",
+    STUB_DEPLOYED_TOOL_APPS_CSP: "missing-stack",
+  });
+  expect(sent(r, "PublicCspConnectSrc")).toEqual(["PublicCspConnectSrc="]);
+  expect(sent(r, "ToolAppsCsp")).toEqual(["ToolAppsCsp="]);
+  expect(sent(r, "PublicCspMode")).toEqual(["PublicCspMode=report-only"]);
+});
+
+for (const [bad, message] of [
+  ["default-src 'self'; frame-ancestors *", "TOOL_APPS_CSP may not name frame-ancestors"],
+  ["default-src 'self', frame-src *", "TOOL_APPS_CSP may not contain"],
+  ['default-src "self"', "TOOL_APPS_CSP may not contain"],
+  ["default-src 'self'\nX-Injected: 1", "TOOL_APPS_CSP may not contain"],
+]) {
+  test(`TOOL_APPS_CSP=${JSON.stringify(bad)}: refused before any aws call`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, TOOL_APPS_CSP: bad });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(message);
+    expect(r.calls).toEqual([]);
+  });
+}
+
+test("PUBLIC_CSP_CONNECT_SRC with a line break: refused before any aws call", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, PUBLIC_CSP_CONNECT_SRC: "https://a.example\nX-Injected: 1" });
+  expect(r.status).not.toBe(0);
+  expect(r.stderr).toContain("PUBLIC_CSP_CONNECT_SRC may not contain");
+  expect(r.calls).toEqual([]);
+});

@@ -170,7 +170,7 @@ Parameters:
   PublicCspConnectSrc:
     Type: String
     Default: ""
-    AllowedPattern: "^[^;,\"]*$"
+    AllowedPattern: "^[^;,\"\\r\\n]*$"
     Description: >
       Extra connect-src sources for the public pages, space-separated, for a
       site that reports to a service from the browser. A site with CloudWatch
@@ -182,10 +182,12 @@ Parameters:
   ToolAppsCsp:
     Type: String
     Default: ""
-    AllowedPattern: "^[^\"]*$"
+    AllowedPattern: "^(?!.*frame-ancestors)[^,\"\\r\\n]*$"
     Description: >
       The whole Content-Security-Policy for /assets/tools/* (a site's embedded
-      tool apps), without frame-ancestors, which is always added. Empty (the
+      tool apps), without frame-ancestors, which is always added and may not
+      be named here (the first frame-ancestors in a policy wins, and a comma
+      starts a second policy, so either would let a site switch it off). Empty (the
       default) gives the apps the public policy. A site whose app loads from
       another host on purpose writes the policy that names it; a post or page
       is never served from this path, so nothing here widens theirs.
@@ -625,7 +627,7 @@ Resources:
               - PublicCspEnforced
               - !If
                 - HasToolAppsCsp
-                - !Sub "${ToolAppsCsp}; frame-ancestors 'self'"
+                - !Sub "frame-ancestors 'self'; ${ToolAppsCsp}"
                 - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com ${PublicCspConnectSrc}; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'"
               - "frame-ancestors 'self'"
             Override: true

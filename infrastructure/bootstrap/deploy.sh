@@ -127,11 +127,17 @@ case "$PUBLIC_CSP_MODE" in
 esac
 # The template's AllowedPattern refuses these too, but only after a change set
 # is created; say it here, before any AWS call.
-if [[ "${PUBLIC_CSP_CONNECT_SRC-}" == *[\;,\"]* ]]; then
-  error "PUBLIC_CSP_CONNECT_SRC may not contain ';', ',' or '\"' (it is a list of connect-src sources, not a policy); nothing was deployed."
+if [[ "${PUBLIC_CSP_CONNECT_SRC-}" == *[\;,\"$'\r\n']* ]]; then
+  error "PUBLIC_CSP_CONNECT_SRC may not contain ';', ',', '\"' or a line break (it is a list of connect-src sources, not a policy); nothing was deployed."
 fi
-if [[ "${TOOL_APPS_CSP-}" == *\"* ]]; then
-  error "TOOL_APPS_CSP may not contain '\"'; nothing was deployed."
+# frame-ancestors is always added for the tool apps. The first one in a
+# policy wins and a comma starts a second policy, so a value naming either
+# could switch it off.
+if [[ "${TOOL_APPS_CSP-}" == *[,\"$'\r\n']* ]]; then
+  error "TOOL_APPS_CSP may not contain ',', '\"' or a line break; nothing was deployed."
+fi
+if [[ "${TOOL_APPS_CSP-}" == *frame-ancestors* ]]; then
+  error "TOOL_APPS_CSP may not name frame-ancestors (it is always added as 'self'); nothing was deployed."
 fi
 
 # ── Resolve the bootstrap stack name (before any aws call) ─────────────────
@@ -270,7 +276,7 @@ if [[ -n "${PUBLIC_CSP_CONNECT_SRC+set}" ]]; then
 else
   PUBLIC_CSP_CONNECT_SRC="$(deployed_parameter PublicCspConnectSrc)" \
     || error "Could not read the deployed PublicCspConnectSrc of stack ${BOOTSTRAP_STACK_NAME}, and guessing could drop a site's reporting endpoints; nothing was deployed. Check the AWS session, or set PUBLIC_CSP_CONNECT_SRC explicitly (empty for none)."
-  info "Public CSP extra connect-src: kept from deployed stack"
+  info "Public CSP extra connect-src: PUBLIC_CSP_CONNECT_SRC is unset, so the deployed stack's value is kept (none when there is no stack)"
 fi
 
 if [[ -n "${TOOL_APPS_CSP+set}" ]]; then
@@ -278,7 +284,7 @@ if [[ -n "${TOOL_APPS_CSP+set}" ]]; then
 else
   TOOL_APPS_CSP="$(deployed_parameter ToolAppsCsp)" \
     || error "Could not read the deployed ToolAppsCsp of stack ${BOOTSTRAP_STACK_NAME}, and guessing could replace a site's tool apps policy; nothing was deployed. Check the AWS session, or set TOOL_APPS_CSP explicitly (empty for the public policy)."
-  info "Tool apps CSP: kept from deployed stack"
+  info "Tool apps CSP: TOOL_APPS_CSP is unset, so the deployed stack's value is kept (the public policy when there is no stack)"
 fi
 
 # ── Auto-detect Route53 hosted zone if not specified ───────────────────────

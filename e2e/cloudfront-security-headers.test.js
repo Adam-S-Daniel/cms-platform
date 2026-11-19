@@ -238,9 +238,8 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
       "referrer-policy": "strict-origin-when-cross-origin",
       "x-frame-options": "SAMEORIGIN",
       "content-security-policy": "frame-ancestors 'self'",
-      "content-security-policy-report-only": h["content-security-policy-report-only"],
+      "content-security-policy-report-only": expect.stringMatching(/^default-src 'self'; /),
     });
-    expect(h["content-security-policy-report-only"], "the public policy is reported by default").toBeTruthy();
   });
 
   test("HstsScope widens HSTS only when asked", () => {
@@ -374,6 +373,33 @@ test.describe("the public Content-Security-Policy (cms-platform#1067)", () => {
     expect(connect.test("https://example.net, default-src *")).toBe(false);
   });
 
+  test("ToolAppsCsp cannot switch off the framing rule", () => {
+    const tools = new RegExp(template.Parameters.ToolAppsCsp.AllowedPattern);
+    expect(tools.test("default-src 'self'; connect-src 'self' https://raw.githubusercontent.com")).toBe(true);
+    expect(tools.test("")).toBe(true);
+    // The first frame-ancestors in a policy wins; a comma starts a second
+    // policy; a line break would end the header.
+    expect(tools.test("default-src 'self'; frame-ancestors *")).toBe(false);
+    expect(tools.test("default-src 'self', frame-src *")).toBe(false);
+    expect(tools.test("default-src 'self'\nX-Injected: 1")).toBe(false);
+    expect(tools.test('default-src "self"')).toBe(false);
+    expect(new RegExp(template.Parameters.PublicCspConnectSrc.AllowedPattern).test("https://a.example\r\nX: 1")).toBe(
+      false,
+    );
+  });
+
+  test("the policy fits CloudFront's limit with a site's real parameters too", () => {
+    const overrides = {
+      PublicCspMode: "enforce",
+      PublicCspConnectSrc: RUM,
+      ToolAppsCsp:
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://raw.githubusercontent.com; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'",
+    };
+    for (const h of [baseline(overrides), toolApps(overrides)]) {
+      expect(h["content-security-policy"].length).toBeLessThanOrEqual(1783);
+    }
+  });
+
   test("report-only: frame-ancestors enforced, the full policy only reported", () => {
     const h = baseline();
     expect(h["content-security-policy"]).toBe("frame-ancestors 'self'");
@@ -464,7 +490,9 @@ test.describe("the public Content-Security-Policy (cms-platform#1067)", () => {
         expect(tools[name], name).toBe(base[name]);
       }
       if (mode === "enforce") {
-        expect(tools["content-security-policy"]).toBe(`${own}; frame-ancestors 'self'`);
+        // frame-ancestors comes FIRST: the first one in a policy wins, so a
+        // site's own value after it could not switch the framing rule off.
+        expect(tools["content-security-policy"]).toBe(`frame-ancestors 'self'; ${own}`);
         expect(tools["content-security-policy-report-only"]).toBeUndefined();
       } else {
         expect(tools["content-security-policy"]).toBe("frame-ancestors 'self'");

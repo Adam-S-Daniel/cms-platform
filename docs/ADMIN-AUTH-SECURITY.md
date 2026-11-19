@@ -967,7 +967,7 @@ at publish time, where the author can still act on it.
 |---|---|
 | `PublicCspMode` (`PUBLIC_CSP_MODE`) | `report-only` (default) or `enforce`. Unset keeps the deployed stack's mode, exactly like `AdminCspMode`. |
 | `PublicCspConnectSrc` (`PUBLIC_CSP_CONNECT_SRC`) | Extra `connect-src` sources, space-separated. A site with CloudWatch RUM lists `https://dataplane.rum.<region>.amazonaws.com https://cognito-identity.<region>.amazonaws.com`. |
-| `ToolAppsCsp` (`TOOL_APPS_CSP`) | The whole policy for `/assets/tools/*`, a site's embedded tool apps. Empty gives them the public policy. |
+| `ToolAppsCsp` (`TOOL_APPS_CSP`) | The whole policy for `/assets/tools/*`, a site's embedded tool apps. Empty gives them the public policy. It may not contain a comma or name `frame-ancestors`, which is always sent first as `'self'`. |
 
 The two free-text values are sent when the variable is SET, even to the empty
 string, and kept from the deployed stack when it is UNSET, so a redeploy that
@@ -1006,8 +1006,9 @@ updated, and the first update only reports.
 1. Add the site's `PUBLIC_CSP_CONNECT_SRC` and `TOOL_APPS_CSP` to
    `infrastructure/site-params.env`, then
    `bash infrastructure/bootstrap/deploy.sh`. Read the change set as in the
-   runbook above: one new response headers policy, two modified, and a new
-   `/assets/tools/*` behavior on each distribution. Nothing removed.
+   runbook above: Add the tool apps response headers policy; Modify the
+   baseline policy and both distributions (each gains an `/assets/tools/*`
+   behavior). Nothing removed or replaced.
 2. Confirm with GET that a public page now sends
    `Content-Security-Policy-Report-Only` and still sends
    `Content-Security-Policy: frame-ancestors 'self'`.
