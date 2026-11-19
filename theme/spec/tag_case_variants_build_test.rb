@@ -21,6 +21,7 @@ require_relative '../lib/cms-platform-theme/auto_tag_pages'
 require_relative '../lib/cms-platform-theme/tag_feeds'
 require_relative '../lib/cms-platform-theme/cachebust_filter'
 require_relative '../lib/cms-platform-theme/rel_me_filter'
+require_relative '../lib/cms-platform-theme/listing_excerpt'
 
 # jekyll-seo-tag is unrelated to tag grouping and is not a test dependency.
 class TagCaseSeoStandIn < Liquid::Tag

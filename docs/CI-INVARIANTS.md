@@ -1736,6 +1736,60 @@ Two decisions that are not obvious from the code:
   own `.liquid-escape-allowlist.txt` (`<path> | <markup> | <reason>`), never a
   filter that only looks like an encoder. A stale entry fails the run.
 
+## An excerpt in a listing prints through `listing_excerpt` (#1067)
+
+A listing (the theme's tag archive, a site's home page and blog index) prints
+many posts' excerpts into one page, so an excerpt is one post's content on a
+page that is not that post's. Printed raw, it let a single post break or run
+code on every listing: the editor's plain-text Excerpt field with a script or
+style tag merely mentioned in it left the home page with 1 post row of 7 and
+no footer, and a body that opened with a script, a style block or an embed put
+that on every listing page. The build, the site verifier and the four parity
+specs all stayed green.
+
+`{{ post | listing_excerpt }}` (`theme/lib/cms-platform-theme/listing_excerpt.rb`)
+is the one way to print it:
+
+- **A typed excerpt is text.** A `:site, :post_read` hook marks a document
+  whose front matter set `excerpt:` with `excerpt_typed: true`, and the filter
+  HTML-escapes it.
+- **An excerpt cut from the body is reduced to an allowlist by the Sanitize
+  gem.** Sanitizing HTML is a library's job, never code written here (the
+  owner's rule above), so the filter holds only the allowlist as Sanitize
+  configuration: paragraphs, block quotes, emphasis, inline code, and
+  links and images with an http, https, mailto or relative address. Sanitize
+  parses with Nokogiri's HTML5 parser, the algorithm a browser uses, so what
+  it judges is what the browser builds. The theme gemspec declares
+  `sanitize` AND `nokogiri`, each pinned to one exact version, so every
+  consumer gets both from the platform and locks the identical version;
+  `platform-bump`'s conservative relock adds them. A site must not declare
+  either in its own Gemfile, and a version moves only by changing the gemspec
+  (`theme/spec/gemspec_pins_test.rb`).
+
+The filter takes the POST, not `post.excerpt`: both kinds are strings by the
+time Liquid sees them. The wrapper stays `<p class="post-excerpt">` on purpose;
+changing it would restyle every existing listing. A site that prints excerpts
+in its own templates (adamdaniel.ai's `index.html` and `blog/index.html`)
+switches to the filter in the same pull request that bumps it to a release
+carrying it, and narrows its `.liquid-escape-allowlist.txt` entries to match.
+Locked by `theme/spec/listing_excerpt_test.rb` (the rule, and a real build of
+the tag archive with hostile posts).
+
+The post's OWN page is contained by CSS instead, because an author's HTML is a
+feature there: `.post-content` and `.page-content` clear their own floats and
+cap their children and replaced media at the column width
+(`e2e/theme-body-containment-css.test.js`). What neither stops, by design: a
+post's own `<style>`, script or fixed-position element on its own page.
+
+**A site with its own templates or stylesheet gets neither for free.** The
+filter ships in the gem, so it is available everywhere, but only a template
+that calls it is protected: the escaping lint refuses a raw `{{ post.excerpt }}`
+on any site unless that site allowlists it, which is the moment to use the
+filter instead. The containment CSS lives in the theme's `main.css`; a site
+that serves its own stylesheet (jodidaniel.com) must carry the same three
+rules for any post or page body it renders. jodidaniel.com has no posts
+today (`cms.base_collections: []`); if posts are added there, both apply.
+
 ## JavaScript HTML sinks take escaped values only: `eslint.html-sinks.config.mjs` (#982)
 
 The same rule for JavaScript that writes HTML. `eslint-plugin-no-unsanitized`
