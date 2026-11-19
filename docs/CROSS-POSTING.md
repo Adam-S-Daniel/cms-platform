@@ -110,6 +110,16 @@ platform uses — so excluding those paths in the caller's trigger isn't
 required for correctness; it just saves the run entirely rather than paying
 for a detect-and-skip.
 
+## Nothing posts until the live page passes (#1070)
+
+On a push, after the deploy wait, the job waits up to 25 minutes for this
+commit's `page-frame-live.yml` run and posts nothing unless it succeeded: a
+post whose page frame is broken on the live site is never announced. A failed
+check, a missing `page-frame-live.yml` or no verdict in time fails this run;
+re-run it (or dispatch it with `post_path`) once the page is fixed. A
+`workflow_dispatch` backfill does not wait. → `docs/PUBLISHING-UX.md`, "The
+page frame is checked before and after publish".
+
 ## Dedupe / idempotency
 
 Before posting, `post-mastodon` resolves the account (`verify_credentials`)

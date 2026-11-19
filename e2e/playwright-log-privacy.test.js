@@ -21,6 +21,7 @@ const RUNS = new Map([
   ["cms-publish-loop-preview.yml", "preview-loop"],
   ["cms-publish-loop-prod.yml", "prod-mutate"],
   ["parity-preview.yml", "parity-preview"],
+  ["page-frame-live.yml", "page-frame-live"],
   ["cms-media-roundtrip.yml", "media-roundtrip"],
   ["visual-regression.yml", "visual-regression"],
   ["self-fixture-e2e.yml", ["fixture-e2e", "decap-caret"]],

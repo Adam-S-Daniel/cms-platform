@@ -282,8 +282,21 @@ jobs:
           # opt-out (cap.keepsBaseCollection) reads the right config.
           SITE_ROOT: ${{ github.workspace }}
           PW_SPECS: ${{ steps.select.outputs.specs }}
+          # e2e/page-frame.spec.js (#1070): compare each listing's row count with
+          # production's. The changed-file list below names the posts to open.
+          PAGE_FRAME_REFERENCE_URL: https://${{ inputs.apex }}
+          BASE_REF: ${{ inputs.base_ref }}
         run: |
           set -o pipefail
+          # The posts this pull request changed, for e2e/page-frame.spec.js. The
+          # select step above already proved the merge base, so this diff is
+          # the one the selector used. Should it fail anyway, check every post
+          # rather than guess which one changed.
+          if changed=$(git -C "$GITHUB_WORKSPACE" diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null); then
+            export PAGE_FRAME_CHANGED="$changed"
+          else
+            export PAGE_FRAME_ALL=1
+          fi
           # The @parity specs span the public lane (chromium-desktop-1080)
           # and the admin lane (chromium-desktop-3k); run both. Playwright
           # handles per-spec project gating.

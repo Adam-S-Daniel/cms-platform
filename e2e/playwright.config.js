@@ -35,6 +35,9 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // basenames; the regex below matches them anywhere under the testDir.
 const CONSUMER = !!process.env.SITE_ROOT;
 const PLATFORM_META_SPECS = [
+  // Page-frame alert (#1070): unit tests of scripts/page-frame-alert.js, which
+  // lives only in the platform; runs in self-ci node-unit-lints.
+  "page-frame-alert.test.js",
   // Publish watchdog: unit tests of scripts/publish-watchdog.js and a parse of its
   // two workflow files; platform-internal, runs in self-ci node-unit-lints.
   "publish-watchdog.test.js",

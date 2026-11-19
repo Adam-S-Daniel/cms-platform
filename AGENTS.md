@@ -201,6 +201,16 @@ request's tree, where a committed `node_modules/` wins (`e2e/trusted-yaml.js`).
 Rule: `e2e/content-route.js` (`content-route.test.js`). →
 `docs/CONTENT-PUBLISH-LATENCY.md`.
 
+### A post's page frame is checked before and after publish (#1070)
+
+`e2e/page-frame.spec.js` fails only on a broken frame (header, footer, share
+row, sideways scroll, off-site menu links, console errors), never on what a
+post says. It blocks in `parity-preview.yml` and runs live after publish and
+daily in `page-frame-live.yml`, which opens a `page-broken` issue and an
+unpublish pull request but retracts nothing itself; `cross-post.yml` posts only
+after that run succeeds. → `docs/PUBLISHING-UX.md` § "The page frame is checked
+before and after publish".
+
 ### A required status check nobody publishes blocks forever, silently (#371)
 
 A ruleset requiring `validate-content` where the consumer publishes

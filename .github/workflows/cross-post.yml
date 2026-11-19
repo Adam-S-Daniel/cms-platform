@@ -186,7 +186,9 @@ concurrency:
 jobs:
   cross-post:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # 40 before #1070; the live page-frame wait adds up to 25 minutes, most
+    # of it overlapping the deploy wait above it.
+    timeout-minutes: 60
     steps:
       - name: Checkout site
         # fetch-depth: 0 so github.event.before resolves for the diff below.
@@ -257,6 +259,50 @@ jobs:
         uses: ./.cms-platform/.github/actions/await-prod-deploy
         with:
           prod-url: ${{ inputs.prod_url }}
+
+      # cms-platform#1070: nothing is announced until the post's page has been
+      # looked at live. page-frame-live.yml runs on the same push (its caller's
+      # `paths:` match this one's), waits for the same deploy, and checks the
+      # page frame (header, footer, share row, no sideways scroll). Its run for
+      # this commit must SUCCEED; a failure, a missing workflow or no verdict
+      # within the bound holds every leg. Re-run this workflow, or dispatch it
+      # with post_path, once the page is fixed.
+      - name: Await the live page-frame check
+        if: >-
+          steps.detect.outputs.changed == 'true' && github.event_name == 'push' &&
+          (inputs.mastodon_instance != '' || inputs.substack || inputs.linkedin)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          url="repos/${GITHUB_REPOSITORY}/actions/workflows/page-frame-live.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=5"
+          jq_pick='.workflow_runs[0] // empty | "\(.status) \(.conclusion // "none") \(.html_url)"'
+          for _ in $(seq 1 50); do
+            if out=$(gh api "$url" --jq "$jq_pick" 2>/tmp/page-frame-await.err); then
+              if [ -n "$out" ]; then
+                read -r status conclusion run_url <<<"$out"
+                if [ "$status" = "completed" ]; then
+                  if [ "$conclusion" = "success" ]; then
+                    echo "The live page-frame check passed: ${run_url}"
+                    exit 0
+                  fi
+                  echo "::error title=cross-post held::The live page-frame check concluded ${conclusion} (${run_url}), so nothing is cross-posted. Fix or unpublish the post (see the page-broken issue), then re-run this workflow."
+                  exit 1
+                fi
+                echo "page-frame-live is ${status}: ${run_url}"
+              else
+                echo "No page-frame-live run for ${GITHUB_SHA} yet."
+              fi
+            elif grep -q 'HTTP 404' /tmp/page-frame-await.err; then
+              echo "::error title=cross-post held::This site has no page-frame-live.yml workflow, so no live check can clear the post. Restore the caller (platform-bump seeds it), then re-run this workflow."
+              exit 1
+            else
+              echo "Could not read page-frame-live runs ($(grep -o 'HTTP [0-9]*' /tmp/page-frame-await.err || echo 'no status')); retrying."
+            fi
+            sleep 30
+          done
+          echo "::error title=cross-post held::No verdict from the live page-frame check within 25 minutes, so nothing is cross-posted. Re-run this workflow once it finishes."
+          exit 1
 
       - name: Verify the post URLs are live
         if: >-
