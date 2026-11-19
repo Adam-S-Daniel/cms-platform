@@ -1825,3 +1825,35 @@ failure-summary comment behavior is separate and unchanged. The offline
 `e2e/playwright-log-privacy.test.js` checks parsed workflow structure and runs
 the shell steps with a local `npx` stub, so it belongs in the platform-only
 `PLATFORM_META_SPECS` registry and needs no browser, network, or site secrets.
+
+## Publish watchdog: a stuck publish raises an issue within minutes
+
+On 2026-11-18 a real post's required check failed on adamdaniel.ai PR 5001 and
+nothing alerted anyone; the post sat unpublished for a day, because the only net
+was the daily `scheduled-run-health` audit, which reports a PR left red for 24
+hours. **The rule: a Decap publish that is stuck opens a GitHub issue within
+minutes** (the issue notification is the alert; `agent-ready` queues it for the
+fleet worker).
+
+`publish-watchdog.yml` (reusable; thin caller `examples/site/.github/workflows/
+publish-watchdog.yml`) runs `scripts/publish-watchdog.js` on a failed run of a
+gating workflow for a same-repository `cms/` PR, and hourly. An open, non-draft
+`cms/` PR that someone armed (auto-merge set, or the `cms/ready` or
+`decap-cms/pending_publish` label) is **stuck** when a newest check run
+(newest per name) failed, was cancelled, timed out, needed action or failed to
+start AND is a required context (any failure counts when the rules cannot be
+read), or when every check finished at least `grace_minutes` (15) ago and it
+still has not merged. Pending checks keep it in flight. An unparseable
+timestamp never makes a PR stuck by itself: an unknown must not raise an alert.
+One issue per PR, found by a hidden marker; it closes with a comment when the PR
+goes live, closes, or is pushed again and is back in flight.
+
+**Test fixtures are ignored** (every changed file under `_e2e/`, named `e2e-*`,
+or an e2e-slug post under `_posts/`; an unreadable or empty file list is not
+"all fixtures"), as are `on-hold` and `automated-test` PRs: the e2e loops
+publish canaries all day and most are expected to be abandoned.
+
+**The issue omits the PR title and branch name**: anyone who can push a branch
+chooses them, and an issue notification mails them out. It carries only the
+number, API-built URLs and check names from our own workflows.
+`e2e/publish-watchdog.test.js` locks all of this.

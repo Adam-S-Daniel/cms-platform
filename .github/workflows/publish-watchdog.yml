@@ -1,0 +1,152 @@
+# Publish watchdog (reusable): a stuck CMS publish raises an issue in minutes.
+#
+# THE PROBLEM (adamdaniel.ai PR 5001, 2026-11-18): each Decap Save/Publish is a
+# pull request on a same-repository `cms/...` branch that auto-merges when its
+# required checks pass. A real post's required check failed and nothing told
+# anyone; the post sat unpublished for a day. The only net was the daily
+# scheduled-run-health audit, which reports a PR left red for 24 hours.
+#
+# THE FIX: scripts/publish-watchdog.js looks at every open, armed `cms/` pull
+# request and opens ONE issue per stuck one (a required check failed, or every
+# check finished and it still has not merged after a grace period). The issue
+# notification is the alert; the `agent-ready` work label queues it for the
+# fleet worker, exactly like scheduled-run-health. The issue closes by itself
+# when the pull request goes live or is closed. Test fixtures are ignored. See
+# docs/CI-INVARIANTS.md "Publish watchdog".
+#
+# The script and the helper it requires are sparse-checked-out at the commit
+# this reusable was called at (resolved from the job context, the same way
+# scheduled-run-health.yml does), so the script always matches the workflow.
+name: Publish watchdog (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      # Strings so a thin caller can pass a workflow_dispatch value straight
+      # through with no type coercion.
+      grace_minutes: { type: string, default: "15" }
+      issue_label:   { type: string, default: "publish-stuck" }
+      work_label:    { type: string, default: "agent-ready" }
+      dry_run:       { type: boolean, default: false }
+
+# Reusable-workflow permissions are capped by the CALLER's grant.
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  issues: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          # actionlint types `job` as a STRICT object that does not (yet)
+          # know about job.workflow_ref / job.workflow_sha /
+          # job.workflow_repository / job.workflow_file_path
+          # (rhysd/actionlint#647, open against both the 1.7.7 this repo
+          # pins in self-ci.yml and the latest 1.7.12) — writing
+          # `${{ job.workflow_sha }}` directly fails this repo's REQUIRED
+          # actionlint lane. `${{ toJSON(job) }}` IS fully typed (job itself
+          # is a known context), and the RUNTIME object carries these
+          # properties regardless of what actionlint's declarations know —
+          # GitHub's own contexts reference documents all four. So values
+          # reach this step only through JOB_CONTEXT (env — never
+          # interpolated into `run:`) and are read out with jq.
+          # e2e/scheduled-run-health-self-resolve.test.js locks both halves:
+          # that this step reads toJSON(job), and that no `${{ }}`
+          # expression anywhere in this file reads job.workflow_ directly.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          # Here-strings into jq, never a pipe — a pipe into a command that
+          # can exit early is its own footgun (AGENTS.md's grep -q trap);
+          # jq reads its whole input regardless, but the here-string form
+          # costs nothing and keeps this step consistent with that rule.
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          wref=$(jq -r '.workflow_ref // ""' <<<"$JOB_CONTEXT")
+
+          # GitHub runs `run:` under `bash -e`, so every failure path below is
+          # an explicit `if` + `exit 1` — a bare `[[ ... ]] && ...` as the
+          # last statement of the step would only fail the step on its OWN
+          # false test, not on the condition this is actually policing.
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::the job context carries no usable workflow_repository ('${repo}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the job context carries no usable workflow_sha ('${sha}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if [[ "$wref" != *"@"* ]]; then
+            echo "::error::the job context carries no usable workflow_ref ('${wref}', no '@'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+
+          # job.workflow_ref looks like
+          # "Adam-S-Daniel/cms-platform/.github/workflows/scheduled-run-health.yml@refs/tags/v0.1.108"
+          # (tag call), "...@refs/heads/main" (branch or local ./ call), or
+          # "...@<40-hex sha>" (sha call). Strip the file-path prefix, then
+          # the refs/tags|refs/heads namespace, to land on the bare ref a
+          # caller would actually recognise as its own pin.
+          ref=${wref##*@}
+          ref=${ref#refs/tags/}
+          ref=${ref#refs/heads/}
+          if ! [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::resolved ref '${ref}' (from workflow_ref '${wref}') is not safe to write to GITHUB_OUTPUT — refusing to guess."
+            exit 1
+          fi
+
+          {
+            echo "repository=$repo"
+            echo "sha=$sha"
+            echo "ref=$ref"
+          } >>"$GITHUB_OUTPUT"
+          echo "Platform commit resolved from the job context: ${repo}@${sha} (called at ${ref})"
+      - name: Fetch the watchdog script from the platform
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          sparse-checkout: |
+            scripts/publish-watchdog.js
+            e2e/public-content.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+      - name: Ensure the default issue label exists
+        # The label name is a literal on purpose: e2e/preview-only-label-
+        # description.test.js bans a `run:` step creating a label from a
+        # variable. A caller that overrides `issue_label` creates its own.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WATCHDOG_REPO: ${{ github.repository }}
+          WATCHDOG_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ "$WATCHDOG_DRY_RUN" == "true" ]]; then
+            echo "Dry run: not creating the label."
+            exit 0
+          fi
+          # Idempotent: an existing label exits non-zero and is fine. Whether
+          # the label is really there is settled by the issue write below,
+          # which fails loud, so no error is hidden from the run.
+          gh label create publish-stuck --repo "$WATCHDOG_REPO" \
+            --color B60205 --description "A CMS publish is stuck" >/dev/null 2>&1 || true
+      - name: Look for stuck publishes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WATCHDOG_REPO: ${{ github.repository }}
+          WATCHDOG_GRACE_MINUTES: ${{ inputs.grace_minutes }}
+          WATCHDOG_LABEL: ${{ inputs.issue_label }}
+          WATCHDOG_WORK_LABEL: ${{ inputs.work_label }}
+          WATCHDOG_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--repo "$WATCHDOG_REPO" --grace-minutes "$WATCHDOG_GRACE_MINUTES" --issue-label "$WATCHDOG_LABEL" --work-label "$WATCHDOG_WORK_LABEL")
+          if [[ "$WATCHDOG_DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+          node .cms-platform/scripts/publish-watchdog.js "${args[@]}"

@@ -1,0 +1,60 @@
+name: Publish watchdog
+# Alerts within minutes when a CMS publish (a `cms/` pull request that someone
+# armed with Publish) is stuck: a required check failed, or every check
+# finished and it still has not merged. Opens ONE issue per stuck pull request
+# (the issue notification is the alert; `agent-ready` queues it for the fleet
+# worker); it closes itself when the change goes live. Fires when one of the
+# gating workflows below ends badly on a `cms/` pull request, plus an hourly
+# sweep for the "nothing left to run, yet not merged" case. The platform owns
+# the logic; this thin caller needs no site-specific values.
+run-name: >-
+  ${{ github.event_name == 'workflow_run'
+        && format('check finished — {0}', github.event.workflow_run.name)
+     || github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  workflow_run:
+    workflows:
+      - CMS Editorial Workflow
+      - E2E Tests
+      - Site verify
+      - Parity (preview)
+      - Preview Media Gate
+      - Visual Regression
+      - Secrets scan
+      - Platform prerelease guard
+      - agent-checks
+    types: [completed]
+  schedule:
+    # Hourly at an off-peak minute.
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report findings without opening or closing issues (true/false)'
+        # Declared `string` and fromJSON-coerced below: a typed boolean would
+        # startup-fail the workflow_call handoff (see scheduled-run-health.yml).
+        type: string
+        default: 'false'
+
+# The reusable's permissions are capped by this caller's grant.
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  issues: write
+
+jobs:
+  watchdog:
+    if: >-
+      github.event_name != 'workflow_run'
+      || (github.event.workflow_run.event == 'pull_request'
+          && startsWith(github.event.workflow_run.head_branch, 'cms/')
+          && github.event.workflow_run.head_repository.full_name == github.repository
+          && github.event.workflow_run.conclusion != 'success'
+          && github.event.workflow_run.conclusion != 'skipped')
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog.yml@v0.1.180
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}

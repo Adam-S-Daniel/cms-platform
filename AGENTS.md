@@ -435,3 +435,12 @@ local reds are `self-ci.yml`'s DENY list and anything needing Jekyll:
 TARGET=prod PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
   npx playwright test --project=chromium-light --reporter=line ./*.test.js
 ```
+
+## Publish watchdog
+
+A stuck Decap publish (a required check failed on an armed `cms/` PR, or every
+check finished and it has not merged) opens one `publish-stuck` issue within
+minutes: `publish-watchdog.yml`, `scripts/publish-watchdog.js`, thin caller
+`examples/site/.github/workflows/publish-watchdog.yml`. Rule, what counts as
+stuck, why fixtures are ignored and why the issue omits title and branch:
+`docs/CI-INVARIANTS.md` § "Publish watchdog".
