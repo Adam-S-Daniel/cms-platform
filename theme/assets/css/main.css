@@ -647,8 +647,10 @@ main {
      the body's first and last margins collapsing through it, which moved
      every existing post by 24px. The pseudo-element changes nothing on a
      body with no float.
-   - `max-width: 100%` on the body's direct children and on replaced media at
-     any depth caps a declared width at the column. `max-width` beats `width`,
+   - `max-width: 100%` on the body's direct children, on the children of the
+     editor's HTML Embed wrapper (`.post-embed`, which is where pasted HTML
+     actually lands, one level down), and on replaced media at any depth caps
+     a declared width at the column. `max-width` beats `width`,
      inline or attribute, and an author who really wants wider can still say
      `max-width: none` inline. */
 .post-content::after,
@@ -660,6 +662,8 @@ main {
 
 .post-content > *,
 .page-content > *,
+.post-content .post-embed > *,
+.page-content .post-embed > *,
 .post-content :is(video, svg, embed, object, canvas),
 .page-content :is(video, svg, embed, object, canvas) {
   max-width: 100%;

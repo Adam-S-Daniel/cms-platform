@@ -46,6 +46,15 @@ for (const body of BODIES) {
     expect(decl(rules[0], "max-width")).toBe("100%");
   });
 
+  // The editor's HTML Embed component wraps pasted HTML in
+  // <div class="post-embed">, so a pasted fixed-width box is a GRANDCHILD of
+  // the body: the direct-child rule alone left it 1,624px wide at 390px.
+  test(`${body} caps the children of an HTML embed`, () => {
+    const rules = topLevelRulesWith(`${body} .post-embed > *`);
+    expect(rules, `one top-level "${body} .post-embed > *" rule`).toHaveLength(1);
+    expect(decl(rules[0], "max-width")).toBe("100%");
+  });
+
   test(`${body} caps replaced media at any depth`, () => {
     const selector = `${body} :is(${MEDIA.join(", ")})`;
     const rules = topLevelRulesWith(selector);

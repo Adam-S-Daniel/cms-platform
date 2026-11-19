@@ -31,11 +31,14 @@
 #     a browser uses, so what it judges is what the browser will build. This
 #     file holds only the allowlist, as Sanitize configuration (EXCERPT below).
 #
-# Kept: paragraphs, block quotes, lists, line breaks, emphasis, strong, inline
+# Kept: paragraphs, block quotes, line breaks, emphasis, strong, inline
 # code, links (`href` only: http, https, mailto or a relative address) and
 # images (`src` on http, https or a relative address, plus `alt`). An element
 # that is not on the list is removed and its text kept (<div>, <span>,
-# <details>, a heading). Removed WITH their contents: script, style, iframe,
+# <details>, a heading, a list). Lists are NOT kept on purpose: a listing is
+# itself a list, and an `<li>` in an excerpt closes the listing's own item in
+# a browser (the HTML parser's rule for `li`), so one post's excerpt split
+# into extra rows of the list. Its text stays. Removed WITH their contents: script, style, iframe,
 # object, embed, svg, math, video, audio, canvas, template, noscript, form
 # controls and the head-only elements. Every other attribute goes: `style`,
 # `class`, `id`, `on…`. Comments go.
@@ -55,7 +58,7 @@ module Jekyll
     # The allowlist, in Sanitize's own terms. Anything not named here is not
     # printed. `:relative` is Sanitize's token for an address with no scheme.
     EXCERPT = Sanitize::Config.freeze_config(
-      elements: %w[p blockquote ul ol li br em strong b i code a img],
+      elements: %w[p blockquote br em strong b i code a img],
       attributes: {
         'a' => %w[href],
         'img' => %w[src alt],
@@ -111,6 +114,8 @@ Liquid::Template.register_filter(Jekyll::ListingExcerptFilter)
 
 Jekyll::Hooks.register :site, :post_read do |site|
   site.documents.each do |doc|
-    doc.data['excerpt_typed'] = true if doc.data['excerpt'].is_a?(String)
+    # Always set, never only to true: a post's own `excerpt_typed:` front
+    # matter must not decide how its excerpt is read.
+    doc.data['excerpt_typed'] = doc.data['excerpt'].is_a?(String)
   end
 end
