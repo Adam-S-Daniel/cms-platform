@@ -86,6 +86,8 @@ const isBuild = (s) => /\bjekyll build\b/.test(stepRun(s));
 const isRunVerifier = (s) => stepRun(s).includes(`ruby ${VERIFIER_PATH}`);
 const isRunSelfTests = (s) => s.name === "Run the site's verifier self-tests";
 const ESCAPE_LINT_PATH = "scripts/liquid-escape-lint.rb";
+const ADDRESS_CHECK_PATH = "scripts/destination-conflicts.rb";
+const isAddressCheck = (s) => stepRun(s).includes(`ruby .cms-platform/${ADDRESS_CHECK_PATH} .`);
 const isEscapeLint = (s) => stepRun(s).includes(`ruby .cms-platform/${ESCAPE_LINT_PATH} --all .`);
 const isResolveSelf = (s) => s.id === "self";
 const isFetchPlatform = (s) =>
@@ -207,7 +209,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     }
   });
 
-  test("the work job's steps are checkout → detect → platform fetch → setup-node → route → setup-ruby → self-tests → build → verifier → escape lint", () => {
+  test("the work job's steps are checkout → detect → platform fetch → setup-node → route → setup-ruby → self-tests → build → verifier → address check → escape lint", () => {
     const steps = workSteps();
     const checkout = findStep(steps, (s) => isCheckout(s) && !isFetchPlatform(s), "a checkout of the CALLER's tree");
     // `fetch-depth: 2` is the merge commit plus both parents, which the route
@@ -230,9 +232,14 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     );
     const node = findStep(steps, isSetupNode, "an actions/setup-node step");
     const route = findStep(steps, isRoute, "a step with id `route` using the content-route composite");
-    const order = [checkout, detect, self, fetch, node, route, ruby, selfTests, build, verifier, escapeLint].map(
-      (s) => steps.indexOf(s),
+    const addressCheck = findStep(
+      steps,
+      isAddressCheck,
+      `a \`ruby .cms-platform/${ADDRESS_CHECK_PATH} .\` step`,
     );
+    const order = [
+      checkout, detect, self, fetch, node, route, ruby, selfTests, build, verifier, addressCheck, escapeLint,
+    ].map((s) => steps.indexOf(s));
     expect(order, "and they run in dependency order").toEqual([...order].sort((a, b) => a - b));
 
     // Ruby supports either script independently. The build and verifier need
@@ -251,9 +258,16 @@ test.describe("#377 site-verify — the reusable's contract", () => {
         `step ${JSON.stringify(s.name || s.uses)} must run only when the verifier is present`,
       ).toBe(gated);
     }
-    for (const s of [checkout, detect, self, fetch, node, route, ruby, escapeLint]) {
+    // The address check is a check about the content: it runs on every site,
+    // with or without a verifier, and on the content route too (issue 1061).
+    for (const s of [checkout, detect, self, fetch, node, route, ruby, addressCheck, escapeLint]) {
       expect(s.if, `step ${JSON.stringify(s.name || s.uses)} must be unconditional`).toBeUndefined();
     }
+    expect(addressCheck["continue-on-error"], "a shared address must fail the work job").toBeUndefined();
+    expect(stepRun(addressCheck), "it runs through the site's own bundle").toContain("bundle exec ruby");
+    expect(addressCheck.env, "published and future filtering as the deploy builds it").toEqual({
+      JEKYLL_ENV: "production",
+    });
     // The content route skips the verifier's SELF-TESTS and nothing else: the
     // build, the verifier and the escaping lint are the checks about content.
     expect(
@@ -270,6 +284,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     const sparse = String(fetch.with["sparse-checkout"]).split("\n").map((l) => l.trim()).filter(Boolean);
     for (const needed of [
       ESCAPE_LINT_PATH,
+      ADDRESS_CHECK_PATH,
       // So Node takes the module type from the platform, not from a site
       // package.json that may say `"type": "module"`.
       "package.json",
@@ -282,7 +297,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     ]) {
       expect(sparse, `the platform fetch must include ${needed}`).toContain(needed);
     }
-    expect(steps.length, "no other step: there is nothing else this job should do").toBe(11);
+    expect(steps.length, "no other step: there is nothing else this job should do").toBe(12);
   });
 
   test("the detect script BEHAVES: false + notice when absent, true when present (executed)", () => {

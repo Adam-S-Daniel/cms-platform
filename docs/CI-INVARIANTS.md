@@ -1631,7 +1631,7 @@ absent from `examples/site/` as EXTRA on a required check. So it is a platform
 seam: the `site-verify.yml` reusable plus a dictated thin caller of the same
 name, which `platform-bump` seeds into both consumers on the next bump (#315).
 
-Five decisions in it that are not obvious from the YAML:
+Six decisions in it that are not obvious from the YAML:
 
 - **Convention, not configuration.** No inputs, no secrets. If the caller's
   tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
@@ -1658,6 +1658,16 @@ Five decisions in it that are not obvious from the YAML:
   (adamdaniel.ai's does once
   [adamdaniel.ai PR 5008](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/5008)
   is merged; until then it ignores the variable and nothing is saved there).
+- **No two files may share an address.** After the verifier, the job runs the
+  platform's `scripts/destination-conflicts.rb` through the site's bundle, on
+  every site and every route. Two source files that claim one URL build with
+  only a warning, and one of them is silently not published: a page saved with
+  permalink `/tags/` replaced the tags index, and a second post with an older
+  post's slug took its URL, with every check green (issue 1061). The script
+  groups everything `Site#each_site_file` would write by `destination`, the
+  enumeration Jekyll's own warning uses, and reads the result, not the build
+  log, so `quiet: true` cannot hide it. `theme/spec/destination_conflicts_test.rb`
+  runs it over real site directories.
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through
