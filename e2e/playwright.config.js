@@ -800,6 +800,9 @@ const PLATFORM_META_SPECS = [
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
+  // Pages and feeds revalidate, assets cache: parses the same platform
+  // deploy-production.yml DEFINITION.
+  "deploy-production-document-cache.test.js",
   // The production admin prefix is uploaded no-cache (#663): same reason.
   "deploy-production-admin-cache.test.js",
   // #635 — ASCII, length-capped entry file names: parses the theme/admin
