@@ -121,12 +121,13 @@ jobs:
           ref: ${{ steps.self.outputs.sha }}
           path: .cms-platform
           persist-credentials: false
-          # The route rule is content-route.js plus the two modules it reads
-          # its definitions from, and the composite that gathers its inputs.
+          # The route rule is content-route.js plus the modules it requires,
+          # and the composite that gathers its inputs.
           sparse-checkout: |
             scripts/liquid-escape-lint.rb
             scripts/content-pr-guard.js
             e2e/content-route.js
+            e2e/trusted-yaml.js
             e2e/visual-regression-salient.js
             .github/actions/content-route/action.yml
           sparse-checkout-cone-mode: false
@@ -152,6 +153,8 @@ jobs:
         with:
           # Renders "true"/"false", never branch text.
           from-cms: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'cms/') }}
+          # A commit id, checked against the merge commit's second parent.
+          head-sha: ${{ github.event.pull_request.head.sha }}
 
       # Unconditional: the escaping lint runs on every site, and it parses
       # with the site bundle's `liquid` gem.

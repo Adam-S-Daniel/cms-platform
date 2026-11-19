@@ -272,6 +272,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
       ESCAPE_LINT_PATH,
       "scripts/content-pr-guard.js",
       "e2e/content-route.js",
+      "e2e/trusted-yaml.js",
       "e2e/visual-regression-salient.js",
       ".github/actions/content-route/action.yml",
     ]) {

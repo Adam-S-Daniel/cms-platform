@@ -30,17 +30,49 @@ checks that are about the content. `e2e/content-route.js` decides `content` or
 | Everything else | Unchanged: the content guard, the secrets scan, the preview deploy and its probes, the prerelease guard. |
 
 **`content` is the narrow answer and every doubt is `full`.** The route is
-`content` only when the pull request is a same-repository `cms/` branch and
-every changed path is CMS-managed content by `scripts/content-pr-guard.js`'s
-definition (base collections plus the site's seam) that
-`e2e/visual-regression-salient.js` does not call salient. A `_tools/` entry
-stays `full` (its page embeds an app). A file collection routes `content` only
-when it is edited, never added or deleted, and never when it is the site's
+`content` only when the pull request is a same-repository `cms/` branch, the
+checked-out merge commit is that pull request's, and every changed path is:
+
+- a plain add, edit or delete of a regular file (no symlink, submodule,
+  executable bit or type change);
+- CMS-managed content by `scripts/content-pr-guard.js`'s definition (base
+  collections plus the site's seam), where a seam folder counts only if it is
+  one top-level underscore directory that is not Jekyll machinery;
+- a Markdown entry in a collection folder, or a plain media file in the uploads
+  folder (`pages/home.html`, `uploads/sw.js` and an `.svg` are `full`);
+- not salient to `e2e/visual-regression-salient.js` (a `_tools/` entry stays
+  `full`: its page embeds an app).
+
+A file collection routes `content` only when it is a data file under `_data/`
+that is edited, never added or deleted, and never when it is the site's
 publish gate (`cms.site_gate.path`): taking a site live runs the whole suite
-and keeps its visual review. The seam and `_config.yml` are read from the base
-commit, so a pull request cannot widen its own route. Not a pull request, no
-merge commit, a diff that cannot be computed, a classifier that throws: `full`.
-A wrong `full` costs minutes; nothing may guess toward `content`.
+and keeps its visual review. A seam that points a file collection at
+`_config.yml`, and a gate path not written in normal form, are `full`. The
+seam and `_config.yml` are read from the base commit, so a pull request cannot
+widen its own route. Not a pull request, no merge commit, a diff that cannot
+be computed, a classifier that throws: `full`. A wrong `full` costs minutes;
+nothing may guess toward `content`.
+
+**The classifier does not trust the tree it judges.** It runs from
+`<workspace>/.cms-platform`, and the workspace is the pull request's own
+checkout. A bare `require("yaml")` there walks up into
+`<workspace>/node_modules` first, so a pull request that committed
+`node_modules/yaml` could run its own code inside the classifier and print
+`content` for any change. An independent review of the first version of this
+change reproduced exactly that, and found the same hole already present in
+the visual review classifier. Both now load the parser only from the absolute
+directory the job installed it into, outside the workspace
+(`e2e/trusted-yaml.js`). Keep it that way: a classifier that decides whether
+tests or a review may be skipped requires its own files by relative path and
+nothing by name.
+
+**What the route does not check.** An entry's front matter. A page may set
+`permalink:` or `layout:` to whatever its collection's CMS fields allow, so
+"content cannot change the machinery" is a statement about files, not about
+every URL a page can claim. The site's post-build verifier, which always runs,
+is the guard for what the built site serves. Base collections a site has
+switched off (`cms.base_collections`) still count as content here, as they do
+in `content-pr-guard.js`.
 
 **What a content pull request no longer gets, and what covers it.**
 
@@ -76,9 +108,13 @@ this section once ten real content pull requests have run on the route; use
 the command under "Re-measuring".
 
 **Tests.** `e2e/content-route.test.js`: the rule as a table, the composite
-over a real merge commit with `npm` stubbed, the wiring (every work step of
-`e2e-tests.yml` after the route carries the route condition), and the visual
-review skip. `e2e/site-verify.test.js` holds the verifier's half.
+over a real merge commit with `npm` stubbed and the platform as a real
+directory inside the repo (a symlink would hide the `node_modules` hole), a
+committed `yaml` module that must never run, the wiring (every work step of
+`e2e-tests.yml` after the route carries exactly the route condition), and the
+visual review skip. `e2e/salience-git-paths.test.js` executes the visual
+review step for a data-file edit. `e2e/site-verify.test.js` holds the
+verifier's half.
 
 ## The 2026-10 proposal (historical; shelved 2026-10-02, superseded above)
 

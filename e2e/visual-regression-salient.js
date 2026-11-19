@@ -198,16 +198,13 @@ module.exports = {
   parseNulStatus,
 };
 
-// The YAML parser, or null when it is not installed (the `detect` job
-// installs it only when a tool entry or a `_data/` file changed). Null keeps
-// every review.
-function loadYaml() {
-  try {
-    return require("yaml");
-  } catch {
-    return null;
-  }
-}
+// The YAML parser comes from the directory the `detect` job installed it
+// into (CMS_PLATFORM_YAML_PACKAGE), never from a bare `require("yaml")`: this
+// file runs from `<workspace>/.cms-platform`, and a `node_modules/yaml`
+// committed by the pull request would be found first and could print "false"
+// for any diff (trusted-yaml.js). The job installs it only when a tool entry
+// or a `_data/` file changed. Null keeps every review.
+const { loadTrustedYaml } = require("./trusted-yaml");
 
 // `git show <rev>:<path>` as text, or null. argv, never a shell string: a
 // path may hold any character git allows.
@@ -246,7 +243,7 @@ if (require.main === module) {
       const after = gitShow("HEAD", p);
       return before === null || after === null ? null : { before, after };
     };
-    const YAML = loadYaml();
+    const YAML = loadTrustedYaml();
     // Required here, not at the top: content-route.js requires this module.
     const { SEAM_PATH, CONFIG_PATH, cmsDataFiles } = require("./content-route");
     const cmsFiles = fromCms

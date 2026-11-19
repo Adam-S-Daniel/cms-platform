@@ -195,8 +195,11 @@ running a test, `site-verify` skips only the verifier's self-tests, and a CMS
 edit to a seam file collection skips visual review. **Every doubt routes
 `full`**; the site's publish gate (`cms.site_gate.path`) and `_tools/` always
 do. A spec that reads served content must not judge an author's value: it now
-fails the next bump or candidate, not the publish. Rule: `e2e/content-route.js`
-(`content-route.test.js`). → `docs/CONTENT-PUBLISH-LATENCY.md`.
+fails the next bump or candidate, not the publish. **A classifier that can skip
+tests or a review never does `require("<name>")`**: it runs inside the pull
+request's tree, where a committed `node_modules/` wins (`e2e/trusted-yaml.js`).
+Rule: `e2e/content-route.js` (`content-route.test.js`). →
+`docs/CONTENT-PUBLISH-LATENCY.md`.
 
 ### A required status check nobody publishes blocks forever, silently (#371)
 

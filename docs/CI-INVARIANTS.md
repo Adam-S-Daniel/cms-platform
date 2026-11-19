@@ -1650,11 +1650,14 @@ Five decisions in it that are not obvious from the YAML:
   seven minutes on every publish. The build, the verifier and the escaping
   lint always run: they are the gate a content pull request has in place of
   the browser matrix (`CONTENT-PUBLISH-LATENCY.md` § What shipped). The job
-  fetches `e2e/content-route.js`, the two modules it reads and the composite
+  fetches `e2e/content-route.js`, the modules it requires and the composite
   in its sparse checkout; `e2e/site-verify.test.js` holds that list and the
   one `if:`. The verifier step sets `SITE_VERIFY_SELF_TESTS_HANDLED=true`, so
-  a verifier whose default entrypoint also runs its self-tests
-  (adamdaniel.ai's, for a bare local run) does not run them a second time.
+  a verifier whose default entrypoint also runs its self-tests for a bare
+  local run can leave them alone here instead of running them a second time
+  (adamdaniel.ai's does once
+  [adamdaniel.ai PR 5008](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/5008)
+  is merged; until then it ignores the variable and nothing is saved there).
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through

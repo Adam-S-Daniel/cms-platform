@@ -227,13 +227,15 @@ jobs:
       #
       # Every step from here to the report upload carries the same
       # `steps.route.outputs.route != 'content'` condition;
-      # e2e/content-route-workflows.test.js fails if one is added without it.
+      # e2e/content-route.test.js fails if one is added without it.
       - name: Decide the route
         id: route
         uses: ./.cms-platform/.github/actions/content-route
         with:
           # Renders "true"/"false", never branch text.
           from-cms: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'cms/') }}
+          # A commit id, checked against the merge commit's second parent.
+          head-sha: ${{ github.event.pull_request.head.sha }}
 
       - name: Install harness deps
         if: ${{ steps.route.outputs.route != 'content' }}

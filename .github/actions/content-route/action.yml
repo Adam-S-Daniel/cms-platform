@@ -10,22 +10,30 @@ description: >-
   block a publish (adamdaniel.ai PR 5001). The rule itself is
   `e2e/content-route.js`; this action only gathers its inputs.
 
-  FAIL-SAFE: every path that is not a clean `content` answer outputs `full`,
-  and the step never fails. A wrong `full` costs minutes; a wrong `content`
-  skips tests, so nothing here may guess toward it. Not a pull request, no
+  FAIL-SAFE: every path that is not a clean `content` answer outputs `full`.
+  A wrong `full` costs minutes; a wrong `content` skips tests, so nothing here
+  may guess toward it. If the step itself dies (no temp file, no output file)
+  the job fails, and the steps gated on its output are skipped as on any
+  failed job: red, never a quiet `content`. Not a pull request, no
   second parent on HEAD (not a merge commit), a diff that cannot be computed,
   a classifier that throws or prints anything else: all `full`.
 
   The diff is `HEAD^1` to `HEAD`: on a pull request's merge commit the first
   parent is the base tip, so that is the whole pull request's net change, not
-  the last push. NUL-delimited and `--no-renames`, like every other salience
+  the last push. `HEAD^2` must be the pull request's head commit, or this is
+  not that merge commit and the answer is `full`. The diff is read `--raw`
+  (each record carries its file modes, so a symlink or a submodule is
+  visible), NUL-delimited and `--no-renames`, like every other salience
   reader (e2e/salience-git-paths.test.js). The seam and `_config.yml` are
   read from `HEAD^1`, the base, so a pull request cannot widen its own route.
 
   The caller must have set up Node. `yaml` is installed here only when the
   diff edits a `_data/` file (the one case the rule parses `_config.yml`,
-  for the site's publish gate); if that install fails the rule cannot tell
-  the gate apart and answers `full`.
+  for the site's publish gate), into RUNNER_TEMP, and handed to the rule by
+  absolute path in CMS_PLATFORM_YAML_PACKAGE. The rule never resolves `yaml`
+  by name: the workspace is the pull request's tree, and a `node_modules/yaml`
+  committed there would otherwise be loaded first (e2e/trusted-yaml.js). If
+  the install fails the rule cannot tell the gate apart and answers `full`.
 
 inputs:
   platform-dir:
@@ -36,6 +44,12 @@ inputs:
     description: >-
       "true" only for a pull request from a same-repository `cms/` branch. Pass
       the expression's result, never branch text.
+    required: true
+  head-sha:
+    description: >-
+      The pull request's head commit (`github.event.pull_request.head.sha`).
+      The route is `content` only when the checked-out merge commit's second
+      parent is this commit.
     required: true
 
 outputs:
@@ -51,6 +65,7 @@ runs:
       shell: bash
       env:
         ROUTE_FROM_CMS: ${{ inputs.from-cms }}
+        ROUTE_HEAD_SHA: ${{ inputs.head-sha }}
         PLATFORM_DIR: ${{ inputs.platform-dir }}
       run: |
         set -uo pipefail
@@ -58,23 +73,30 @@ runs:
         reason=""
         changed=$(mktemp)
         trap 'rm -f -- "$changed"' EXIT
+        # Never inherited: only this step may name the parser's directory.
+        unset CMS_PLATFORM_YAML_PACKAGE NODE_PATH
         if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]; then
           reason="not a pull request"
         elif [ "$ROUTE_FROM_CMS" != "true" ]; then
           reason="not a same-repository cms/ branch"
-        elif ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+        elif ! [[ "$ROUTE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          reason="no pull request head commit was given"
+        elif ! second_parent=$(git rev-parse --verify --quiet 'HEAD^2^{commit}' 2> /dev/null); then
           reason="HEAD is not a pull request merge commit with both parents fetched"
-        elif ! git diff --name-status -z --no-renames 'HEAD^1' HEAD > "$changed" 2> /dev/null; then
+        elif [ "$second_parent" != "$ROUTE_HEAD_SHA" ]; then
+          reason="HEAD is not the merge commit of this pull request's head"
+        elif ! git diff --raw -z --no-renames --no-abbrev 'HEAD^1' HEAD > "$changed" 2> /dev/null; then
           reason="the pull request's diff could not be computed"
         else
           needs_yaml=false
-          while IFS= read -r -d '' status && IFS= read -r -d '' f; do
+          while IFS= read -r -d '' meta && IFS= read -r -d '' f; do
             if [[ "$f" == _data/* ]]; then needs_yaml=true; fi
           done < "$changed"
           if [ "$needs_yaml" = true ]; then
+            # Outside the workspace, which is the pull request's own tree.
             yaml_dir="${RUNNER_TEMP:-$(mktemp -d)}/content-route-yaml"
             if npm install --prefix "$yaml_dir" --no-audit --no-fund --ignore-scripts yaml@2.9.1 > /dev/null 2>&1; then
-              export NODE_PATH="$yaml_dir/node_modules"
+              export CMS_PLATFORM_YAML_PACKAGE="$yaml_dir/node_modules/yaml"
             else
               echo "::warning::could not install yaml; a CMS edit to a _data/ file takes the full route"
             fi

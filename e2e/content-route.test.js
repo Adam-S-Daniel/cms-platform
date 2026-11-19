@@ -21,12 +21,35 @@ const path = require("node:path");
 const YAML = require("yaml");
 const { createSandbox } = require("./git-fixture");
 const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
-const { routeChange, siteGatePath, cmsDataFiles } = require("./content-route");
+const { routeChange, siteGatePath, cmsDataFiles, seamFolders, parseNulRaw } = require("./content-route");
 const { isSalientChange } = require("./visual-regression-salient");
+const { YAML_PACKAGE_ENV, loadTrustedYaml } = require("./trusted-yaml");
 
 const ROUTE_CLI = path.join(__dirname, "content-route.js");
+const YAML_PACKAGE = path.dirname(require.resolve("yaml/package.json"));
+// The files the rule needs at run time, as a job has them under `.cms-platform`.
+const PLATFORM_FILES = [
+  "e2e/content-route.js",
+  "e2e/trusted-yaml.js",
+  "e2e/visual-regression-salient.js",
+  "scripts/content-pr-guard.js",
+];
+function copyPlatform(dest) {
+  for (const rel of PLATFORM_FILES) {
+    fs.mkdirSync(path.dirname(path.join(dest, rel)), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, "..", rel), path.join(dest, rel));
+  }
+  return dest;
+}
 const ACTION = path.join(__dirname, "..", ".github", "actions", "content-route", "action.yml");
 const ROUTE_CONDITION = "steps.route.outputs.route != 'content'";
+// What both workflows hand the composite: a boolean that is true only for a
+// same-repository `cms/` pull request, and the pull request's head commit.
+const ROUTE_WITH = {
+  "from-cms":
+    "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'cms/') }}",
+  "head-sha": "${{ github.event.pull_request.head.sha }}",
+};
 
 // jodidaniel.com's shape: folder collections, file collections under
 // `_data/`, and a publish gate that is one of those files.
@@ -54,9 +77,12 @@ const CONFIG_NO_GATE = "title: Example\ncms:\n  branch_prefix: cms/\n";
 
 const CMS = { fromCms: true, seamYamlText: SEAM, configYamlText: CONFIG, YAML };
 const route = (records, opts = CMS) => routeChange(records, opts).route;
-const M = (p) => ({ status: "M", path: p });
-const A = (p) => ({ status: "A", path: p });
-const D = (p) => ({ status: "D", path: p });
+// Records as `git diff --raw` gives them for a plain regular file.
+const NONE = "000000";
+const FILE = "100644";
+const M = (p) => ({ status: "M", path: p, oldMode: FILE, newMode: FILE });
+const A = (p) => ({ status: "A", path: p, oldMode: NONE, newMode: FILE });
+const D = (p) => ({ status: "D", path: p, oldMode: FILE, newMode: NONE });
 
 test.describe("content-route: the rule", () => {
   test("a post, its upload, a page, a tag and a seam folder entry are content, added, edited or deleted", () => {
@@ -128,8 +154,109 @@ test.describe("content-route: the rule", () => {
     expect(route(post, {})).toBe("full");
     expect(route([])).toBe("full");
     expect(route(null)).toBe("full");
-    expect(route([{ status: "M", path: "" }])).toBe("full");
-    expect(route([{ status: "M" }])).toBe("full");
+    expect(route([{ ...M("x"), path: "" }])).toBe("full");
+    expect(route([{ status: "M", oldMode: FILE, newMode: FILE }])).toBe("full");
+    expect(route([null])).toBe("full");
+  });
+
+  test("only a plain add, edit or delete of a REGULAR file is content", () => {
+    const post = "_posts/2026-01-01-x.md";
+    // A record without modes cannot be told apart from a symlink.
+    expect(route([{ status: "M", path: post }])).toBe("full");
+    // A symlink, a submodule, an executable, and a type change (`T`).
+    expect(route([{ status: "A", path: post, oldMode: NONE, newMode: "120000" }])).toBe("full");
+    expect(route([{ status: "A", path: "pages/sub", oldMode: NONE, newMode: "160000" }])).toBe("full");
+    expect(route([{ status: "A", path: post, oldMode: NONE, newMode: "100755" }])).toBe("full");
+    expect(route([{ status: "M", path: post, oldMode: FILE, newMode: "100755" }])).toBe("full");
+    expect(route([{ status: "T", path: post, oldMode: FILE, newMode: "120000" }])).toBe("full");
+    expect(route([{ status: "D", path: post, oldMode: "120000", newMode: NONE }])).toBe("full");
+    // Statuses `--no-renames` should never produce are not trusted either.
+    for (const status of ["R", "C", "U", "X"]) {
+      expect(route([{ status, path: post, oldMode: FILE, newMode: FILE }]), status).toBe("full");
+    }
+    expect(route([M(post)])).toBe("content");
+  });
+
+  test("a content directory is not proof of content: entries are Markdown, uploads are plain media", () => {
+    for (const p of [
+      "pages/home.html",
+      "pages/app.js",
+      "_posts/2026-01-01-x.html",
+      "_posts/_plugin.rb",
+      "_e2e/config.yml",
+      "_expertise/x.liquid",
+      "assets/images/uploads/sw.js",
+      "assets/images/uploads/x.html",
+      "assets/images/uploads/logo.svg",
+      "assets/images/uploads/noextension",
+      "assets/images/uploads/photo.png.html",
+    ]) {
+      expect(route([A(p)]), p).toBe("full");
+    }
+    for (const p of [
+      "pages/about.md",
+      "_posts/2026-01-01-x.markdown",
+      "assets/images/uploads/photo.PNG",
+      "assets/images/uploads/img_2020.jpeg",
+      "assets/images/uploads/paper.pdf",
+      "assets/images/uploads/clip.mp4",
+    ]) {
+      expect(route([A(p)]), p).toBe("content");
+    }
+  });
+
+  test("a seam folder must be one underscore directory that is not machinery", () => {
+    // content-pr-guard reads the seam with a line regex, which also matches a
+    // `folder:` inside a hint. None of these may become content.
+    const seam = `collections:
+  - name: notes
+    folder: _notes
+    hint: |
+      folder: .github
+  - { name: a, folder: assets/css }
+  - { name: b, folder: _layouts }
+  - { name: c, folder: _data }
+  - { name: d, folder: "_plugins" }
+  - { name: e, folder: . }
+`;
+    expect(seamFolders(seam)).toEqual(["_notes/"]);
+    const opts = { ...CMS, seamYamlText: seam };
+    expect(route([A("_notes/x.md")], opts)).toBe("content");
+    for (const p of [".github/workflows/e2e.md", "assets/css/x.md", "_layouts/x.md", "_data/x.md", "_plugins/x.md", "x.md"]) {
+      expect(route([A(p)], opts), p).toBe("full");
+    }
+  });
+
+  test("a file collection outside _data/ is never ordinary content, whatever the seam says", () => {
+    // Pointing a Decap file collection at `_config.yml` is a documented pattern.
+    const seam = `${SEAM}  - name: site_config
+    files:
+      - name: config
+        file: "_config.yml"
+      - name: nav
+        file: "_includes/nav.html"
+      - name: odd
+        file: "_data/../_config.yml"
+`;
+    const opts = { ...CMS, seamYamlText: seam };
+    expect(cmsDataFiles({ seamYamlText: seam, configYamlText: CONFIG, YAML })).toEqual(["_data/about.yml"]);
+    for (const p of ["_config.yml", "_includes/nav.html", "_data/../_config.yml"]) {
+      expect(route([M(p)], opts), p).toBe("full");
+      expect(route([M("_data/about.yml"), M(p)], opts), `about + ${p}`).toBe("full");
+      expect(isSalientChange([M(p)], { fromCms: true, YAML, cmsFiles: cmsDataFiles({ seamYamlText: seam, configYamlText: CONFIG, YAML }) }), p).toBe(true);
+    }
+    expect(route([M("_data/about.yml")], opts)).toBe("content");
+  });
+
+  test("a gate path not written in normal form is 'cannot tell', so nothing is exempt", () => {
+    for (const written of ["./_data/settings.yml", "/_data/settings.yml", "_data//settings.yml", "_data/./settings.yml", "_data/x/../settings.yml", "settings.yml", " _data/settings.yml"]) {
+      const config = `cms:\n  site_gate:\n    path: "${written}"\n`;
+      expect(siteGatePath(config, YAML), written).toEqual({ known: false });
+      expect(cmsDataFiles({ seamYamlText: SEAM, configYamlText: config, YAML }), written).toEqual([]);
+      // The edit that takes the site live, and any other data file with it.
+      expect(route([M("_data/settings.yml")], { ...CMS, configYamlText: config }), written).toBe("full");
+      expect(route([M("_data/about.yml")], { ...CMS, configYamlText: config }), written).toBe("full");
+    }
   });
 
   test("a site with no seam still routes the base collections", () => {
@@ -220,6 +347,7 @@ function actionStep() {
   expect(step.id).toBe("route");
   expect(step.shell).toBe("bash");
   expect(action.outputs.route.value).toBe("${{ steps.route.outputs.route }}");
+  expect(Object.keys(step.env).sort()).toEqual(["PLATFORM_DIR", "ROUTE_FROM_CMS", "ROUTE_HEAD_SHA"]);
   return step;
 }
 
@@ -227,30 +355,35 @@ function actionStep() {
 // `npm` is a stub: "ok" links the harness's own `yaml` into the requested
 // prefix (what a real install produces), "fail" exits 1, and either records
 // that it was called. Nothing reaches the network.
-function runAction(sb, repo, { fromCms = "true", event = "pull_request", npm = "fail" } = {}) {
+//
+// The platform is a REAL directory at `<repo>/.cms-platform`, as in the jobs
+// (never a symlink: Node resolves a symlink to its real path first, which
+// would hide what the workspace's own `node_modules` can shadow), WITHOUT
+// node_modules, so `yaml` is reachable only through the stubbed install.
+function runAction(sb, repo, { fromCms = "true", event = "pull_request", npm = "fail", headSha, extraEnv = {} } = {}) {
   const scratch = fs.mkdtempSync(path.join(sb.root, "run-"));
   const bin = path.join(scratch, "bin");
   fs.mkdirSync(bin);
   const called = path.join(scratch, "npm-called");
-  const yamlPkg = path.dirname(require.resolve("yaml/package.json"));
   const body =
     npm === "ok"
       ? `prefix=""; prev=""; for a in "$@"; do if [ "$prev" = "--prefix" ]; then prefix="$a"; fi; prev="$a"; done
-mkdir -p "$prefix/node_modules" && ln -s "${yamlPkg}" "$prefix/node_modules/yaml"`
+mkdir -p "$prefix/node_modules" && ln -sfn "${YAML_PACKAGE}" "$prefix/node_modules/yaml"`
       : "exit 1";
   fs.writeFileSync(path.join(bin, "npm"), `#!/bin/sh\necho called >> "${called}"\n${body}\n`);
   fs.chmodSync(path.join(bin, "npm"), 0o755);
-  // The platform as the job has it: the rule and the two modules it reads,
-  // WITHOUT node_modules, so `yaml` resolves only through the stubbed install.
-  const platform = path.join(scratch, "platform");
-  for (const rel of ["e2e/content-route.js", "e2e/visual-regression-salient.js", "scripts/content-pr-guard.js"]) {
-    fs.mkdirSync(path.dirname(path.join(platform, rel)), { recursive: true });
-    fs.copyFileSync(path.join(__dirname, "..", rel), path.join(platform, rel));
-  }
+  const platform = path.join(repo, ".cms-platform");
+  fs.rmSync(platform, { recursive: true, force: true });
+  copyPlatform(platform);
   const script = path.join(scratch, "step.sh");
   const output = path.join(scratch, "github_output");
   fs.writeFileSync(script, actionStep().run);
   fs.writeFileSync(output, "");
+  let head = headSha;
+  if (head === undefined) {
+    const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", "HEAD^2"], { cwd: repo, encoding: "utf8", env: sb.env });
+    head = r.status === 0 ? r.stdout.trim() : "0".repeat(40);
+  }
   const r = spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", script], {
     cwd: repo,
     encoding: "utf8",
@@ -259,9 +392,12 @@ mkdir -p "$prefix/node_modules" && ln -s "${yamlPkg}" "$prefix/node_modules/yaml
       PATH: `${bin}:${path.dirname(process.execPath)}:${sb.env.PATH}`,
       GITHUB_EVENT_NAME: event,
       GITHUB_OUTPUT: output,
+      GITHUB_WORKSPACE: repo,
       RUNNER_TEMP: scratch,
       ROUTE_FROM_CMS: fromCms,
-      PLATFORM_DIR: platform,
+      ROUTE_HEAD_SHA: head,
+      PLATFORM_DIR: ".cms-platform",
+      ...extraEnv,
     },
   });
   return {
@@ -270,6 +406,7 @@ mkdir -p "$prefix/node_modules" && ln -s "${yamlPkg}" "$prefix/node_modules/yaml
     stderr: r.stderr,
     output: fs.readFileSync(output, "utf8"),
     npmCalled: fs.existsSync(called),
+    scratch,
   };
 }
 
@@ -359,9 +496,9 @@ test.describe("content-route: the composite over a real merge commit", () => {
   test("a classifier that is missing or broken is full, never content", () => {
     sb = createSandbox("content-route-");
     const repo = mergeRepo(sb, POST);
+    const head = sb.rev(repo, "HEAD^2");
     const scratch = fs.mkdtempSync(path.join(sb.root, "broken-"));
     const output = path.join(scratch, "out");
-    fs.writeFileSync(output, "");
     for (const body of [null, "process.stdout.write('content-ish'); process.exit(0);", "throw new Error('boom');"]) {
       const platform = fs.mkdtempSync(path.join(scratch, "p-"));
       if (body !== null) {
@@ -381,11 +518,158 @@ test.describe("content-route: the composite over a real merge commit", () => {
           GITHUB_OUTPUT: output,
           RUNNER_TEMP: scratch,
           ROUTE_FROM_CMS: "true",
+          ROUTE_HEAD_SHA: head,
           PLATFORM_DIR: platform,
         },
       });
       expect(r.status, String(body) + r.stderr).toBe(0);
       expect(fs.readFileSync(output, "utf8"), String(body)).toBe("route=full\n");
+    }
+  });
+
+  // The hole an independent review found (PR 1055): the classifier runs from
+  // `<workspace>/.cms-platform`, and a bare `require("yaml")` walks up into
+  // `<workspace>/node_modules` — the pull request's own tree — before it looks
+  // anywhere else. A committed `node_modules/yaml` could print `content` and
+  // exit, skipping every test for a change to anything.
+  const HIJACK = {
+    "node_modules/yaml/package.json": '{"name":"yaml","version":"9.9.9","main":"index.js"}\n',
+    "node_modules/yaml/index.js":
+      'require("node:fs").writeFileSync(process.env.HIJACK_MARKER, "ran"); process.stdout.write("content"); process.exit(0);\n',
+  };
+
+  test("a yaml module committed by the pull request is never loaded: a layout change stays full", () => {
+    sb = createSandbox("content-route-");
+    const repo = mergeRepo(sb, { ...HIJACK, "_layouts/default.html": "<html>owned</html>\n" });
+    for (const npm of ["fail", "ok"]) {
+      const marker = path.join(sb.root, `hijack-${npm}`);
+      const r = runAction(sb, repo, { npm, extraEnv: { HIJACK_MARKER: marker } });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.output, `npm ${npm}`).toBe("route=full\n");
+      expect(fs.existsSync(marker), `the committed module must not run (npm ${npm})`).toBe(false);
+    }
+  });
+
+  test("a committed yaml module cannot answer for a data file either: the real parser decides", () => {
+    // With a `_data/` edit the step installs yaml. The committed module would
+    // answer `content` for the publish gate; the installed one says full.
+    sb = createSandbox("content-route-");
+    const repo = mergeRepo(sb, { ...HIJACK, "_data/settings.yml": "site_live: true\n" });
+    const marker = path.join(sb.root, "hijack-gate");
+    const r = runAction(sb, repo, { npm: "ok", extraEnv: { HIJACK_MARKER: marker } });
+    expect(r.output).toBe("route=full\n");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  test("the parser's directory cannot be inherited or point into the workspace", () => {
+    sb = createSandbox("content-route-");
+    const repo = mergeRepo(sb, { ...HIJACK, "_data/about.yml": "bio: new\n" });
+    const marker = path.join(sb.root, "hijack-env");
+    // An inherited value naming the committed module is dropped by the step;
+    // with the install failing there is then no parser, so the edit is full.
+    const r = runAction(sb, repo, {
+      npm: "fail",
+      extraEnv: {
+        HIJACK_MARKER: marker,
+        [YAML_PACKAGE_ENV]: path.join(repo, "node_modules", "yaml"),
+        NODE_PATH: path.join(repo, "node_modules"),
+      },
+    });
+    expect(r.output).toBe("route=full\n");
+    expect(fs.existsSync(marker)).toBe(false);
+    // And the loader itself refuses a relative path, a path inside the
+    // workspace, a missing directory and a module that is not a YAML parser.
+    const notYaml = path.join(sb.root, "not-yaml");
+    fs.mkdirSync(notYaml);
+    fs.writeFileSync(path.join(notYaml, "index.js"), "module.exports = { parse: 3 };\n");
+    expect(loadTrustedYaml({})).toBe(null);
+    expect(loadTrustedYaml({ [YAML_PACKAGE_ENV]: "node_modules/yaml" })).toBe(null);
+    expect(loadTrustedYaml({ [YAML_PACKAGE_ENV]: path.join(sb.root, "missing") })).toBe(null);
+    expect(loadTrustedYaml({ [YAML_PACKAGE_ENV]: notYaml })).toBe(null);
+    expect(loadTrustedYaml({ [YAML_PACKAGE_ENV]: YAML_PACKAGE, GITHUB_WORKSPACE: path.dirname(YAML_PACKAGE) })).toBe(null);
+    expect(typeof loadTrustedYaml({ [YAML_PACKAGE_ENV]: YAML_PACKAGE, GITHUB_WORKSPACE: repo }).parse).toBe("function");
+  });
+
+  test("the visual review classifier does not load a committed yaml module either", () => {
+    // Before the fix this printed "false" (no review) for a layout change.
+    sb = createSandbox("content-route-");
+    const repo = mergeRepo(sb, { ...HIJACK, "_layouts/default.html": "<html>owned</html>\n" });
+    copyPlatform(path.join(repo, ".cms-platform"));
+    const marker = path.join(sb.root, "hijack-vr");
+    const r = spawnSync(
+      process.execPath,
+      [path.join(repo, ".cms-platform", "e2e", "visual-regression-salient.js"), "--status", "--base-rev", "HEAD^1"],
+      {
+        cwd: repo,
+        input: "M\0_layouts/default.html\0",
+        encoding: "utf8",
+        env: { ...sb.env, VR_FROM_CMS: "true", HIJACK_MARKER: marker, GITHUB_WORKSPACE: repo },
+      },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe("true");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  test("a symlink, a type change or a submodule inside a content folder routes full", () => {
+    sb = createSandbox("content-route-");
+    const repo = sb.initRepo("site");
+    sb.commit(
+      repo,
+      { "_config.yml": CONFIG, "admin/collections.site.yml": SEAM, "_posts/2026-01-01-old.md": "old\n", "_layouts/default.html": "x\n" },
+      "base",
+    );
+    sb.git(repo, ["checkout", "-q", "-b", "cms/posts/x"]);
+    // An existing post replaced by a symlink to a layout (status T), and a new
+    // "upload" that is a symlink out of the tree.
+    fs.rmSync(path.join(repo, "_posts/2026-01-01-old.md"));
+    fs.symlinkSync("../_layouts/default.html", path.join(repo, "_posts/2026-01-01-old.md"));
+    sb.git(repo, ["add", "-A"]);
+    sb.git(repo, ["commit", "-q", "-m", "type change"]);
+    sb.git(repo, ["checkout", "-q", "main"]);
+    sb.git(repo, ["merge", "-q", "--no-ff", "-m", "merge", "cms/posts/x"]);
+    expect(sb.git(repo, ["diff", "--raw", "--no-renames", "HEAD^1", "HEAD"])).toMatch(/^:100644 120000 \S+ \S+ T\t_posts/);
+    expect(runAction(sb, repo).output).toBe("route=full\n");
+
+    sb.cleanup();
+    sb = createSandbox("content-route-");
+    const repo2 = sb.initRepo("site");
+    sb.commit(repo2, { "_config.yml": CONFIG, "admin/collections.site.yml": SEAM }, "base");
+    sb.git(repo2, ["checkout", "-q", "-b", "cms/posts/x"]);
+    fs.mkdirSync(path.join(repo2, "assets/images/uploads"), { recursive: true });
+    fs.symlinkSync("/etc/hostname", path.join(repo2, "assets/images/uploads/p.png"));
+    sb.git(repo2, ["add", "-A"]);
+    sb.git(repo2, ["commit", "-q", "-m", "symlink upload"]);
+    sb.git(repo2, ["checkout", "-q", "main"]);
+    sb.git(repo2, ["merge", "-q", "--no-ff", "-m", "merge", "cms/posts/x"]);
+    expect(runAction(sb, repo2).output).toBe("route=full\n");
+  });
+
+  test("the merge commit must be THIS pull request's: a different or missing head commit is full", () => {
+    sb = createSandbox("content-route-");
+    const repo = mergeRepo(sb, POST);
+    expect(runAction(sb, repo).output).toBe("route=content\n");
+    for (const headSha of ["f".repeat(40), "", "HEAD^2", sb.rev(repo, "HEAD^1"), sb.rev(repo, "HEAD^2").slice(0, 12)]) {
+      const r = runAction(sb, repo, { headSha });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.output, JSON.stringify(headSha)).toBe("route=full\n");
+    }
+  });
+
+  test("parseNulRaw reads modes and status, and refuses anything it does not know", () => {
+    const sha = "a".repeat(40);
+    expect(parseNulRaw(`:000000 100644 ${"0".repeat(40)} ${sha} A\0_posts/a b.md\0:100644 100644 ${sha} ${sha} M\0x\ny.md\0`)).toEqual([
+      { oldMode: "000000", newMode: "100644", status: "A", path: "_posts/a b.md" },
+      { oldMode: "100644", newMode: "100644", status: "M", path: "x\ny.md" },
+    ]);
+    expect(parseNulRaw("")).toEqual([]);
+    for (const bad of [
+      "M\0_posts/x.md\0",
+      `:100644 100644 ${sha} ${sha} M\0`,
+      `:100644 100644 ${sha} ${sha} R100\0a\0`,
+      `:100644 100644 ${sha} ${sha} M\0a\0trailing\0`,
+    ]) {
+      expect(() => parseNulRaw(bad), JSON.stringify(bad)).toThrow();
     }
   });
 
@@ -433,10 +717,14 @@ test.describe("content-route: e2e-tests.yml", () => {
     expect(siteCheckout).toBeLessThan(routeAt);
     expect(platformCheckout).toBeLessThan(routeAt);
     expect(node).toBeLessThan(routeAt);
-    const fromCms = String(route.with["from-cms"]);
-    expect(fromCms).toContain("github.event_name == 'pull_request'");
-    expect(fromCms).toContain("github.event.pull_request.head.repo.full_name == github.repository");
-    expect(fromCms).toContain("startsWith(github.event.pull_request.head.ref, 'cms/')");
+    expect(route.with).toEqual(ROUTE_WITH);
+  });
+
+  test("site-verify.yml decides the route with the same two expressions", () => {
+    const verifySteps = parseYaml(readWorkflow("site-verify.yml")).jobs.verify.steps;
+    const verifyRoute = verifySteps.find((s) => s.id === "route");
+    expect(verifyRoute.uses).toBe("./.cms-platform/.github/actions/content-route");
+    expect(verifyRoute.with).toEqual(ROUTE_WITH);
   });
 
   test("every work step after the route carries the route condition", () => {
@@ -446,11 +734,19 @@ test.describe("content-route: e2e-tests.yml", () => {
     const exempt = new Set(["Post failure summary", "Resolve failure summary on success"]);
     const after = steps.slice(routeAt + 1);
     expect(after.length).toBeGreaterThanOrEqual(8);
+    // The WHOLE condition, not a substring: `always() || <route condition>`
+    // would contain it and run on every route.
+    const allowed = new Set([
+      `\${{ ${ROUTE_CONDITION} }}`,
+      `\${{ inputs.target == 'local' && ${ROUTE_CONDITION} }}`,
+      `\${{ !cancelled() && ${ROUTE_CONDITION} }}`,
+    ]);
     for (const s of after) {
       if (exempt.has(s.name)) continue;
-      expect(String(s.if || ""), `step ${JSON.stringify(s.name || s.uses)} must be gated on the route`).toContain(
-        ROUTE_CONDITION,
-      );
+      expect(
+        allowed.has(String(s.if || "")),
+        `step ${JSON.stringify(s.name || s.uses)} must be gated on the route; its if is ${JSON.stringify(s.if)}`,
+      ).toBe(true);
     }
     for (const name of exempt) {
       expect(steps.some((s) => s.name === name), `${name} still exists`).toBe(true);
