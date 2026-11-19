@@ -1102,7 +1102,7 @@ test.describe("workflow files", () => {
     scan: { name: "Secrets scan", path: ".github/workflows/secrets-scan.yml", title: "Secrets scan" },
     deploy: { name: "Deploy to Production", path: ".github/workflows/deploy-production.yml", title: "push — main @someone" },
   };
-  function signalFires({ wf, title, event = "pull_request", branch = "cms/posts/x", conclusion, head = "o/r" }) {
+  function signalFires({ wf, title, event = "pull_request", branch = "cms/posts/x", conclusion, head = "o/r", workflowObject, runPath }) {
     const expression = String(signalReusable.jobs.signal.if).trim();
     const ast = acorn.parse(`(${expression})`, { ecmaVersion: "latest" });
     expect(ast.body).toHaveLength(1);
@@ -1112,10 +1112,10 @@ test.describe("workflow files", () => {
         repository: "o/r",
         event_name: "workflow_run",
         event: {
-          workflow: { name: w.name, path: w.path },
+          workflow: workflowObject === undefined ? { name: w.name, path: w.path } : workflowObject,
           workflow_run: {
             name: title === undefined ? w.title : title,
-            path: w.path,
+            path: runPath === undefined ? w.path : runPath,
             event,
             head_branch: branch,
             conclusion,
@@ -1151,6 +1151,12 @@ test.describe("workflow files", () => {
     // workflow must not be taken for that workflow.
     ["a green gating run whose title spells the editorial workflow's name", { wf: "e2e", title: "CMS Editorial Workflow", conclusion: "success" }, false],
     ["a green gating run on main whose title spells the deploy workflow's name", { wf: "scan", title: "Deploy to Production", conclusion: "success", event: "push", branch: "main" }, false],
+    // The path is accepted from either object, so one missing or oddly
+    // shaped field cannot silence a branch again.
+    ["a deploy success when the event carries no workflow path", { wf: "deploy", conclusion: "success", event: "push", branch: "main", workflowObject: {} }, true],
+    ["a deploy success when the run's path carries a ref suffix", { wf: "deploy", conclusion: "success", event: "push", branch: "main", runPath: ".github/workflows/deploy-production.yml@main" }, true],
+    ["Publish pressed when the event carries no workflow path", { wf: "editorial", conclusion: "success", workflowObject: {} }, true],
+    ["a deploy success when neither object names the deploy file", { wf: "deploy", conclusion: "success", event: "push", branch: "main", workflowObject: {}, runPath: "dynamic/pages" }, false],
   ];
   for (const [label, ev, expected] of FIRE) {
     test(`signal if: ${label} -> ${expected}`, () => {
@@ -1160,7 +1166,10 @@ test.describe("workflow files", () => {
 
   test("the workflow files the signal's if names exist, and they are the two with a dynamic run-name", () => {
     const cond = String(signalReusable.jobs.signal.if);
-    const paths = [...cond.matchAll(/'\.github\/workflows\/([^']+)'/g)].map((m) => m[1]);
+    // Each file is named twice, once per object the path is read from.
+    const named = [...cond.matchAll(/'\.github\/workflows\/([^']+)'/g)].map((m) => m[1]);
+    expect(named).toHaveLength(4);
+    const paths = [...new Set(named)];
     expect(paths.sort()).toEqual(["cms-editorial-workflow.yml", "deploy-production.yml"]);
     for (const file of paths) {
       const caller = parseYaml(read(path.join(CALLER_DIR, file)));

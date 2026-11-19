@@ -50,6 +50,13 @@ jobs:
     # after the bump. e2e/publish-watchdog.test.js evaluates this expression
     # against events shaped like the real ones.
     #
+    # The path is accepted from EITHER object that carries it, `workflow` or
+    # `workflow_run`. Both were read off the live REST objects on 2026-11-19
+    # (run: `name` = "push — main @...", `path` =
+    # ".github/workflows/deploy-production.yml"; workflow: the same path), but
+    # the last bug here was a field assumption only a live run exposed, and a
+    # missing or differently shaped field only makes its own clause false.
+    #
     # When this is false the job is skipped before a runner is allocated.
     if: >-
       github.event_name == 'workflow_run'
@@ -57,8 +64,10 @@ jobs:
       && ((github.event.workflow_run.event == 'pull_request'
            && startsWith(github.event.workflow_run.head_branch, 'cms/')
            && (contains(fromJSON('["failure","timed_out","startup_failure","cancelled"]'), github.event.workflow_run.conclusion)
-               || github.event.workflow.path == '.github/workflows/cms-editorial-workflow.yml'))
-          || (github.event.workflow.path == '.github/workflows/deploy-production.yml'
+               || github.event.workflow.path == '.github/workflows/cms-editorial-workflow.yml'
+               || github.event.workflow_run.path == '.github/workflows/cms-editorial-workflow.yml'))
+          || ((github.event.workflow.path == '.github/workflows/deploy-production.yml'
+               || github.event.workflow_run.path == '.github/workflows/deploy-production.yml')
               && github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
