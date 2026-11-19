@@ -24,10 +24,11 @@ checks that are about the content. `e2e/content-route.js` decides `content` or
 
 | Check | What it does on the content route |
 |---|---|
-| `e2e / e2e` | Every project job decides the route, skips its work and succeeds; the gate reports as before. No browser test runs. |
+| `e2e / e2e` | Every project job decides the route, skips its work and succeeds; the gate reports as before. None of the matrix's browser tests run. |
 | `site-verify / site-verify` | Builds the site and runs the site's verifier and the escaping lint. Skips only the verifier's self-tests. |
 | `visual-regression / approve-regression` | Unchanged for folder collections (already skipped). A CMS edit to a file collection (`file: _data/x.yml` in the seam) now skips the review too. |
-| Everything else | Unchanged: the content guard, the secrets scan, the preview deploy and its probes, the prerelease guard. |
+| `parity / parity` | Unchanged, and still a browser check of the content: for a `_posts/` change `selectParityPreviewSpecs` runs `console-clean`, `draft-isolation`, `image-alt-text` and `sitemap` against the pull request's preview. These four CAN block a publish, on the author's own content: an inline image with no alt text, or an embed that logs a console error. |
+| Everything else | Unchanged: the content guard, the secrets scan, the preview deploy and its media probe, the prerelease guard. |
 
 **`content` is the narrow answer and every doubt is `full`.** The route is
 `content` only when the pull request is a same-repository `cms/` branch, the
@@ -77,10 +78,22 @@ in `content-pr-guard.js`.
 
 **What a content pull request no longer gets, and what covers it.**
 
-- No browser check of the new page. The site's post-build verifier is the
-  content gate, under its own design rule: an assertion may fail only on a
-  genuinely broken build, never on a legitimate authoring choice. The author
-  sees the real page on the per-PR preview before publishing.
+- The matrix's browser tests of the new page. What still looks at the page in
+  a browser is the preview's four parity specs (the table above). The site's
+  post-build verifier is the content gate for the build, under its own design
+  rule: an assertion may fail only on a genuinely broken build, never on a
+  legitimate authoring choice. The author sees the real page on the per-PR
+  preview before publishing.
+- **Two files on one address** was the one thing an independent check found
+  the route had given up without a replacement (issue 1061): a page saved
+  with permalink `/tags/` replaced the tags index, and only a matrix spec
+  noticed. Jekyll builds such a site with a warning. `site-verify.yml` now
+  fails it on both routes and both sites (`scripts/destination-conflicts.rb`,
+  which asks Jekyll for every file's destination), naming the address and the
+  files. The same check found two gaps that exist on both routes and are not
+  closed here: an unclosed tag in a post's first paragraph is copied raw into
+  the excerpt on the home and blog pages, and nothing checks an entry's
+  `layout:`.
 - The suite still runs against each site's real content on every pull request
   that is not content-only: each release's candidate pull requests on both
   consumers, each platform bump, dependency and tooling pull requests. So a
