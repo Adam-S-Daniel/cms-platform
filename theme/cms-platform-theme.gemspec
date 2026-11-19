@@ -62,4 +62,9 @@ Gem::Specification.new do |spec|
   spec.add_runtime_dependency "jekyll-seo-tag", ">= 2.9.1", "< 3"
   spec.add_runtime_dependency "jekyll-feed", ">= 0.18.0", "< 1"
   spec.add_runtime_dependency "jekyll-sitemap"
+  # The HTML sanitizer behind the `listing_excerpt` filter (#1067): an
+  # established library for it, never a hand-rolled filter. 7.0.2 is the floor
+  # because it is the release this was built and tested on; it brings Nokogiri
+  # (its HTML5 parser) and crass.
+  spec.add_runtime_dependency "sanitize", ">= 7.0.2", "< 8"
 end

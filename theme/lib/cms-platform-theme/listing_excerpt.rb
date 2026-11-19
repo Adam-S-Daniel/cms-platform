@@ -4,7 +4,7 @@
 # Liquid filter `listing_excerpt` — a post's excerpt, safe to print in a
 # LISTING (the tag archive here; a site's home page and blog index).
 #
-#   <div class="post-excerpt">{{ post | listing_excerpt }}</div>
+#   <p class="post-excerpt">{{ post | listing_excerpt }}</p>
 #
 # WHY (#1067). A listing prints many posts' excerpts into one page, so an
 # excerpt is one post's content landing on a page that is not that post's. It
@@ -21,54 +21,58 @@
 #     on every listing page too: one post's CSS and JavaScript ran site-wide.
 #
 # THE RULE.
-#   * A TYPED excerpt (front matter) is text. It is HTML-escaped, nothing else.
+#   * A TYPED excerpt (front matter) is text. It is HTML-escaped with Ruby's
+#     own `CGI.escapeHTML`, nothing else.
 #   * A CUT excerpt (from the body) keeps the formatting a summary needs and
-#     loses everything else. It is parsed with kramdown's HTML parser (kramdown
-#     is Jekyll's own Markdown engine, so this adds no dependency), reduced to
-#     an allowlist of element types, and written back out by kramdown's HTML
-#     converter, which escapes every text node and attribute value. The output
-#     is built from the allowlisted tree and never from the input string, so
-#     nothing that is not on the list can reach the page however the input is
-#     spelled.
+#     loses everything else. That is HTML sanitizing, and it is done by the
+#     Sanitize gem (https://github.com/rgrove/sanitize), not by code here: the
+#     owner's rule is an established library for this, never a hand-rolled
+#     filter. Sanitize parses with Nokogiri's HTML5 parser, the same algorithm
+#     a browser uses, so what it judges is what the browser will build. This
+#     file holds only the allowlist, as Sanitize configuration (EXCERPT below).
 #
 # Kept: paragraphs, block quotes, lists, line breaks, emphasis, strong, inline
-# code, links (`href` only, and only http, https, mailto or a site path) and
-# images (`src` on the same rule, plus `alt`). Wrappers that are not on the
-# list (<div>, <span>, <details>, a heading) are unwrapped: their text stays.
-# Dropped with their contents: script, style, iframe, object, embed, svg,
-# video, audio, canvas, form controls, <base>, <link>, <meta>, comments and
-# raw blocks. Every other attribute goes: `style`, `class`, `id`, `on…`.
-#
-# If the excerpt cannot be parsed, the fallback is its text with every tag
-# removed, escaped. A listing never gets raw markup.
+# code, links (`href` only: http, https, mailto or a relative address) and
+# images (`src` on http, https or a relative address, plus `alt`). An element
+# that is not on the list is removed and its text kept (<div>, <span>,
+# <details>, a heading). Removed WITH their contents: script, style, iframe,
+# object, embed, svg, math, video, audio, canvas, template, noscript, form
+# controls and the head-only elements. Every other attribute goes: `style`,
+# `class`, `id`, `on…`. Comments go.
 #
 # Which kind an excerpt is cannot be told from `post.excerpt` in Liquid (both
 # are strings by then), so a `:site, :post_read` hook marks each document whose
 # front matter (or a `_config.yml` default) set `excerpt:` with
 # `excerpt_typed: true`, and the filter takes the POST, not its excerpt. Given
-# a bare string it treats it as cut markup: the stricter reading of "is this
-# text?" would double-escape a rendered excerpt, and both are safe.
+# a bare string it treats it as cut markup: reading it as text would
+# double-escape a rendered excerpt, and both readings are safe.
 
 require 'cgi'
-require 'kramdown'
+require 'sanitize'
 
 module Jekyll
   module ListingExcerpt
-    # kramdown element types written back out as they are.
-    KEEP = %i[
-      root p blockquote ul ol li br blank text entity smart_quote typographic_sym
-      em strong codespan a img
-    ].freeze
-
-    # Elements removed WITH their contents. Anything else that is not in KEEP
-    # is unwrapped (its children are kept).
-    DROP_HTML = %w[
-      script style iframe object embed svg math video audio canvas template
-      noscript form input button select textarea base link meta title head
-      frame frameset applet
-    ].freeze
-
-    SAFE_URL = %r{\A(?:https?://|mailto:|/(?!/)|\#|\./|\.\./|[A-Za-z0-9_-][^:]*\z)}i.freeze
+    # The allowlist, in Sanitize's own terms. Anything not named here is not
+    # printed. `:relative` is Sanitize's token for an address with no scheme.
+    EXCERPT = Sanitize::Config.freeze_config(
+      elements: %w[p blockquote ul ol li br em strong b i code a img],
+      attributes: {
+        'a' => %w[href],
+        'img' => %w[src alt],
+      },
+      protocols: {
+        'a' => { 'href' => ['http', 'https', 'mailto', :relative] },
+        'img' => { 'src' => ['http', 'https', :relative] },
+      },
+      allow_comments: false,
+      allow_doctype: false,
+      remove_contents: %w[
+        script style iframe object embed svg math video audio canvas template
+        noscript form input button select textarea title head frame frameset
+        applet
+      ],
+      whitespace_elements: {}
+    )
 
     module_function
 
@@ -92,47 +96,7 @@ module Jekyll
     end
 
     def sanitize(html)
-      doc = Kramdown::Document.new(html, input: 'html', html_to_native: true, auto_ids: false)
-      doc.root.children = filter(doc.root.children)
-      doc.to_html.strip
-    rescue StandardError
-      CGI.escapeHTML(html.gsub(/<[^>]*>?/m, ' ').gsub(/\s+/, ' ').strip)
-    end
-
-    def filter(children)
-      children.flat_map { |el| filter_element(el) }
-    end
-
-    def filter_element(el)
-      case el.type
-      when :html_element
-        return [] if DROP_HTML.include?(el.value.to_s.downcase)
-
-        filter(el.children)
-      when :a
-        href = el.attr['href'].to_s.strip
-        el.children = filter(el.children)
-        return el.children unless SAFE_URL.match?(href)
-
-        el.attr.replace('href' => href)
-        [el]
-      when :img
-        src = el.attr['src'].to_s.strip
-        return [] unless SAFE_URL.match?(src)
-
-        el.attr.replace('src' => src, 'alt' => el.attr['alt'].to_s)
-        [el]
-      when *KEEP
-        el.attr.clear
-        el.children = filter(el.children)
-        [el]
-      when :header, :codeblock, :hr, :table, :thead, :tbody, :tfoot, :tr, :td, :dl, :dt, :dd, :abbreviation, :footnote
-        el.type == :codeblock ? [Kramdown::Element.new(:text, el.value.to_s)] : filter(el.children)
-      else
-        # :raw, :comment, :xml_comment, :xml_pi, :html_doctype, :math and any
-        # type a later kramdown adds: not on the list.
-        []
-      end
+      Sanitize.fragment(html, EXCERPT).strip
     end
   end
 

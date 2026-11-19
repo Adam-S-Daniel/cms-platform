@@ -4,10 +4,12 @@
 # run code on, the listing pages it is printed into.
 #
 # Two layers. The unit cases pin the rule (a typed excerpt is escaped text; one
-# cut from the body is reduced to an allowlist). The build cases run a real
+# cut from the body is reduced to an allowlist by the Sanitize gem, so these
+# cases pin OUR configuration of it, not its parser). The build cases run a real
 # Jekyll build of the theme's tag archive with hostile posts and read the
 # built page with REXML, not a regex: every post is still listed, the footer
 # is still there, and nothing executable survived.
+# Needs jekyll 4.4.1 and sanitize 7.0.2 (the ruby-theme-specs lane installs both).
 # Run with: ruby theme/spec/listing_excerpt_test.rb
 
 require 'minitest/autorun'
@@ -70,18 +72,35 @@ class ListingExcerptUnitTest < Minitest::Test
     out = L.sanitize('<p class="c" style="position:fixed" onclick="x()">Look ' \
                      '<img src="/a.png" alt="x" onload="alert(1)" style="width:9000px"> ' \
                      '<a href="/blog/x/" onclick="x()" class="c" target="_blank">ok</a></p>')
-    assert_equal '<p>Look <img src="/a.png" alt="x" /> <a href="/blog/x/">ok</a></p>', out
+    assert_equal '<p>Look <img src="/a.png" alt="x"> <a href="/blog/x/">ok</a></p>', out
   end
 
   def test_a_link_or_image_with_an_unsafe_address_loses_it
-    out = L.sanitize('<p><a href="javascript:alert(1)">one</a> <a href="//example.net/x">two</a> ' \
+    out = L.sanitize('<p><a href="javascript:alert(1)">one</a> <a href=" JaVaScRiPt:alert(1)">two</a> ' \
                      '<a href="data:text/html,x">three</a> <img src="javascript:alert(1)" alt="x"> ' \
                      '<a href="mailto:a@example.com">mail</a> <a href="#frag">frag</a></p>')
-    assert_equal '<p>one two three  <a href="mailto:a@example.com">mail</a> <a href="#frag">frag</a></p>', out
+    assert_equal '<p><a>one</a> <a>two</a> <a>three</a> <img alt="x"> ' \
+                 '<a href="mailto:a@example.com">mail</a> <a href="#frag">frag</a></p>', out
+  end
+
+  # Shapes that have beaten sanitizers by parsing one way in the sanitizer and
+  # another in the browser. Sanitize parses as a browser does; this pins that
+  # our configuration lets none of the payload through.
+  def test_parser_differential_payloads_leave_nothing_executable
+    [
+      '<p><noscript><p title="</noscript><img src=x onerror=alert(1)>"></noscript></p>',
+      '<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>',
+      '<svg><style><img src=x onerror=alert(1)></style></svg>',
+      '<p><!--><img src=x onerror=alert(1)>--></p>',
+    ].each do |payload|
+      out = L.sanitize(payload)
+      refute_match(/onerror/i, out, payload)
+      refute_match(/<(?:script|style|svg|math|noscript)/i, out, payload)
+    end
   end
 
   def test_a_wrapper_that_is_not_on_the_list_is_unwrapped_and_its_text_kept
-    assert_equal 'Spoiler<p>Hidden <strong>text</strong></p>',
+    assert_equal 'Spoiler<p>Hidden <b>text</b></p>',
                  L.sanitize('<details><summary>Spoiler</summary><p>Hidden <b>text</b></p></details>')
     assert_equal 'Heading first', L.sanitize('<h2 id="main-content">Heading first</h2>')
     assert_equal 'Oops  never closed',

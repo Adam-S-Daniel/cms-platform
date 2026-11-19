@@ -1753,12 +1753,15 @@ is the one way to print it:
 - **A typed excerpt is text.** A `:site, :post_read` hook marks a document
   whose front matter set `excerpt:` with `excerpt_typed: true`, and the filter
   HTML-escapes it.
-- **An excerpt cut from the body is reduced to an allowlist.** It is parsed
-  with kramdown's HTML parser (Jekyll's own Markdown engine, so no new
-  dependency), cut down to paragraphs, block quotes, lists, emphasis, inline
-  code, links and images with a safe address, and written back out by
-  kramdown's converter. The output is built from the allowlisted tree, never
-  from the input string.
+- **An excerpt cut from the body is reduced to an allowlist by the Sanitize
+  gem.** Sanitizing HTML is a library's job, never code written here (the
+  owner's rule above), so the filter holds only the allowlist as Sanitize
+  configuration: paragraphs, block quotes, lists, emphasis, inline code, and
+  links and images with an http, https, mailto or relative address. Sanitize
+  parses with Nokogiri's HTML5 parser, the algorithm a browser uses, so what
+  it judges is what the browser builds. `sanitize` is a runtime dependency of
+  the theme gem (floor 7.0.2), which brings Nokogiri and crass into every
+  consumer's `Gemfile.lock`; `platform-bump`'s conservative relock adds them.
 
 The filter takes the POST, not `post.excerpt`: both kinds are strings by the
 time Liquid sees them. The wrapper stays `<p class="post-excerpt">` on purpose;
