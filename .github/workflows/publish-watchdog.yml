@@ -1,0 +1,187 @@
+# Publish watchdog (reusable): a stuck CMS publish raises an issue.
+#
+# THE PROBLEM (adamdaniel.ai PR 5001, 2026-11-18): each Decap Save/Publish is a
+# pull request on a same-repository `cms/...` branch that auto-merges when its
+# required checks pass. A real post's required check failed and nothing told
+# anyone; the post sat unpublished for a day. The only net was the daily
+# scheduled-run-health audit, which reports a PR left red for 24 hours.
+#
+# THE FIX: scripts/publish-watchdog.js sweeps every open `cms/` pull request
+# and opens ONE issue per stuck one (a required check failed, a check has been
+# waiting for more than an hour, or every check finished and it still has not
+# merged). The issue notification is the alert; the `agent-ready` work label
+# queues it for the fleet worker, exactly like scheduled-run-health. An issue
+# stays open while its pull request is open and armed and closes when the
+# change goes live, the pull request closes, or it is no longer marked for
+# publishing. Test fixtures are ignored. See docs/CI-INVARIANTS.md "Publish
+# watchdog".
+#
+# WHEN IT ALERTS (see docs/CI-INVARIANTS.md "Publish watchdog" for the table):
+# a required check failing, or cancelled for the grace window, on an armed pull
+# request: the next sweep, normally a minute or two after the failed run ends
+# (cancelled: at the next follow-up after the 3-minute grace); Publish pressed
+# on a pull request whose checks already failed: a minute or two; every check
+# green but no merge: at the first follow-up that comes 3 minutes after the
+# last check finished, so about 6 to 17 minutes after Publish; a check waiting or running
+# over an hour: the next sweep after the hour, up to about 6 hours (the cron);
+# a site without the App credential: the scheduled cadence.
+#
+# FOLLOW-UPS: while an armed publish is still in flight after a pass, the sweep
+# looks again at `follow_up_minutes` (default 5 and 16, minutes since the first
+# pass), three passes by default, so "every check finished but it did not merge"
+# is caught without waiting for the cron. The 60-minute stall rule is NOT
+# covered by the follow-ups.
+#
+# TRIGGERS (in the caller): a `repository_dispatch` knock sent by
+# publish-watchdog-signal.yml (a gating check failed, or a production deploy
+# succeeded) and a 6-hourly catch-all. There is deliberately no pull_request
+# trigger: this job would be a check run on the pull request, and the editor
+# counts a cancelled or pending check run against the publish.
+#
+# The script and the helper it requires are sparse-checked-out at the commit
+# this reusable was called at (resolved from the job context, the same way
+# scheduled-run-health.yml does), so the script always matches the workflow.
+name: Publish watchdog (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      # Strings so a thin caller can pass a workflow_dispatch value straight
+      # through with no type coercion.
+      grace_minutes: { type: string, default: "3" }
+      stall_minutes: { type: string, default: "60" }
+      # Minutes since the first pass at which the sweep looks again while an
+      # armed publish is still in flight ("" disables). Bounded by the script:
+      # at most four values, none above 25, so it cannot outlast the job.
+      follow_up_minutes: { type: string, default: "5,16" }
+      # Comma-separated GitHub logins to assign the alert to (empty: none).
+      assignees:     { type: string, default: "" }
+      issue_label:   { type: string, default: "publish-stuck" }
+      work_label:    { type: string, default: "agent-ready" }
+      dry_run:       { type: boolean, default: false }
+
+# Reusable-workflow permissions are capped by the CALLER's grant.
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  issues: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          # actionlint types `job` as a STRICT object that does not (yet)
+          # know about job.workflow_ref / job.workflow_sha /
+          # job.workflow_repository / job.workflow_file_path
+          # (rhysd/actionlint#647, open against both the 1.7.7 this repo
+          # pins in self-ci.yml and the latest 1.7.12) — writing
+          # `${{ job.workflow_sha }}` directly fails this repo's REQUIRED
+          # actionlint lane. `${{ toJSON(job) }}` IS fully typed (job itself
+          # is a known context), and the RUNTIME object carries these
+          # properties regardless of what actionlint's declarations know —
+          # GitHub's own contexts reference documents all four. So values
+          # reach this step only through JOB_CONTEXT (env — never
+          # interpolated into `run:`) and are read out with jq.
+          # e2e/scheduled-run-health-self-resolve.test.js locks both halves:
+          # that this step reads toJSON(job), and that no `${{ }}`
+          # expression anywhere in this file reads job.workflow_ directly.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          # Here-strings into jq, never a pipe — a pipe into a command that
+          # can exit early is its own footgun (AGENTS.md's grep -q trap);
+          # jq reads its whole input regardless, but the here-string form
+          # costs nothing and keeps this step consistent with that rule.
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          wref=$(jq -r '.workflow_ref // ""' <<<"$JOB_CONTEXT")
+
+          # GitHub runs `run:` under `bash -e`, so every failure path below is
+          # an explicit `if` + `exit 1` — a bare `[[ ... ]] && ...` as the
+          # last statement of the step would only fail the step on its OWN
+          # false test, not on the condition this is actually policing.
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::the job context carries no usable workflow_repository ('${repo}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the job context carries no usable workflow_sha ('${sha}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if [[ "$wref" != *"@"* ]]; then
+            echo "::error::the job context carries no usable workflow_ref ('${wref}', no '@'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+
+          # job.workflow_ref looks like
+          # "Adam-S-Daniel/cms-platform/.github/workflows/scheduled-run-health.yml@refs/tags/v0.1.108"
+          # (tag call), "...@refs/heads/main" (branch or local ./ call), or
+          # "...@<40-hex sha>" (sha call). Strip the file-path prefix, then
+          # the refs/tags|refs/heads namespace, to land on the bare ref a
+          # caller would actually recognise as its own pin.
+          ref=${wref##*@}
+          ref=${ref#refs/tags/}
+          ref=${ref#refs/heads/}
+          if ! [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::resolved ref '${ref}' (from workflow_ref '${wref}') is not safe to write to GITHUB_OUTPUT — refusing to guess."
+            exit 1
+          fi
+
+          {
+            echo "repository=$repo"
+            echo "sha=$sha"
+            echo "ref=$ref"
+          } >>"$GITHUB_OUTPUT"
+          echo "Platform commit resolved from the job context: ${repo}@${sha} (called at ${ref})"
+      - name: Fetch the watchdog script from the platform
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          sparse-checkout: |
+            scripts/publish-watchdog.js
+            e2e/public-content.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+      - name: Ensure the default issue label exists
+        # The label name is a literal on purpose: e2e/preview-only-label-
+        # description.test.js bans a `run:` step creating a label from a
+        # variable. A caller that overrides `issue_label` creates its own.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WATCHDOG_REPO: ${{ github.repository }}
+          WATCHDOG_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ "$WATCHDOG_DRY_RUN" == "true" ]]; then
+            echo "Dry run: not creating the label."
+            exit 0
+          fi
+          # Idempotent: an existing label exits non-zero and is fine. Whether
+          # the label is really there is settled by the issue write below,
+          # which fails loud, so no error is hidden from the run.
+          gh label create publish-stuck --repo "$WATCHDOG_REPO" \
+            --color B60205 --description "A CMS publish is stuck" >/dev/null 2>&1 || true
+      - name: Look for stuck publishes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WATCHDOG_REPO: ${{ github.repository }}
+          WATCHDOG_GRACE_MINUTES: ${{ inputs.grace_minutes }}
+          WATCHDOG_STALL_MINUTES: ${{ inputs.stall_minutes }}
+          WATCHDOG_FOLLOW_UPS: ${{ inputs.follow_up_minutes }}
+          WATCHDOG_ASSIGNEES: ${{ inputs.assignees }}
+          WATCHDOG_LABEL: ${{ inputs.issue_label }}
+          WATCHDOG_WORK_LABEL: ${{ inputs.work_label }}
+          WATCHDOG_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--repo "$WATCHDOG_REPO" --issue-label "$WATCHDOG_LABEL" --work-label "$WATCHDOG_WORK_LABEL" --grace-minutes "$WATCHDOG_GRACE_MINUTES" --stall-minutes "$WATCHDOG_STALL_MINUTES" --follow-up-minutes "$WATCHDOG_FOLLOW_UPS" --assignees "$WATCHDOG_ASSIGNEES")
+          if [[ "$WATCHDOG_DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+          node .cms-platform/scripts/publish-watchdog.js "${args[@]}"

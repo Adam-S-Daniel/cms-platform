@@ -449,3 +449,19 @@ local reds are `self-ci.yml`'s DENY list and anything needing Jekyll:
 TARGET=prod PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
   npx playwright test --project=chromium-light --reporter=line ./*.test.js
 ```
+
+## Publish watchdog
+
+A stuck Decap publish (a required check failed on an armed `cms/` PR, a check
+waited over an hour, or every check finished and it has not merged) opens one
+`publish-stuck` issue per pull request and head commit. `publish-watchdog-signal.yml`
+(a `workflow_run` caller with a read-only token) knocks with a `repository_dispatch`
+through the CMS automation App, and the sweep `publish-watchdog.yml` +
+`scripts/publish-watchdog.js` opens the issue, looks again at 5 and 16 minutes
+while a publish is in flight, and runs every 6 hours. Timing differs per
+condition (a failed check: a minute or two; green but unmerged: about 6 to 17 minutes;
+a check stalled over an hour: up to the 6-hourly sweep; no App credential: the
+schedule only), in the table in `docs/CI-INVARIANTS.md` § "Publish watchdog".
+Two hops because no write token may run under `workflow_run` and the App has no
+`issues` permission. No `pull_request` trigger: the editor counts a cancelled or
+pending check run against a publish.
