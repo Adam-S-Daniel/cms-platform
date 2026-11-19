@@ -53,7 +53,7 @@ jobs:
       github.event_name != 'pull_request'
       || (github.event.pull_request.head.repo.full_name == github.repository
           && startsWith(github.event.pull_request.head.ref, 'cms/'))
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog.yml@v0.1.180
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog.yml@v0.1.181
     with:
       mode: ${{ github.event_name == 'pull_request' && 'watch' || 'sweep' }}
       pr_number: ${{ github.event.pull_request.number || '' }}
