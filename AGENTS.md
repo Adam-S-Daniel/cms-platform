@@ -49,7 +49,7 @@ same Jekyll + Decap + AWS stack and improvements sync **both ways**. Design:
 (consumer 1, the dogfood) and **jodidaniel.com** (consumer 2, a single-page
 bio).
 
-**Current release: `v0.1.182`** (`v0.1.0`–`v0.1.182` are tagged; cut one with
+**Current release: `v0.1.183`** (`v0.1.0`–`v0.1.183` are tagged; cut one with
 `gh workflow run release.yml -f version=vX.Y.Z`). The bump is ONE atomic edit in
 the release PR, before the dispatch: this line, both plugin manifests
 (`plugin.json` + `.claude-plugin/plugin.json`), the `docs/VERSION-HISTORY.md`
@@ -455,7 +455,8 @@ TARGET=prod PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
 A stuck Decap publish (a required check failed on an armed `cms/` PR, a check
 waited over an hour, or every check finished and it has not merged) opens one
 `publish-stuck` issue per pull request and head commit. `publish-watchdog-signal.yml`
-(a `workflow_run` caller with a read-only token) knocks with a `repository_dispatch`
+(called under `workflow_run` with a read-only token; its job `if`, not the thin
+caller, decides, and reads the workflow FILE, never `workflow_run.name`) knocks with a `repository_dispatch`
 through the CMS automation App, and the sweep `publish-watchdog.yml` +
 `scripts/publish-watchdog.js` opens the issue, looks again at 5 and 16 minutes
 while a publish is in flight, and runs every 6 hours. Timing differs per
