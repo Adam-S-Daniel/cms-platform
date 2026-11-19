@@ -111,12 +111,10 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
-## 2026-11-12 — cms-platform/code-quality, browser-testing — edit
+## 2026-11-12 — cms-platform/browser-testing — edit
 
-- Motivation: the prompt-audit findings in https://github.com/Adam-S-Daniel/cms-platform/issues/989: a stale pytest command and two un-prefixed table rows (code-quality), a worker-count and job-count that contradict the same file and `e2e/ci-matrix.js` (browser-testing).
-- Change: code-quality now names the four pytest paths `self-ci.yml` runs; browser-testing says CI runs 14 jobs at `150%` workers. Frontmatter untouched.
-- Eval: outstanding — the skills-evals fixtures for these skills were not run in this change.
-- Outcome: pending merge.
+- Change: two stale facts corrected to match the same file's earlier lines and `e2e/ci-matrix.js`: CI runs 14 project jobs, not 10, and sets `150%` workers (Playwright's CPU default applies only locally). From https://github.com/Adam-S-Daniel/cms-platform/issues/989.
+- Eval: wording-only: two descriptive sentences corrected; no rule, command or trigger changed, and the frontmatter is untouched.
 
 ---
 
