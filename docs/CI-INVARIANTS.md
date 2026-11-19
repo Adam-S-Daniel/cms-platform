@@ -1736,6 +1736,45 @@ Two decisions that are not obvious from the code:
   own `.liquid-escape-allowlist.txt` (`<path> | <markup> | <reason>`), never a
   filter that only looks like an encoder. A stale entry fails the run.
 
+## An excerpt in a listing prints through `listing_excerpt` (#1067)
+
+A listing (the theme's tag archive, a site's home page and blog index) prints
+many posts' excerpts into one page, so an excerpt is one post's content on a
+page that is not that post's. Printed raw, it let a single post break or run
+code on every listing: the editor's plain-text Excerpt field with a script or
+style tag merely mentioned in it left the home page with 1 post row of 7 and
+no footer, and a body that opened with a script, a style block or an embed put
+that on every listing page. The build, the site verifier and the four parity
+specs all stayed green.
+
+`{{ post | listing_excerpt }}` (`theme/lib/cms-platform-theme/listing_excerpt.rb`)
+is the one way to print it:
+
+- **A typed excerpt is text.** A `:site, :post_read` hook marks a document
+  whose front matter set `excerpt:` with `excerpt_typed: true`, and the filter
+  HTML-escapes it.
+- **An excerpt cut from the body is reduced to an allowlist.** It is parsed
+  with kramdown's HTML parser (Jekyll's own Markdown engine, so no new
+  dependency), cut down to paragraphs, block quotes, lists, emphasis, inline
+  code, links and images with a safe address, and written back out by
+  kramdown's converter. The output is built from the allowlisted tree, never
+  from the input string.
+
+The filter takes the POST, not `post.excerpt`: both kinds are strings by the
+time Liquid sees them. The wrapper stays `<p class="post-excerpt">` on purpose;
+changing it would restyle every existing listing. A site that prints excerpts
+in its own templates (adamdaniel.ai's `index.html` and `blog/index.html`)
+switches to the filter in the same pull request that bumps it to a release
+carrying it, and narrows its `.liquid-escape-allowlist.txt` entries to match.
+Locked by `theme/spec/listing_excerpt_test.rb` (the rule, and a real build of
+the tag archive with hostile posts).
+
+The post's OWN page is contained by CSS instead, because an author's HTML is a
+feature there: `.post-content` and `.page-content` clear their own floats and
+cap their children and replaced media at the column width
+(`e2e/theme-body-containment-css.test.js`). What neither stops, by design: a
+post's own `<style>`, script or fixed-position element on its own page.
+
 ## JavaScript HTML sinks take escaped values only: `eslint.html-sinks.config.mjs` (#982)
 
 The same rule for JavaScript that writes HTML. `eslint-plugin-no-unsanitized`

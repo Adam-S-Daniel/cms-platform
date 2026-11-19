@@ -635,6 +635,36 @@ main {
   color: var(--text-secondary);
 }
 
+/* An author's body must not reach outside its own box (#1067). The body is
+   whatever HTML a post or page carries, and the theme's caps above cover only
+   img, iframe, table and pre: a fixed-width <div> pasted from another site,
+   an inline <svg>, a PDF <embed> or a <canvas> pushed the WHOLE page sideways
+   on a phone (up to 1,600px), and an image floated near the end of a post
+   squeezed the share row beside it into a 42px column.
+   - A clearing `::after` makes the body contain its own floats, so what
+     follows it (the share row, the footer) starts below them. It is the
+     clearfix and not `display: flow-root` on purpose: flow-root also stops
+     the body's first and last margins collapsing through it, which moved
+     every existing post by 24px. The pseudo-element changes nothing on a
+     body with no float.
+   - `max-width: 100%` on the body's direct children and on replaced media at
+     any depth caps a declared width at the column. `max-width` beats `width`,
+     inline or attribute, and an author who really wants wider can still say
+     `max-width: none` inline. */
+.post-content::after,
+.page-content::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+
+.post-content > *,
+.page-content > *,
+.post-content :is(video, svg, embed, object, canvas),
+.page-content :is(video, svg, embed, object, canvas) {
+  max-width: 100%;
+}
+
 .post-content h2 {
   margin: 2.5rem 0 1rem;
 }
