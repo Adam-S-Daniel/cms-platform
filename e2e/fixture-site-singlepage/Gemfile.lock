@@ -6,7 +6,8 @@ PATH
       jekyll-feed (>= 0.18.0, < 1)
       jekyll-seo-tag (>= 2.9.1, < 3)
       jekyll-sitemap
-      sanitize (>= 7.0.2, < 8)
+      nokogiri (= 1.19.7)
+      sanitize (= 7.0.2)
 
 GEM
   remote: https://rubygems.org/
