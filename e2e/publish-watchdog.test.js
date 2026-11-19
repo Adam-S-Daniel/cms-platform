@@ -12,17 +12,19 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const vm = require("node:vm");
+const acorn = require("acorn");
 const { spawnSync } = require("node:child_process");
 const { test, expect } = require("./base");
 const { parseYaml, runScripts } = require("./workflow-yaml-utils");
-const { writeStubs } = require("./workflow-step-harness");
+const { writeStubs, runStep } = require("./workflow-step-harness");
 
 const ROOT = path.resolve(__dirname, "..");
 const SCRIPT = path.join(ROOT, "scripts/publish-watchdog.js");
 const REUSABLE = path.join(ROOT, ".github/workflows/publish-watchdog.yml");
 const CALLER_DIR = path.join(ROOT, "examples/site/.github/workflows");
 const CALLER = path.join(CALLER_DIR, "publish-watchdog.yml");
-const { classifyPublish, issueMarker, renderIssue, planSweep } = require(SCRIPT);
+const { classifyPublish, issueMarker, renderIssue, planSweep, sweepWithFollowUps } = require(SCRIPT);
 
 const NOW = Date.parse("2026-11-19T12:00:00Z");
 const iso = (minutesAgo) => new Date(NOW - minutesAgo * 60000).toISOString();
@@ -152,8 +154,18 @@ test.describe("classifyPublish", () => {
       "in-flight",
     ],
     [
-      "requiredContexts null: any failure counts",
+      "requiredContexts null: any failure counts once nothing is still running",
+      { requiredContexts: null, checkRuns: [run("optional", "completed", "failure"), run("build", "completed", "success", { completed_at: iso(1) })] },
+      "stuck",
+    ],
+    [
+      "requiredContexts null: a failure does not alert while another check still runs",
       { requiredContexts: null, checkRuns: [run("optional", "completed", "failure"), run("build", "in_progress", null)] },
+      "in-flight",
+    ],
+    [
+      "requiredContexts readable: a required failure alerts at once while others run",
+      { requiredContexts: ["optional"], checkRuns: [run("optional", "completed", "failure"), run("build", "in_progress", null)] },
       "stuck",
     ],
     [
@@ -249,7 +261,7 @@ test.describe("classifyPublish", () => {
 test.describe("classifyPublish: branch tip, stalls, partial lists, ids", () => {
   const failed = () => [run("build", "completed", "failure")];
   const CASES = [
-    ["branch tip differs: in flight even with a required failure on the old head", { branchSha: "f".repeat(40), checkRuns: failed() }, "in-flight"],
+    ["branch tip differs: in flight even with a required failure on the old head", { pr: makePr({ updated_at: iso(5) }), branchSha: "f".repeat(40), checkRuns: failed() }, "in-flight"],
     ["branch tip equals head: normal rules apply", { branchSha: "a".repeat(40), checkRuns: failed() }, "stuck"],
     ["branch tip null: normal rules apply", { branchSha: null, checkRuns: failed() }, "stuck"],
     ["branch tip undefined: normal rules apply", { branchSha: undefined, checkRuns: failed() }, "stuck"],
@@ -259,13 +271,17 @@ test.describe("classifyPublish: branch tip, stalls, partial lists, ids", () => {
     ["a custom stallMinutes", { stallMinutes: 10, checkRuns: [run("build", "in_progress", null, { started_at: iso(11) })] }, "stuck"],
     ["a waiting run older than the stall window", { checkRuns: [run("gate", "waiting", null, { started_at: iso(120) })] }, "stuck"],
     ["a waiting run younger than the stall window", { checkRuns: [run("gate", "waiting", null, { started_at: iso(5) })] }, "in-flight"],
-    ["unfinished run with an unparseable started_at never makes stuck", { checkRuns: [run("build", "in_progress", null, { started_at: "garbage" })], pr: makePr({ updated_at: iso(500) }) }, "in-flight"],
-    ["unfinished run with no started_at never makes stuck", { checkRuns: [run("build", "queued", null, { started_at: null })], pr: makePr({ updated_at: iso(500) }) }, "in-flight"],
+    ["unfinished run with an unparseable started_at: aged from a recent pr.updated_at, in flight", { checkRuns: [run("build", "in_progress", null, { started_at: "garbage" })], pr: makePr({ updated_at: iso(5) }) }, "in-flight"],
+    ["unfinished run with no started_at: aged from an old pr.updated_at, stuck", { checkRuns: [run("build", "queued", null, { started_at: null })], pr: makePr({ updated_at: iso(500) }) }, "stuck"],
+    ["unfinished run with no usable start AND no usable updated_at never alerts", { checkRuns: [run("build", "queued", null, { started_at: null })], pr: makePr({ updated_at: "garbage" }) }, "in-flight"],
     ["requiredContexts [] behaves as null: any failure counts", { requiredContexts: [], checkRuns: [run("optional", "completed", "failure")] }, "stuck"],
-    ["partial check-run list is in flight", { incomplete: true, checkRuns: [run("build", "completed", "success", { completed_at: iso(60) })] }, "in-flight"],
+    ["partial check-run list is in flight", { pr: makePr({ updated_at: iso(5) }), incomplete: true, checkRuns: [run("build", "completed", "success", { completed_at: iso(60) })] }, "in-flight"],
+    ["partial list and a PR untouched for the stall window: stuck, GitHub has not caught up", { pr: makePr({ updated_at: iso(61) }), incomplete: true, checkRuns: [] }, "stuck"],
+    ["branch tip differs and a PR untouched for the stall window: stuck", { pr: makePr({ updated_at: iso(61) }), branchSha: "f".repeat(40), checkRuns: [] }, "stuck"],
+    ["branch tip differs with an unparseable updated_at: in flight", { pr: makePr({ updated_at: "x" }), branchSha: "f".repeat(40), checkRuns: [] }, "in-flight"],
     [
       "newest by id: a queued re-run with no started_at beats the old failure",
-      { checkRuns: [run("build", "completed", "failure", { id: 10, started_at: iso(40) }), run("build", "queued", null, { id: 11, started_at: null })] },
+      { pr: makePr({ updated_at: iso(5) }), checkRuns: [run("build", "completed", "failure", { id: 10, started_at: iso(40) }), run("build", "queued", null, { id: 11, started_at: null })] },
       "in-flight",
     ],
     [
@@ -289,10 +305,33 @@ test.describe("classifyPublish: branch tip, stalls, partial lists, ids", () => {
   test("a waiting verdict renders the approval wording and no 'red check' sentence", () => {
     const v = classify({ checkRuns: [run("gate", "waiting", null, { started_at: iso(120), html_url: "https://example.com/g" })] });
     const { body } = renderIssue({ repo: "o/r", pr: makePr(), verdict: v });
-    expect(body).toContain("waiting for someone to approve or start it");
+    expect(body).toContain("waiting for someone to approve it");
     expect(body).toContain("[gate](https://example.com/g)");
     expect(body).not.toContain("red check");
-    expect(body.startsWith(issueMarker(7))).toBe(true);
+    expect(body.startsWith(issueMarker(7, "a".repeat(40)))).toBe(true);
+  });
+
+  test("each stalled run is described by its status", () => {
+    const v = classify({
+      checkRuns: [
+        run("gate", "waiting", null, { started_at: iso(120), html_url: "https://example.com/g" }),
+        run("slow", "queued", null, { started_at: iso(90), html_url: "https://example.com/s" }),
+        run("long", "in_progress", null, { started_at: iso(80), html_url: "https://example.com/l" }),
+      ],
+    });
+    const { body } = renderIssue({ repo: "o/r", pr: makePr(), verdict: v });
+    expect(body).toContain("[gate](https://example.com/g): waiting for someone to approve it");
+    expect(body).toContain("[slow](https://example.com/s): has not started");
+    expect(body).toContain("[long](https://example.com/l): has been running for more than 60 minutes");
+    expect(body).not.toContain("red check");
+  });
+
+  test("a lagging verdict has a neutral body and no red-check sentence", () => {
+    const v = classify({ pr: makePr({ updated_at: iso(61) }), incomplete: true, checkRuns: [] });
+    expect(v.reason).toBe("GitHub has not caught up with this pull request for more than 60 minutes.");
+    const { body } = renderIssue({ repo: "o/r", pr: makePr(), verdict: v });
+    expect(body).toContain("GitHub has not caught up with this pull request for more than 60 minutes.");
+    expect(body).not.toContain("red check");
   });
 });
 
@@ -305,7 +344,7 @@ test.describe("renderIssue and issueMarker", () => {
     const verdict = { state: "stuck", reason: "x", failing: [{ name: "build", conclusion: "failure", url: "https://example.com/r/1" }] };
     const { title, body } = renderIssue({ repo: "o/r", pr: makePr(), verdict });
     expect(title).toBe("Publish stuck: pull request #7 has not gone live");
-    expect(body).toContain(issueMarker(7));
+    expect(body.startsWith(issueMarker(7, "a".repeat(40)))).toBe(true);
     expect(body).toContain("https://github.com/o/r/pull/7");
     expect(body).toContain("[build](https://example.com/r/1)");
     expect(body).toContain("failure");
@@ -338,46 +377,68 @@ test.describe("planSweep", () => {
     files: ["_posts/2026-11-18-real-post.md"],
   });
   const inFlightEntry = (n) => ({ ...stuckEntry(n), checkRuns: [run("build", "in_progress", null)] });
+  const bot = (number, body, state = "open", login = "github-actions[bot]") => ({ number, body, state, user: { login } });
+  const sweep = (over) => planSweep({ prs: [], issues: [], nowMs: NOW, graceMinutes: 15, ...over });
+  const SHA = "a".repeat(40);
 
   test("opens one issue for a stuck PR with no issue", () => {
-    const plan = planSweep({ prs: [stuckEntry(7)], openIssues: [], nowMs: NOW, graceMinutes: 15 });
+    const plan = sweep({ prs: [stuckEntry(7)] });
     expect(plan.open.map((o) => o.pr.number)).toEqual([7]);
     expect(plan.open[0].verdict.state).toBe("stuck");
     expect(plan.close).toEqual([]);
+    expect(plan.pending).toBe(0);
   });
 
   test("no duplicate when an open issue carries the marker", () => {
-    const plan = planSweep({
-      prs: [stuckEntry(7)],
-      openIssues: [{ number: 50, body: `${issueMarker(7)}\nx\n` }],
-      nowMs: NOW,
-      graceMinutes: 15,
-    });
-    expect(plan).toEqual({ open: [], close: [] });
+    const plan = sweep({ prs: [stuckEntry(7)], issues: [bot(50, `${issueMarker(7, SHA)}\nx\n`)] });
+    expect(plan.open).toEqual([]);
+    expect(plan.close).toEqual([]);
+  });
+
+  test("a marker without a sha matches any head commit", () => {
+    expect(sweep({ prs: [stuckEntry(7)], issues: [bot(50, issueMarker(7))] }).open).toEqual([]);
+  });
+
+  test("a CLOSED issue for the same pull request and head sha is respected (no new issue)", () => {
+    const plan = sweep({ prs: [stuckEntry(7)], issues: [bot(50, issueMarker(7, SHA), "closed")] });
+    expect(plan.open).toEqual([]);
+    expect(plan.close).toEqual([]);
+  });
+
+  test("a closed issue for an OLDER head sha does not block a new alert for the new commit", () => {
+    const plan = sweep({ prs: [stuckEntry(7)], issues: [bot(50, issueMarker(7, "b".repeat(40)), "closed")] });
+    expect(plan.open.map((o) => o.pr.number)).toEqual([7]);
+  });
+
+  test("closed issues are never closed again", () => {
+    const plan = sweep({ issues: [bot(50, issueMarker(9, SHA), "closed")] });
+    expect(plan.close).toEqual([]);
+  });
+
+  test("marker text in an issue not authored by the Actions bot is ignored", () => {
+    const plan = sweep({ prs: [stuckEntry(7)], issues: [bot(50, issueMarker(7, SHA), "open", "someone-else"), { number: 51, body: issueMarker(7, SHA) }] });
+    expect(plan.open.map((o) => o.pr.number)).toEqual([7]);
+    expect(plan.close).toEqual([]);
+  });
+
+  test("a marker anywhere in a bot-authored body counts", () => {
+    const plan = sweep({ prs: [stuckEntry(7)], issues: [bot(50, `Some text\n${issueMarker(7, SHA)}\n`)] });
+    expect(plan.open).toEqual([]);
   });
 
   test("an unmarked issue is left alone", () => {
-    const plan = planSweep({ prs: [], openIssues: [{ number: 50, body: "unrelated" }, { number: 51, body: null }], nowMs: NOW, graceMinutes: 15 });
-    expect(plan).toEqual({ open: [], close: [] });
+    const plan = sweep({ issues: [bot(50, "unrelated"), bot(51, null)] });
+    expect(plan.close).toEqual([]);
   });
 
   test("closes when the PR is merged or closed, gone from the list, or no longer armed; not while it is in flight", () => {
-    const plan = planSweep({
+    const plan = sweep({
       prs: [
-        // Still open and armed, checks running again: a watcher that timed out
-        // opened this issue, and closing it here would flap.
         inFlightEntry(7),
         { ...stuckEntry(8), pr: makePr({ number: 8, state: "closed" }) },
         { ...stuckEntry(10), pr: makePr({ number: 10, auto_merge: null, labels: [] }) },
       ],
-      openIssues: [
-        { number: 50, body: issueMarker(7) },
-        { number: 51, body: issueMarker(8) },
-        { number: 52, body: issueMarker(9) },
-        { number: 53, body: issueMarker(10) },
-      ],
-      nowMs: NOW,
-      graceMinutes: 15,
+      issues: [bot(50, issueMarker(7)), bot(51, issueMarker(8)), bot(52, issueMarker(9)), bot(53, issueMarker(10))],
     });
     expect(plan.open).toEqual([]);
     expect(plan.close).toEqual([
@@ -388,46 +449,87 @@ test.describe("planSweep", () => {
   });
 
   test("a skipped PR's issue is left open and no duplicate is opened for it", () => {
-    const plan = planSweep({
-      prs: [],
-      openIssues: [{ number: 50, body: issueMarker(7) }],
-      nowMs: NOW,
-      graceMinutes: 15,
-      skipped: new Set([7]),
-    });
-    expect(plan).toEqual({ open: [], close: [] });
-    const plan2 = planSweep({ prs: [], openIssues: [{ number: 50, body: issueMarker(7) }], nowMs: NOW, graceMinutes: 15 });
-    expect(plan2.close).toEqual([{ issueNumber: 50, prNumber: 7 }]);
-  });
-
-  test("only a marker on the FIRST line counts", () => {
-    const plan = planSweep({
-      prs: [],
-      openIssues: [{ number: 50, body: `Quoting another issue:\n${issueMarker(7)}\n` }],
-      nowMs: NOW,
-      graceMinutes: 15,
-    });
-    expect(plan).toEqual({ open: [], close: [] });
+    const plan = sweep({ issues: [bot(50, issueMarker(7))], skipped: new Set([7]) });
+    expect(plan.close).toEqual([]);
+    expect(sweep({ issues: [bot(50, issueMarker(7))] }).close).toEqual([{ issueNumber: 50, prNumber: 7 }]);
+    expect(sweep({ prs: [stuckEntry(7)], skipped: [7] }).open).toEqual([]);
   });
 
   test("an issue stays open while its PR is open and armed, even when not stuck", () => {
-    const plan = planSweep({
-      prs: [inFlightEntry(7)],
-      openIssues: [{ number: 50, body: issueMarker(7) }],
-      nowMs: NOW,
-      graceMinutes: 15,
-    });
-    expect(plan).toEqual({ open: [], close: [] });
+    const plan = sweep({ prs: [inFlightEntry(7)], issues: [bot(50, issueMarker(7))] });
+    expect(plan.close).toEqual([]);
+    expect(plan.pending).toBe(1);
+  });
+
+  test("pending counts only in-flight armed PRs", () => {
+    const plan = sweep({ prs: [inFlightEntry(7), stuckEntry(8), { ...stuckEntry(9), pr: makePr({ number: 9, draft: true }) }] });
+    expect(plan.pending).toBe(1);
   });
 
   test("one issue per PR across several stuck PRs", () => {
-    const plan = planSweep({
-      prs: [stuckEntry(7), stuckEntry(8)],
-      openIssues: [{ number: 50, body: issueMarker(8) }],
-      nowMs: NOW,
-      graceMinutes: 15,
-    });
+    const plan = sweep({ prs: [stuckEntry(7), stuckEntry(8)], issues: [bot(50, issueMarker(8))] });
     expect(plan.open.map((o) => o.pr.number)).toEqual([7]);
+  });
+});
+
+test.describe("sweepWithFollowUps", () => {
+  // Fake clock; sleep() advances it. `script` is the sequence of runOnce results
+  // (a number is { pending }, an Error is thrown); the last repeats.
+  function harness(script, followUpMinutes) {
+    let t = 0;
+    let i = 0;
+    const slept = [];
+    return {
+      slept,
+      go: () =>
+        sweepWithFollowUps({
+          now: () => t,
+          sleep: async (ms) => {
+            slept.push(ms);
+            t += ms;
+          },
+          followUpMinutes,
+          runOnce: async () => {
+            const r = script[Math.min(i++, script.length - 1)];
+            if (r instanceof Error) throw r;
+            return { pending: r };
+          },
+        }),
+    };
+  }
+  const min = (n) => n * 60000;
+
+  test("nothing pending: one pass, zero sleeps", async () => {
+    const h = harness([0], [5, 16]);
+    expect(await h.go()).toEqual({ passes: 1, failures: 0 });
+    expect(h.slept).toEqual([]);
+  });
+
+  test("pending, resolved at the first follow-up: two passes", async () => {
+    const h = harness([1, 0], [5, 16]);
+    expect(await h.go()).toEqual({ passes: 2, failures: 0 });
+    expect(h.slept).toEqual([min(5)]);
+  });
+
+  test("pending throughout: exactly three passes and 16 minutes of sleep", async () => {
+    const h = harness([2], [5, 16]);
+    expect(await h.go()).toEqual({ passes: 3, failures: 0 });
+    expect(h.slept).toEqual([min(5), min(11)]);
+    expect(h.slept.reduce((a, b) => a + b, 0)).toBe(min(16));
+  });
+
+  test("an empty follow-up list is one pass", async () => {
+    const h = harness([3], []);
+    expect(await h.go()).toEqual({ passes: 1, failures: 0 });
+    expect(h.slept).toEqual([]);
+  });
+
+  test("a pass that throws does not cancel the remaining follow-ups, and is reported", async () => {
+    const h = harness([new Error("boom"), 0], [5, 16]);
+    expect(await h.go()).toEqual({ passes: 2, failures: 1 });
+    expect(h.slept).toEqual([min(5)]);
+    const all = harness([new Error("boom")], [5, 16]);
+    expect(await all.go()).toEqual({ passes: 3, failures: 3 });
   });
 });
 
@@ -482,6 +584,9 @@ case "$ep" in
   repos/o/r/issues/*) echo '{}' ;;
   repos/o/r/issues)
     if [ -f "${fix}/issue-fail" ]; then fail "$(cat "${fix}/issue-fail")"; fi
+    if [ -f "${fix}/issue-fail-assigned" ]; then
+      case "$body" in *assignees*) echo "gh: HTTP 422" >&2; exit 1 ;; esac
+    fi
     if [ -f "${fix}/issue-fail-labelled" ]; then
       case "$body" in *agent-ready*) echo "gh: HTTP 422" >&2; exit 1 ;; esac
     fi
@@ -496,8 +601,8 @@ esac`,
   function runCli(env, extra = []) {
     return spawnSync(
       process.execPath,
-      [SCRIPT, "--repo", "o/r", "--now", "2026-11-19T12:00:00Z", ...extra],
-      { encoding: "utf8", env: { PATH: `${env.bin}:${process.env.PATH}`, HOME: env.dir } },
+      [SCRIPT, "--repo", "o/r", "--now", "2026-11-19T12:00:00Z", ...extra, "--follow-up-minutes", ""],
+      { encoding: "utf8", timeout: 20000, env: { PATH: `${env.bin}:${process.env.PATH}`, HOME: env.dir } },
     );
   }
   const logged = (env, file) => (fs.existsSync(path.join(env.log, file)) ? fs.readFileSync(path.join(env.log, file), "utf8") : "");
@@ -523,7 +628,7 @@ esac`,
     expect(creates(env)).toHaveLength(1);
     expect(writes(env)).toHaveLength(1);
     const body = JSON.parse(logged(env, "body-1.json"));
-    expect(body.body.startsWith("<!-- publish-watchdog:pr=7 -->")).toBe(true);
+    expect(body.body.startsWith(`<!-- publish-watchdog:pr=7 sha=${SHA_A} -->`)).toBe(true);
     expect(body.labels).toEqual(["publish-stuck", "agent-ready"]);
     expect(body.title).not.toContain("cms/");
   });
@@ -532,8 +637,8 @@ esac`,
     const env = setup({
       pulls: stuckPulls(),
       openIssues: [
-        { number: 50, body: "<!-- publish-watchdog:pr=7 -->" },
-        { number: 51, body: "<!-- publish-watchdog:pr=3 -->" },
+        { number: 50, state: "open", user: { login: "github-actions[bot]" }, body: "<!-- publish-watchdog:pr=7 -->" },
+        { number: 51, state: "open", user: { login: "github-actions[bot]" }, body: "<!-- publish-watchdog:pr=3 -->" },
       ],
     });
     const r = runCli(env);
@@ -576,14 +681,14 @@ esac`,
 
   test("a partial check-run list is in flight, never 'every check finished'", () => {
     const page1 = { total_count: 150, check_runs: Array.from({ length: 100 }, (_, i) => run(`ok-${i}`, "completed", "success", { completed_at: iso(60) })) };
-    const env = setup({ pulls: stuckPulls(), fixtures: { [`checks-${SHA_A}-1.json`]: page1 } });
+    const env = setup({ pulls: [makePr({ updated_at: iso(5) })], fixtures: { [`checks-${SHA_A}-1.json`]: page1 } });
     const r = runCli(env);
     expect(r.status).toBe(0);
     expect(writes(env)).toEqual([]);
   });
 
   test("a branch tip that differs from the PR head is in flight (no false alert)", () => {
-    const env = setup({ pulls: stuckPulls(), fixtures: { "ref.json": { object: { sha: "e".repeat(40) } } } });
+    const env = setup({ pulls: [makePr({ updated_at: iso(5) })], fixtures: { "ref.json": { object: { sha: "e".repeat(40) } } } });
     const r = runCli(env);
     expect(r.status).toBe(0);
     expect(writes(env)).toEqual([]);
@@ -599,7 +704,7 @@ esac`,
   test("one PR's check-run read failing still opens the issue for another stuck PR, and spares the skipped PR's issue", () => {
     const env = setup({
       pulls: [makePr(), pr9()],
-      openIssues: [{ number: 50, body: "<!-- publish-watchdog:pr=7 -->" }],
+      openIssues: [{ number: 50, state: "open", user: { login: "github-actions[bot]" }, body: "<!-- publish-watchdog:pr=7 -->" }],
       fixtures: { [`checks-${SHA_A}-fail`]: "" },
     });
     const r = runCli(env);
@@ -624,6 +729,96 @@ esac`,
       expect(runCli(env, extra).status, extra.join(" ")).toBe(2);
     }
     expect(writes(env)).toEqual([]);
+  });
+
+  test("held, test, draft and unarmed PRs cost no per-PR API call", () => {
+    const mk = (n, over) => makePr({ number: n, head: { ref: `cms/p${n}`, sha: String(n).repeat(40).slice(0, 40), repo: { full_name: "o/r" } }, ...over });
+    const pulls = [
+      mk(1, { labels: [{ name: "on-hold" }] }),
+      mk(2, { labels: [{ name: "automated-test" }] }),
+      mk(3, { draft: true }),
+      mk(4, { auto_merge: null }),
+    ];
+    const env = setup({ pulls });
+    const r = runCli(env);
+    expect(r.status).toBe(0);
+    const calls = argv(env).filter(Boolean);
+    expect(calls.filter((l) => /check-runs|git\/ref|\/files|rules\/branches|api repos\/o\/r$/.test(l))).toEqual([]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain("repos/o/r/pulls?state=open");
+    expect(calls[1]).toContain("repos/o/r/issues?state=all");
+  });
+
+  test("issues are listed in any state, labelled, updated in the last 14 days", () => {
+    const env = setup({ pulls: stuckPulls() });
+    runCli(env, ["--dry-run"]);
+    const call = argv(env).find((l) => l.includes("repos/o/r/issues?"));
+    expect(call).toContain("state=all");
+    expect(call).toContain("labels=publish-stuck");
+    expect(call).toContain("since=2026-11-05T12%3A00%3A00.000Z");
+  });
+
+  test("a closed issue for the same head sha means no new issue", () => {
+    const env = setup({
+      pulls: stuckPulls(),
+      openIssues: [{ number: 50, state: "closed", user: { login: "github-actions[bot]" }, body: `<!-- publish-watchdog:pr=7 sha=${SHA_A} -->` }],
+    });
+    const r = runCli(env);
+    expect(r.status).toBe(0);
+    expect(writes(env)).toEqual([]);
+  });
+
+  test("assignees are sent on create when valid", () => {
+    const env = setup({ pulls: stuckPulls() });
+    expect(runCli(env, ["--assignees", "octo-cat,hubot"]).status).toBe(0);
+    expect(JSON.parse(logged(env, "body-1.json")).assignees).toEqual(["octo-cat", "hubot"]);
+  });
+
+  test("invalid assignees are a warning and no assignees, never a failed alert", () => {
+    const env = setup({ pulls: stuckPulls() });
+    const r = runCli(env, ["--assignees", "bad login,$(x)"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("::warning::");
+    expect(JSON.parse(logged(env, "body-1.json")).assignees).toBeUndefined();
+    expect(creates(env)).toHaveLength(1);
+  });
+
+  test("a 422 with assignees retries once without assignees AND without the work label", () => {
+    const env = setup({ pulls: stuckPulls(), fixtures: { "issue-fail-assigned": "" } });
+    const r = runCli(env, ["--assignees", "nobody-here"]);
+    expect(r.status).toBe(0);
+    expect(creates(env)).toHaveLength(2);
+    const retry = JSON.parse(logged(env, "body-2.json"));
+    expect(retry.assignees).toBeUndefined();
+    expect(retry.labels).toEqual(["publish-stuck"]);
+  });
+
+  test("follow-ups re-run the sweep while a publish is in flight (0,0 means two extra passes, no real wait)", () => {
+    const env = setup({ pulls: [makePr({ updated_at: iso(5) })], fixtures: { "checks.json": { total_count: 1, check_runs: [run("build", "in_progress", null)] } } });
+    const r = runCli(env, ["--follow-up-minutes", "0,0"]);
+    expect(r.status).toBe(0);
+    expect(argv(env).filter((l) => l.includes("repos/o/r/pulls?state=open"))).toHaveLength(3);
+  });
+
+  test("nothing in flight: one pass even with follow-ups configured", () => {
+    const env = setup({ pulls: stuckPulls() });
+    runCli(env, ["--follow-up-minutes", "0,0"]);
+    expect(argv(env).filter((l) => l.includes("repos/o/r/pulls?state=open"))).toHaveLength(1);
+  });
+
+  test("--dry-run never sleeps: one pass even while in flight", () => {
+    const env = setup({ pulls: [makePr({ updated_at: iso(5) })], fixtures: { "checks.json": { total_count: 1, check_runs: [run("build", "in_progress", null)] } } });
+    const r = runCli(env, ["--dry-run", "--follow-up-minutes", "5,16"]);
+    expect(r.status).toBe(0);
+    expect(argv(env).filter((l) => l.includes("repos/o/r/pulls?state=open"))).toHaveLength(1);
+  });
+
+  test("a non-numeric --follow-up-minutes is a usage error (exit 2)", () => {
+    const env = setup({ pulls: stuckPulls() });
+    for (const extra of [["--follow-up-minutes", "5,abc"], ["--follow-up-minutes", "-1"], ["--follow-up-minutes"]]) {
+      expect(runCli(env, extra).status, extra.join(" ")).toBe(2);
+    }
+    expect(argv(env).filter(Boolean)).toEqual([]);
   });
 
   test("a list failure exits 1 without echoing the response body", () => {
@@ -665,6 +860,10 @@ test.describe("workflow files", () => {
     expect(sweepCaller["run-name"]).toContain("github.event_name");
   });
 
+  test("sweep caller passes the assignees variable and no site-specific literal", () => {
+    expect(sweepCaller.jobs.sweep.with.assignees).toBe("${{ vars.PUBLISH_ALERT_ASSIGNEES }}");
+  });
+
   test("sweep caller serializes sweeps and never cancels one mid-write", () => {
     expect(sweepCaller.concurrency).toEqual({ group: "publish-watchdog", "cancel-in-progress": false });
     expect(sweepCaller.jobs.sweep.if).toBeUndefined();
@@ -679,11 +878,13 @@ test.describe("workflow files", () => {
     expect(sweepReusable.permissions).toEqual({ contents: "read", "pull-requests": "read", checks: "read", issues: "write" });
     expect(Object.keys(sweepReusable.on)).toEqual(["workflow_call"]);
     expect(Object.keys(sweepReusable.jobs)).toEqual(["sweep"]);
-    expect(sweepReusable.jobs.sweep["timeout-minutes"]).toBe(10);
+    expect(sweepReusable.jobs.sweep["timeout-minutes"]).toBe(30);
     const i = sweepReusable.on.workflow_call.inputs;
-    expect(Object.keys(i).sort()).toEqual(["dry_run", "grace_minutes", "issue_label", "stall_minutes", "work_label"]);
+    expect(Object.keys(i).sort()).toEqual(["assignees", "dry_run", "follow_up_minutes", "grace_minutes", "issue_label", "stall_minutes", "work_label"]);
     expect(i.grace_minutes.default).toBe("15");
     expect(i.stall_minutes.default).toBe("60");
+    expect(i.follow_up_minutes.default).toBe("5,16");
+    expect(i.assignees.default).toBe("");
     expect(i.issue_label.default).toBe("publish-stuck");
     expect(i.work_label.default).toBe("agent-ready");
     expect(i.dry_run.type).toBe("boolean");
@@ -716,7 +917,7 @@ test.describe("workflow files", () => {
     expect(cond).toContain("head_repository.full_name == github.repository");
     expect(cond).toContain("workflow_run.event == 'pull_request'");
     expect(cond).toContain("startsWith(github.event.workflow_run.head_branch, 'cms/')");
-    for (const c of ["failure", "timed_out", "startup_failure"]) expect(cond).toContain(`"${c}"`);
+    for (const c of ["failure", "timed_out", "startup_failure", "cancelled"]) expect(cond).toContain(`"${c}"`);
     expect(cond).toContain("workflow_run.name == 'Deploy to Production'");
     expect(cond).toContain("conclusion == 'success'");
   });
@@ -737,12 +938,94 @@ test.describe("workflow files", () => {
     expect(mint.run).not.toMatch(/contents=write,/);
   });
 
+  function runSend(extraStub = "") {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-signal-"));
+    const bin = path.join(dir, "bin");
+    const log = path.join(dir, "argv.log");
+    writeStubs(bin, {
+      gh: `for a in "$@"; do printf '%s\\n' "$a" >> "${log}"; done\n${extraStub}`,
+    });
+    const step = signalReusable.jobs.signal.steps.find((st) => st.name === "Knock the publish watchdog sweep");
+    const r = runStep(step, {
+      cwd: dir,
+      scratch: path.join(dir, "scratch"),
+      env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", HOME: dir },
+      stepEnv: { GH_TOKEN: "stub-token" },
+    });
+    return { r, args: fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean) : [] };
+  }
+
+  test("the signal's send step EXECUTES with exactly one event_type field, no client_payload, POST to /dispatches", () => {
+    const { r, args } = runSend();
+    expect(r.status).toBe(0);
+    expect(args.slice(0, 4)).toEqual(["api", "-X", "POST", "repos/o/r/dispatches"]);
+    expect(args.filter((a) => a.startsWith("event_type="))).toEqual(["event_type=publish-watchdog"]);
+    expect(args.join(" ")).not.toContain("client_payload");
+    expect(args).toEqual(["api", "-X", "POST", "repos/o/r/dispatches", "-f", "event_type=publish-watchdog"]);
+  });
+
+  test("a failed dispatch is a status-only ::error:: and exit 1, never the response body", () => {
+    const { r } = runSend('echo "SECRET-RESPONSE-BODY"; echo "gh: HTTP 422 SECRET-RESPONSE-BODY" >&2; exit 1');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain("::error::");
+    expect(r.stdout).toContain("HTTP 422");
+    expect(r.stdout + r.stderr).not.toContain("SECRET-RESPONSE-BODY");
+  });
+
   test("the event_type the signal sends equals the types the sweep caller listens for", () => {
-    const send = signalReusable.jobs.signal.steps.find((st) => st.name === "Knock the publish watchdog sweep");
-    const m = /event_type=([A-Za-z0-9_-]+)/.exec(send.run);
-    expect(m).not.toBeNull();
-    expect(sweepCaller.on.repository_dispatch.types).toEqual([m[1]]);
-    expect(send.run).toContain("client_payload={}");
+    const { args } = runSend();
+    const sent = args.find((a) => a.startsWith("event_type=")).slice("event_type=".length);
+    expect(sweepCaller.on.repository_dispatch.types).toEqual([sent]);
+  });
+
+  // Evaluate the signal caller's job `if` the way GitHub does, with a fake
+  // `github` context and the three functions it uses.
+  function signalFires({ name, event = "pull_request", branch = "cms/posts/x", conclusion, head = "o/r" }) {
+    const expression = String(signalCaller.jobs.signal.if).trim();
+    const ast = acorn.parse(`(${expression})`, { ecmaVersion: "latest" });
+    expect(ast.body).toHaveLength(1);
+    const context = {
+      github: {
+        repository: "o/r",
+        event: { workflow_run: { name, event, head_branch: branch, conclusion, head_repository: { full_name: head } } },
+      },
+      startsWith: (a, b) => String(a).startsWith(String(b)),
+      contains: (a, b) => (Array.isArray(a) ? a.includes(b) : String(a).includes(String(b))),
+      fromJSON: (x) => JSON.parse(x),
+    };
+    return Boolean(vm.runInNewContext(`(${expression})`, context, { timeout: 1000 }));
+  }
+
+  const FIRE = [
+    ["a failure on a cms PR", { name: "E2E Tests", conclusion: "failure" }, true],
+    ["a timeout on a cms PR", { name: "E2E Tests", conclusion: "timed_out" }, true],
+    ["a startup failure on a cms PR", { name: "Site verify", conclusion: "startup_failure" }, true],
+    ["a cancellation on a cms PR", { name: "E2E Tests", conclusion: "cancelled" }, true],
+    ["a success of a non-editorial gating workflow on a cms PR", { name: "E2E Tests", conclusion: "success" }, false],
+    ["a skipped non-editorial gating workflow on a cms PR", { name: "E2E Tests", conclusion: "skipped" }, false],
+    ["a success of the editorial workflow on a cms PR (Publish pressed)", { name: "CMS Editorial Workflow", conclusion: "success" }, true],
+    ["a failure of the editorial workflow on a cms PR", { name: "CMS Editorial Workflow", conclusion: "failure" }, true],
+    ["a skipped editorial workflow on a cms PR", { name: "CMS Editorial Workflow", conclusion: "skipped" }, true],
+    ["a failure on a non-cms branch", { name: "E2E Tests", conclusion: "failure", branch: "feat/x" }, false],
+    ["the editorial workflow on a non-cms branch", { name: "CMS Editorial Workflow", conclusion: "success", branch: "feat/x" }, false],
+    ["a failure from a fork head repository", { name: "E2E Tests", conclusion: "failure", head: "fork/r" }, false],
+    ["the editorial workflow from a fork head repository", { name: "CMS Editorial Workflow", conclusion: "success", head: "fork/r" }, false],
+    ["a failure on a push (not a pull_request run)", { name: "E2E Tests", conclusion: "failure", event: "push" }, false],
+    ["a production deploy success", { name: "Deploy to Production", conclusion: "success", event: "push", branch: "main" }, true],
+    ["a production deploy failure", { name: "Deploy to Production", conclusion: "failure", event: "push", branch: "main" }, false],
+  ];
+  for (const [label, ev, expected] of FIRE) {
+    test(`signal caller if: ${label} -> ${expected}`, () => {
+      expect(signalFires(ev)).toBe(expected);
+    });
+  }
+
+  test("the literal names the signal's if compares against are real examples/site callers", () => {
+    const names = new Set(fs.readdirSync(CALLER_DIR).map((f) => parseYaml(read(path.join(CALLER_DIR, f))).name));
+    expect(names.has("CMS Editorial Workflow")).toBe(true);
+    expect(names.has("Deploy to Production")).toBe(true);
+    expect(signalCallerText).toContain("'CMS Editorial Workflow'");
+    expect(signalCallerText).toContain("'Deploy to Production'");
   });
 
   test("the signal's missing-credentials path is a notice and success", () => {

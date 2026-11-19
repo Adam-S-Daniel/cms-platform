@@ -12,7 +12,7 @@
 # If the App is ever granted the issues write scope, the two hops can become one.
 #
 # This job checks out NO site code, reads NO artifacts and passes nothing from
-# the triggering run to the dispatch (an empty client_payload). A site without
+# the triggering run to the dispatch (it sends the event type and no payload). A site without
 # the App variable and secret simply has no fast signal: it gets a notice and a
 # green run, and the scheduled sweep still runs. See docs/CI-INVARIANTS.md
 # "Publish watchdog".
@@ -147,7 +147,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/dispatches" \
-            -f event_type=publish-watchdog -F 'client_payload={}' >/dev/null 2>"$RUNNER_TEMP/dispatch.err"; then
+            -f event_type=publish-watchdog >/dev/null 2>"$RUNNER_TEMP/dispatch.err"; then
             status=$(grep -oE 'HTTP [0-9]{3}' "$RUNNER_TEMP/dispatch.err" | head -n 1 || true)
             echo "::error::could not send the publish-watchdog dispatch (${status:-no HTTP status})."
             exit 1

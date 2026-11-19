@@ -3,7 +3,7 @@ name: Publish watchdog
 # publish (a required check failed, a check has waited more than an hour, or
 # every check finished and it has not merged); the issue notification is the
 # alert and `agent-ready` queues it for the fleet worker. Issues close
-# themselves when the change goes live. Runs on the `publish-watchdog`
+# themselves at the next sweep after the change goes live. Runs on the `publish-watchdog`
 # repository_dispatch knock that `Publish watchdog signal` sends, and every 6
 # hours as a catch-all. No `pull_request` trigger: a job there would be a check
 # run on the pull request, and the editor counts a cancelled or pending check
@@ -47,4 +47,7 @@ jobs:
   sweep:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog.yml@v0.1.181
     with:
+      # A repository variable (comma-separated logins), so this caller carries no
+      # site-specific value. Empty means issues are not assigned.
+      assignees: ${{ vars.PUBLISH_ALERT_ASSIGNEES }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}

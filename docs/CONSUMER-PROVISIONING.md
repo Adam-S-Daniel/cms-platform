@@ -123,6 +123,13 @@ sweep runs within minutes of a failed publish check. Without both knobs it is a
 green no-op that names them as a `::notice::`; the 6-hourly sweep still runs.
 (`docs/CI-INVARIANTS.md` § "Publish watchdog".)
 
+Optional: the repository **variable** `PUBLISH_ALERT_ASSIGNEES` (comma-separated
+GitHub logins, for example `gh variable set PUBLISH_ALERT_ASSIGNEES --body
+alice,bob -R <owner>/<repo>`) assigns each publish-watchdog issue to those people,
+so the alert reaches someone who does not watch the repository. Unset or empty:
+no assignee. An invalid value is a `::warning::` and no assignee, never a failed
+alert.
+
 Why an App and not another PAT: a fine-grained PAT cannot span owners, so the
 PAT was one token per consumer, and each expired on its own calendar — taking
 the ONLY platform down-sync path with it, on a schedule, silently

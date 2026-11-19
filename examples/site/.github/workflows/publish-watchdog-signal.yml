@@ -1,6 +1,7 @@
 name: Publish watchdog signal
 # Knocks the `Publish watchdog` sweep (a `repository_dispatch`) when a gating
-# workflow fails on a same-repository `cms/` pull request, and after a
+# workflow fails or is cancelled on a same-repository `cms/` pull request, when
+# the editorial workflow completes on one (Publish was pressed), and after a
 # production deploy succeeds (so the sweep closes issues for changes that went
 # live). Runs under `workflow_run`, a privileged trigger, so it holds a
 # read-only token and passes nothing from the triggering run: the one credential
@@ -31,11 +32,17 @@ permissions:
 
 jobs:
   signal:
+    # Fires for: a failed, timed-out, startup-failed or cancelled gating run on a
+    # same-repository `cms/` pull request; ANY run of the editorial workflow on one
+    # (it runs on every label, so its completion is the moment Publish is
+    # pressed, including on a pull request whose checks already failed); and a
+    # successful production deploy (so the sweep closes resolved issues).
     if: >-
       github.event.workflow_run.head_repository.full_name == github.repository
       && ((github.event.workflow_run.event == 'pull_request'
            && startsWith(github.event.workflow_run.head_branch, 'cms/')
-           && contains(fromJSON('["failure","timed_out","startup_failure"]'), github.event.workflow_run.conclusion))
+           && (contains(fromJSON('["failure","timed_out","startup_failure","cancelled"]'), github.event.workflow_run.conclusion)
+               || github.event.workflow_run.name == 'CMS Editorial Workflow'))
           || (github.event.workflow_run.name == 'Deploy to Production'
               && github.event.workflow_run.conclusion == 'success'))
     uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog-signal.yml@v0.1.181

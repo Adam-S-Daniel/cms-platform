@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 /*
- * publish-watchdog.js — alert within minutes when a CMS publish is stuck.
+ * publish-watchdog.js — raise an issue when a CMS publish is stuck.
  *
  * THE PROBLEM (adamdaniel.ai PR 5001, 2026-11-18): every Decap Save/Publish is
  * a pull request on a same-repository `cms/...` branch that auto-merges when
@@ -19,6 +19,9 @@
  * deploy succeeds) and every 6 hours as a catch-all. There is no pull_request
  * trigger on purpose: a job there would be a check run on the pull request,
  * and the editor counts a cancelled or pending check run against the publish.
+ * While an armed publish is still in flight after a pass, it looks again at the
+ * follow-up minutes (default 5 and 16) so a green-but-unmerged pull request is
+ * caught without the cron; the 60-minute stall rule is not covered by that.
  * Everything but `main` is pure or injected; the CLI talks to GitHub through
  * the `gh` CLI with argv arrays (never a shell string).
  *
@@ -28,7 +31,7 @@
  *
  * Usage: node scripts/publish-watchdog.js --repo <owner>/<name> [--dry-run]
  *   [--grace-minutes N] [--stall-minutes N] [--issue-label L] [--work-label L]
- *   [--now <ISO time>]
+ *   [--follow-up-minutes "5,16"] [--assignees login,login] [--now <ISO time>]
  */
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
@@ -36,6 +39,7 @@ const { hasE2eSlugSignature } = require("../e2e/public-content.js");
 
 const DEFAULT_GRACE_MINUTES = 15;
 const DEFAULT_STALL_MINUTES = 60;
+const DEFAULT_FOLLOW_UPS = [5, 16];
 const GH_TIMEOUT_MS = 30000;
 const MAX_CHECK_RUN_PAGES = 10;
 const FAILING_CONCLUSIONS = new Set([
@@ -112,17 +116,29 @@ function classifyPublish({
   }
   if (!isArmed(pr, labels)) return ignored("Nobody has pressed Publish yet.");
 
+  const stall = stallMinutes === undefined || stallMinutes === null ? DEFAULT_STALL_MINUTES : stallMinutes;
+  const updatedAt = ts(pr.updated_at);
+
   // GitHub updates a pull request's head.sha a moment after its branch moves,
   // so check runs read for the old head describe a commit that is already
-  // replaced. An unknown branch tip is not a mismatch.
-  if (typeof branchSha === "string" && branchSha !== (pr.head && pr.head.sha)) {
-    return { state: "in-flight", reason: "A newer commit is still being picked up.", failing: [] };
+  // replaced; and a partial list of check runs must never read as "every check
+  // finished". Both are in flight while the pull request is young, stuck once
+  // GitHub has not caught up for the stall window. An unknown branch tip is
+  // not a mismatch.
+  const lagging =
+    (typeof branchSha === "string" && branchSha !== (pr.head && pr.head.sha)) || !!incomplete;
+  if (lagging) {
+    if (updatedAt !== null && Number.isFinite(nowMs) && nowMs - updatedAt >= stall * 60 * 1000) {
+      return {
+        state: "stuck",
+        reason: `GitHub has not caught up with this pull request for more than ${stall} minutes.`,
+        failing: [],
+        lagging: true,
+        stallMinutes: stall,
+      };
+    }
+    return { state: "in-flight", reason: "GitHub is still catching up with this pull request.", failing: [] };
   }
-  // A partial list of check runs must never read as "every check finished".
-  if (incomplete) {
-    return { state: "in-flight", reason: "Not every check run could be read.", failing: [] };
-  }
-  const stall = stallMinutes === undefined || stallMinutes === null ? DEFAULT_STALL_MINUTES : stallMinutes;
   const newest = newestPerName(checkRuns);
   // An empty list of required contexts is as unknown as a missing one.
   const required = Array.isArray(requiredContexts) && requiredContexts.length > 0 ? requiredContexts : null;
@@ -145,17 +161,21 @@ function classifyPublish({
         (required === null || required.includes(r.name)),
     )
     .map((r) => ({ name: r.name, conclusion: r.conclusion, url: r.html_url }));
-  if (failing.length > 0) {
+  const unfinished = newest.filter((r) => r.status !== "completed");
+  // With a readable required list a required failure alerts at once. Without one
+  // every failure counts, but only once nothing is still running, so a failing
+  // optional check on a pull request about to merge does not alert.
+  if (failing.length > 0 && (required !== null || unfinished.length === 0)) {
     return { state: "stuck", reason: "A required check failed.", failing };
   }
-  const unfinished = newest.filter((r) => r.status !== "completed");
   if (unfinished.length > 0) {
-    // In flight, but not forever: a check that has been unfinished for the stall
-    // window (a hung job, or one parked on an approval) is stuck. An unparseable
-    // start time never alerts by itself.
+    // In flight, but not forever: a check unfinished for the stall window (a
+    // hung job, or one parked on an approval) is stuck. A run with no usable
+    // start time is aged from the pull request's last update; with neither, no
+    // alert.
     let oldest = null;
     for (const r of unfinished) {
-      const t = ts(r.started_at);
+      const t = ts(r.started_at) !== null ? ts(r.started_at) : updatedAt;
       if (t !== null && (oldest === null || t < oldest)) oldest = t;
     }
     if (oldest !== null && Number.isFinite(nowMs) && nowMs - oldest >= stall * 60 * 1000) {
@@ -163,6 +183,7 @@ function classifyPublish({
         state: "stuck",
         reason: `A check has been waiting for more than ${stall} minutes.`,
         failing: [],
+        stallMinutes: stall,
         waiting: unfinished.map((r) => ({ name: r.name, status: r.status, url: r.html_url })),
       };
     }
@@ -170,7 +191,7 @@ function classifyPublish({
   }
   let latest = null;
   if (newest.length === 0) {
-    latest = ts(pr.updated_at);
+    latest = updatedAt;
   } else {
     for (const r of newest) {
       const t = ts(r.completed_at);
@@ -187,22 +208,42 @@ function classifyPublish({
   return { state: "in-flight", reason: "Waiting for the merge.", failing: [] };
 }
 
-function issueMarker(prNumber) {
-  return `<!-- publish-watchdog:pr=${prNumber} -->`;
+// The marker is the first line of the body. With a head sha it also records
+// which commit the alert was raised for, so a human closing the issue is
+// respected until the pull request gets a new commit.
+function issueMarker(prNumber, sha) {
+  return /^[0-9a-f]{40}$/.test(String(sha || ""))
+    ? `<!-- publish-watchdog:pr=${prNumber} sha=${sha} -->`
+    : `<!-- publish-watchdog:pr=${prNumber} -->`;
+}
+
+const ISSUE_AUTHOR = "github-actions[bot]";
+const MARKER_RE = /<!-- publish-watchdog:pr=(\d+)(?: sha=([0-9a-f]{40}))? -->/;
+
+function stallPhrase(w, stall) {
+  if (w.status === "waiting") return "waiting for someone to approve it";
+  if (["queued", "pending", "requested"].includes(w.status)) return "has not started";
+  return `has been running for more than ${stall} minutes`;
 }
 
 function renderIssue({ repo, pr, verdict }) {
   const prUrl = `https://github.com/${repo}/pull/${pr.number}`;
   const failing = (verdict && verdict.failing) || [];
   const waiting = (verdict && verdict.waiting) || [];
+  const stall = (verdict && verdict.stallMinutes) || DEFAULT_STALL_MINUTES;
   let checks;
   let advice;
   if (waiting.length > 0) {
     checks =
-      "A check is waiting for someone to approve or start it:\n\n" +
-      waiting.map((w) => `- [${w.name}](${w.url}): ${w.status}`).join("\n");
+      "These checks have not finished:\n\n" +
+      waiting.map((w) => `- [${w.name}](${w.url}): ${stallPhrase(w, stall)}`).join("\n");
     advice =
-      "What to do: open the pull request, then the waiting check, and approve or start it. " +
+      "What to do: open the pull request, then each check above, and approve or start it " +
+      "(or cancel and re-run it if it is hung). Nothing was lost; the content is still in the editor.";
+  } else if (verdict && verdict.lagging) {
+    checks = `GitHub has not caught up with this pull request for more than ${stall} minutes.`;
+    advice =
+      "What to do: open the pull request and check that its latest commit has started its checks. " +
       "Nothing was lost; the content is still in the editor.";
   } else {
     checks =
@@ -214,7 +255,7 @@ function renderIssue({ repo, pr, verdict }) {
       "Nothing was lost; the content is still in the editor.";
   }
   const body = [
-    issueMarker(pr.number),
+    issueMarker(pr.number, pr.head && pr.head.sha),
     "",
     "A change that someone published from the editor has not gone live.",
     "",
@@ -229,18 +270,27 @@ function renderIssue({ repo, pr, verdict }) {
   return { title: `Publish stuck: pull request #${pr.number} has not gone live`, body };
 }
 
-// Only a marker that opens the body counts, so an issue quoting another pull
-// request's marker lower down is not mistaken for that pull request's issue.
-const MARKER_RE = /^<!-- publish-watchdog:pr=(\d+) -->/;
+// Our own issues only: authored by the Actions bot and carrying a marker.
+function parseMarker(issue) {
+  if (!issue || !issue.user || issue.user.login !== ISSUE_AUTHOR) return null;
+  const m = MARKER_RE.exec(issue.body || "");
+  return m ? { pr: Number(m[1]), sha: m[2] || null } : null;
+}
 
-// An issue closes when its pull request went live, was closed, or is no longer
-// a publish anyone is waiting on (`ignored`). It stays open while the pull
-// request is open and armed, stuck or not. A pull request in `skipped` (its
-// state could not be read this run) leaves its issue alone.
-function planSweep({ prs, openIssues, nowMs, graceMinutes, stallMinutes, skipped }) {
+// `issues` are the watchdog's issues in ANY state. An issue closes when its pull
+// request went live, was closed, or is no longer a publish anyone is waiting on
+// (`ignored`); it stays open while the pull request is open and armed, stuck or
+// not. Only open issues close. No new issue opens for a pull request and head
+// commit that already has one in any state (a human closing the alert is
+// respected until the pull request gets a new commit; a marker without a sha
+// matches any commit). A pull request in `skipped` (its state could not be read
+// this run) leaves its issues alone. `pending` counts armed pull requests still
+// in flight.
+function planSweep({ prs, issues, nowMs, graceMinutes, stallMinutes, skipped }) {
   const skip = new Set([...(skipped || [])].map(Number));
   const stuck = new Map();
   const waiting = new Set();
+  let pending = 0;
   for (const entry of prs || []) {
     const verdict = classifyPublish({
       pr: entry.pr,
@@ -255,19 +305,49 @@ function planSweep({ prs, openIssues, nowMs, graceMinutes, stallMinutes, skipped
     });
     if (verdict.state === "stuck") stuck.set(entry.pr.number, { pr: entry.pr, verdict });
     if (verdict.state !== "ignored") waiting.add(entry.pr.number);
+    if (verdict.state === "in-flight") pending++;
   }
-  const marked = new Map();
-  for (const issue of openIssues || []) {
-    const m = MARKER_RE.exec(issue.body || "");
-    if (m) marked.set(Number(m[1]), issue.number);
+  const parsed = [];
+  for (const issue of issues || []) {
+    const mk = parseMarker(issue);
+    if (mk) parsed.push({ ...mk, number: issue.number, open: !issue.state || issue.state === "open" });
   }
   const open = [];
-  for (const [n, entry] of stuck) if (!marked.has(n) && !skip.has(n)) open.push(entry);
-  const close = [];
-  for (const [n, issueNumber] of marked) {
-    if (!waiting.has(n) && !skip.has(n)) close.push({ issueNumber, prNumber: n });
+  for (const [n, entry] of stuck) {
+    if (skip.has(n)) continue;
+    const sha = entry.pr.head && entry.pr.head.sha;
+    const have = parsed.some((x) => x.pr === n && (x.sha === null || x.sha === sha));
+    if (!have) open.push(entry);
   }
-  return { open, close };
+  const close = [];
+  for (const x of parsed) {
+    if (x.open && !waiting.has(x.pr) && !skip.has(x.pr)) close.push({ issueNumber: x.number, prNumber: x.pr });
+  }
+  return { open, close, pending };
+}
+
+// Run `runOnce` (one full sweep) and, while armed publishes are still in flight,
+// again at each follow-up (minutes since the first pass). Bounded: it stops
+// after the last follow-up whatever the state. A pass that throws does not
+// cancel the remaining follow-ups. All time and sleeping are injected.
+async function sweepWithFollowUps({ runOnce, sleep, now, followUpMinutes = [5, 16] }) {
+  const start = now();
+  let passes = 0;
+  let failures = 0;
+  let next = 0;
+  for (;;) {
+    passes++;
+    let pending = null;
+    try {
+      pending = (await runOnce()).pending;
+    } catch (err) {
+      failures++;
+    }
+    if (pending === 0 || next >= followUpMinutes.length) break;
+    const wait = start + followUpMinutes[next++] * 60000 - now();
+    await sleep(Math.max(0, wait));
+  }
+  return { passes, failures };
 }
 
 // ── gh-backed plumbing ──────────────────────────────────────────────────────
@@ -319,6 +399,26 @@ function numberFlag(argv, name, fallback) {
   return Number(raw);
 }
 
+// A comma-separated list of non-negative numbers. Absent gives the default; an
+// empty value is an empty list (disabled); anything non-numeric is a usage error.
+function listFlag(argv, name, fallback) {
+  if (!argv.includes(name)) return fallback;
+  const raw = flag(argv, name);
+  if (raw === undefined) {
+    const e = new Error(`${name} needs a value (use "" to disable).`);
+    e.usage = true;
+    throw e;
+  }
+  if (raw === "") return [];
+  const parts = raw.split(",");
+  if (!parts.every((p) => /^\d+(\.\d+)?$/.test(p))) {
+    const e = new Error(`${name} needs comma-separated non-negative numbers.`);
+    e.usage = true;
+    throw e;
+  }
+  return parts.map(Number);
+}
+
 function listPages(what, endpointBase, maxPages = 20) {
   const all = [];
   for (let page = 1; page <= maxPages; page++) {
@@ -363,20 +463,24 @@ function readBranchSha(repo, ref) {
   }
 }
 
-function createIssue(repo, pr, verdict, issueLabel, workLabel) {
+function createIssue(repo, pr, verdict, issueLabel, workLabel, assignees) {
   const { title, body } = renderIssue({ repo, pr, verdict });
   const labels = [issueLabel];
   if (workLabel) labels.push(workLabel);
+  const first = { title, body, labels };
+  if (assignees && assignees.length > 0) first.assignees = assignees;
   let created;
   try {
     created = ghApi(`opening an issue for #${pr.number}`, `repos/${repo}/issues`, {
       method: "POST",
-      body: { title, body, labels },
+      body: first,
     });
   } catch (err) {
-    // Only a validation failure (a missing work label) is retried. Any other
+    // Only a validation failure (a missing work label, an assignee who cannot be
+    // assigned) is retried, once, with the optional parts dropped. Any other
     // failure may follow a create that did happen server-side.
-    if (!workLabel || err.status !== "422") throw err;
+    const dropsSomething = !!workLabel || !!first.assignees;
+    if (err.status !== "422" || !dropsSomething) throw err;
     created = ghApi(`opening an issue for #${pr.number} (retry)`, `repos/${repo}/issues`, {
       method: "POST",
       body: { title, body, labels: [issueLabel] },
@@ -419,51 +523,29 @@ function readRequiredContexts(repo) {
   }
 }
 
-function main(argv) {
-  const repo = flag(argv, "--repo");
-  if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
-    console.error("::error::publish-watchdog needs --repo <owner>/<name>.");
-    return 1;
-  }
-  const dryRun = argv.includes("--dry-run");
-  let graceMinutes;
-  let stallMinutes;
-  try {
-    graceMinutes = numberFlag(argv, "--grace-minutes", DEFAULT_GRACE_MINUTES);
-    stallMinutes = numberFlag(argv, "--stall-minutes", DEFAULT_STALL_MINUTES);
-  } catch (err) {
-    console.error(`::error::${err.message}`);
-    return 2;
-  }
-  const issueLabel = flag(argv, "--issue-label") || "publish-stuck";
-  const workLabel = flag(argv, "--work-label") === undefined ? "agent-ready" : flag(argv, "--work-label");
-  const nowRaw = flag(argv, "--now");
-  const nowMs = nowRaw === undefined ? Date.now() : Date.parse(nowRaw);
-  if (!Number.isFinite(nowMs)) {
-    console.error("::error::--now is not a parseable time.");
-    return 1;
-  }
+const ASSIGNEES_RE = /^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$/;
+const SINCE_DAYS = 14;
 
-  let candidates;
-  try {
-    const all = listPages("listing open pull requests", `repos/${repo}/pulls?state=open`);
-    candidates = all.filter(
-      (pr) =>
-        pr &&
-        pr.head &&
-        typeof pr.head.ref === "string" &&
-        pr.head.ref.startsWith("cms/") &&
-        pr.head.repo &&
-        pr.base &&
-        pr.base.repo &&
-        pr.head.repo.full_name === pr.base.repo.full_name,
-    );
-  } catch (err) {
-    console.error(`::error::${err.message}`);
-    return 1;
-  }
-
-  const armed = candidates.filter((pr) => !pr.draft && isArmed(pr, labelNames(pr)));
+// One full sweep: read, plan, act. Resolves { pending }; throws on a failure that
+// stops the pass (listing pull requests or issues, an issue write, or every
+// armed pull request unreadable).
+function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinutes, stallMinutes, nowMs }) {
+  const all = listPages("listing open pull requests", `repos/${repo}/pulls?state=open`);
+  const candidates = all.filter(
+    (pr) =>
+      pr &&
+      pr.head &&
+      typeof pr.head.ref === "string" &&
+      pr.head.ref.startsWith("cms/") &&
+      pr.head.repo &&
+      pr.base &&
+      pr.base.repo &&
+      pr.head.repo.full_name === pr.base.repo.full_name,
+  );
+  // Drafts, held, test and unarmed pull requests cost no further API call.
+  const armed = candidates.filter(
+    (pr) => !pr.draft && !labelNames(pr).some((l) => SKIP_LABELS.has(l)) && isArmed(pr, labelNames(pr)),
+  );
   const requiredContexts = armed.length > 0 ? readRequiredContexts(repo) : null;
   const entries = [];
   const skipped = [];
@@ -489,21 +571,17 @@ function main(argv) {
     }
   }
 
-  let openIssues;
-  try {
-    openIssues = listPages(
-      "listing open issues",
-      `repos/${repo}/issues?state=open&labels=${encodeURIComponent(issueLabel)}`,
-    ).filter((i) => !i.pull_request);
-  } catch (err) {
-    console.error(`::error::${err.message}`);
-    return 1;
-  }
+  const since = new Date(nowMs - SINCE_DAYS * 86400000).toISOString();
+  const issues = listPages(
+    "listing issues",
+    `repos/${repo}/issues?state=all&labels=${encodeURIComponent(issueLabel)}&since=${encodeURIComponent(since)}`,
+  ).filter((i) => !i.pull_request);
 
-  const plan = planSweep({ prs: entries, openIssues, nowMs, graceMinutes, stallMinutes, skipped });
+  const plan = planSweep({ prs: entries, issues, nowMs, graceMinutes, stallMinutes, skipped });
   console.log(
     `Publish watchdog: ${candidates.length} cms pull request(s), ${armed.length} armed, ` +
-      `${skipped.length} skipped, ${plan.open.length} to open, ${plan.close.length} to close.`,
+      `${skipped.length} skipped, ${plan.open.length} to open, ${plan.close.length} to close, ` +
+      `${plan.pending} in flight.`,
   );
   for (const { pr, verdict } of plan.open) {
     const names = [...verdict.failing, ...(verdict.waiting || [])].map((f) => f.name).join(", ");
@@ -512,21 +590,65 @@ function main(argv) {
   for (const c of plan.close) console.log(`  close: issue #${c.issueNumber} (pull request #${c.prNumber})`);
   if (dryRun) {
     console.log("Dry run: nothing written.");
-    return 0;
+    return { pending: plan.pending };
   }
+  for (const { pr, verdict } of plan.open) createIssue(repo, pr, verdict, issueLabel, workLabel, assignees);
+  for (const c of plan.close) closeWatchdogIssue(repo, c.issueNumber, c.prNumber);
+  if (armed.length > 0 && skipped.length === armed.length) {
+    throw new Error("every armed pull request failed to read");
+  }
+  return { pending: plan.pending };
+}
 
+async function main(argv) {
+  const repo = flag(argv, "--repo");
+  if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+    console.error("::error::publish-watchdog needs --repo <owner>/<name>.");
+    return 1;
+  }
+  const dryRun = argv.includes("--dry-run");
+  let graceMinutes;
+  let stallMinutes;
+  let followUps;
   try {
-    for (const { pr, verdict } of plan.open) createIssue(repo, pr, verdict, issueLabel, workLabel);
-    for (const c of plan.close) closeWatchdogIssue(repo, c.issueNumber, c.prNumber);
+    graceMinutes = numberFlag(argv, "--grace-minutes", DEFAULT_GRACE_MINUTES);
+    stallMinutes = numberFlag(argv, "--stall-minutes", DEFAULT_STALL_MINUTES);
+    followUps = listFlag(argv, "--follow-up-minutes", DEFAULT_FOLLOW_UPS);
   } catch (err) {
     console.error(`::error::${err.message}`);
+    return 2;
+  }
+  const issueLabel = flag(argv, "--issue-label") || "publish-stuck";
+  const workLabel = flag(argv, "--work-label") === undefined ? "agent-ready" : flag(argv, "--work-label");
+  let assignees = [];
+  const assigneesRaw = flag(argv, "--assignees");
+  if (assigneesRaw) {
+    if (ASSIGNEES_RE.test(assigneesRaw)) assignees = assigneesRaw.split(",");
+    else console.log("::warning::--assignees is not a comma-separated list of logins; creating issues without assignees.");
+  }
+  const nowRaw = flag(argv, "--now");
+  const fixedNow = nowRaw === undefined ? null : Date.parse(nowRaw);
+  if (nowRaw !== undefined && !Number.isFinite(fixedNow)) {
+    console.error("::error::--now is not a parseable time.");
     return 1;
   }
-  if (armed.length > 0 && skipped.length === armed.length) {
-    console.error("::error::every armed pull request failed to read.");
-    return 1;
-  }
-  return 0;
+  const now = () => (fixedNow === null ? Date.now() : fixedNow);
+
+  const result = await sweepWithFollowUps({
+    runOnce: async () => {
+      try {
+        return sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinutes, stallMinutes, nowMs: now() });
+      } catch (err) {
+        console.error(`::error::${err.message}`);
+        throw err;
+      }
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now,
+    // A dry run never sleeps: one pass.
+    followUpMinutes: dryRun ? [] : followUps,
+  });
+  return result.failures === result.passes ? 1 : 0;
 }
 
 module.exports = {
@@ -534,11 +656,12 @@ module.exports = {
   issueMarker,
   renderIssue,
   planSweep,
+  sweepWithFollowUps,
   isTestFixturePath,
   DEFAULT_GRACE_MINUTES,
   DEFAULT_STALL_MINUTES,
 };
 
 if (require.main === module) {
-  process.exit(main(process.argv.slice(2)));
+  main(process.argv.slice(2)).then((code) => process.exit(code));
 }
