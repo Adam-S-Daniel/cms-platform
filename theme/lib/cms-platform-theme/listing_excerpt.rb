@@ -73,8 +73,7 @@ module Jekyll
         script style iframe object embed svg math video audio canvas template
         noscript form input button select textarea title head frame frameset
         applet
-      ],
-      whitespace_elements: {}
+      ]
     )
 
     module_function
