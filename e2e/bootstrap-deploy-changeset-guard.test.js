@@ -106,6 +106,9 @@ const EXPECTED_PARAMETERS = [
   "HstsMaxAgeSeconds=31536000",
   "HstsScope=this-host-only",
   "AdminCspMode=report-only",
+  "PublicCspMode=report-only",
+  "PublicCspConnectSrc=",
+  "ToolAppsCsp=",
 ];
 
 // The tools deploy.sh runs besides aws (bash builtins aside), plus the
@@ -139,6 +142,23 @@ case "$*" in
       denied) echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
       no-param) echo "" ;;
       *) echo "\${STUB_DEPLOYED_CSP-report-only}" ;;
+    esac ;;
+  "cloudformation describe-stacks "*"ParameterKey=='PublicCspMode'"*)
+    case "\${STUB_DEPLOYED_PUBLIC_CSP-report-only}" in
+      missing-stack) echo "An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id example does not exist" >&2; exit 254 ;;
+      denied) echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
+      no-param) echo "" ;;
+      *) echo "\${STUB_DEPLOYED_PUBLIC_CSP-report-only}" ;;
+    esac ;;
+  "cloudformation describe-stacks "*"ParameterKey=='PublicCspConnectSrc'"*)
+    case "\${STUB_DEPLOYED_CONNECT_SRC-}" in
+      denied) echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
+      *) echo "\${STUB_DEPLOYED_CONNECT_SRC-}" ;;
+    esac ;;
+  "cloudformation describe-stacks "*"ParameterKey=='ToolAppsCsp'"*)
+    case "\${STUB_DEPLOYED_TOOL_APPS_CSP-}" in
+      denied) echo "An error occurred (AccessDenied) when calling the DescribeStacks operation: User: arn:aws:iam::000000000000:user/example is not authorized" >&2; exit 254 ;;
+      *) echo "\${STUB_DEPLOYED_TOOL_APPS_CSP-}" ;;
     esac ;;
   "cloudformation describe-stacks "*"Stacks[0].StackStatus"*) echo "\${STUB_STACK_STATUS-UPDATE_COMPLETE}" ;;
   "cloudformation execute-change-set "*) exit 0 ;;
@@ -763,3 +783,104 @@ test("ADMIN_CSP_MODE unset, describe-stacks fails for another reason: refused, t
   expect(r.out).not.toContain(ACCOUNT_ID);
   expect(callsOf(r.calls, "deploy")).toEqual([]);
 });
+
+// ── The public CSP parameters (cms-platform#1067) ──────────────────────────
+// PublicCspMode keeps the deployed mode like AdminCspMode. The two free-text
+// parameters are sent when SET (even empty) and kept from the stack when
+// UNSET: a redeploy that forgets one must not strip a site's analytics
+// endpoints or replace its tool apps' policy.
+const sent = (r, key) => overrides(callsOf(r.calls, "deploy")[0]).filter((p) => p.startsWith(`${key}=`));
+const RUM_SRC = "https://dataplane.rum.us-east-1.amazonaws.com https://cognito-identity.us-east-1.amazonaws.com";
+const TOOLS_POLICY = "default-src 'self'; connect-src 'self' https://raw.githubusercontent.com";
+
+test("PUBLIC_CSP_MODE unset, deployed stack enforces: enforce is kept, not downgraded", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_DEPLOYED_PUBLIC_CSP: "enforce" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain("Public CSP mode: enforce (kept from deployed stack)");
+  expect(sent(r, "PublicCspMode")).toEqual(["PublicCspMode=enforce"]);
+});
+
+for (const deployed of ["missing-stack", "no-param", "None"]) {
+  test(`PUBLIC_CSP_MODE unset, deployed answers ${deployed}: falls back to report-only`, () => {
+    const r = runDeploy({
+      changes: SAFE_CHANGES,
+      STUB_DEPLOYED_PUBLIC_CSP: deployed,
+      ...(deployed === "missing-stack" ? { STUB_DEPLOYED_CSP: "missing-stack", ALLOW_STACK_CREATE: "1" } : {}),
+    });
+    expect(r.out).toContain("Public CSP mode: report-only (default: no deployed PublicCspMode)");
+    expect(sent(r, "PublicCspMode")).toEqual(["PublicCspMode=report-only"]);
+  });
+}
+
+test("PUBLIC_CSP_MODE=enforce over a deployed report-only: the explicit value wins", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, PUBLIC_CSP_MODE: "enforce", STUB_DEPLOYED_PUBLIC_CSP: "report-only" });
+  expect(r.status, r.out).toBe(0);
+  expect(r.out).toContain("Public CSP mode: enforce (set by PUBLIC_CSP_MODE)");
+  expect(sent(r, "PublicCspMode")).toEqual(["PublicCspMode=enforce"]);
+});
+
+test("PUBLIC_CSP_MODE=sideways: refused before any aws call", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, PUBLIC_CSP_MODE: "sideways" });
+  expect(r.status).not.toBe(0);
+  expect(r.stderr).toContain("PUBLIC_CSP_MODE=sideways is not enforce or report-only");
+  expect(r.calls).toEqual([]);
+});
+
+test("PUBLIC_CSP_MODE unset, the deployed mode cannot be read: refused, the CLI's message not echoed", () => {
+  const r = runDeploy({ changes: SAFE_CHANGES, STUB_DEPLOYED_PUBLIC_CSP: "denied" });
+  expect(r.status).not.toBe(0);
+  expect(r.stderr).toContain(`Could not read the deployed PublicCspMode of stack ${STACK}`);
+  expect(r.out).not.toContain("arn:aws");
+  expect(callsOf(r.calls, "deploy")).toEqual([]);
+});
+
+test("the free-text parameters are kept from the deployed stack when unset", () => {
+  const r = runDeploy({
+    changes: SAFE_CHANGES,
+    STUB_DEPLOYED_CONNECT_SRC: RUM_SRC,
+    STUB_DEPLOYED_TOOL_APPS_CSP: TOOLS_POLICY,
+  });
+  expect(r.status, r.out).toBe(0);
+  expect(sent(r, "PublicCspConnectSrc")).toEqual([`PublicCspConnectSrc=${RUM_SRC}`]);
+  expect(sent(r, "ToolAppsCsp")).toEqual([`ToolAppsCsp=${TOOLS_POLICY}`]);
+});
+
+test("the free-text parameters are sent as set, and an explicit empty value clears a deployed one", () => {
+  const set = runDeploy({ changes: SAFE_CHANGES, PUBLIC_CSP_CONNECT_SRC: RUM_SRC, TOOL_APPS_CSP: TOOLS_POLICY });
+  expect(set.status, set.out).toBe(0);
+  expect(sent(set, "PublicCspConnectSrc")).toEqual([`PublicCspConnectSrc=${RUM_SRC}`]);
+  expect(sent(set, "ToolAppsCsp")).toEqual([`ToolAppsCsp=${TOOLS_POLICY}`]);
+  const cleared = runDeploy({
+    changes: SAFE_CHANGES,
+    PUBLIC_CSP_CONNECT_SRC: "",
+    TOOL_APPS_CSP: "",
+    STUB_DEPLOYED_CONNECT_SRC: RUM_SRC,
+    STUB_DEPLOYED_TOOL_APPS_CSP: TOOLS_POLICY,
+  });
+  expect(cleared.status, cleared.out).toBe(0);
+  expect(sent(cleared, "PublicCspConnectSrc")).toEqual(["PublicCspConnectSrc="]);
+  expect(sent(cleared, "ToolAppsCsp")).toEqual(["ToolAppsCsp="]);
+});
+
+for (const bad of ["https://example.net; script-src *", "https://example.net, default-src *", 'https://example.net"']) {
+  test(`PUBLIC_CSP_CONNECT_SRC=${JSON.stringify(bad)}: refused before any aws call`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, PUBLIC_CSP_CONNECT_SRC: bad });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("PUBLIC_CSP_CONNECT_SRC may not contain");
+    expect(r.calls).toEqual([]);
+  });
+}
+
+for (const [key, stubVar] of [
+  ["PublicCspConnectSrc", "STUB_DEPLOYED_CONNECT_SRC"],
+  ["ToolAppsCsp", "STUB_DEPLOYED_TOOL_APPS_CSP"],
+]) {
+  test(`${key} unset and unreadable: refused before the change set`, () => {
+    const r = runDeploy({ changes: SAFE_CHANGES, [stubVar]: "denied" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(`Could not read the deployed ${key} of stack ${STACK}`);
+    expect(r.out).not.toContain("arn:aws");
+    expect(callsOf(r.calls, "deploy")).toEqual([]);
+  });
+}
+

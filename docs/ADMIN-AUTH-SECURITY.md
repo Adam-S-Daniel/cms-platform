@@ -952,6 +952,71 @@ that, which changes nothing a deployed site uses.
    `ADMIN_CSP_MODE=report-only bash infrastructure/bootstrap/deploy.sh`; that
    value is then the deployed one, and later redeploys keep report-only.
 
+### The public pages' policy (#1067)
+
+Everything outside `/admin/*` carries its own Content-Security-Policy on the
+baseline headers policy. The rule is one sentence: **a public page loads
+nothing from another host.** No outside script, frame, stylesheet, font, image,
+plugin or media; no `<base>` (pasted into a post body it sent every menu link
+on that page to another site); forms post only to the site. It was built from
+what both consumers' pages load, measured by loading every built page in
+Chromium under the policy, and `scripts/outside-resources.rb` is the same rule
+at publish time, where the author can still act on it.
+
+| Parameter (env var) | What it does |
+|---|---|
+| `PublicCspMode` (`PUBLIC_CSP_MODE`) | `report-only` (default) or `enforce`. Unset keeps the deployed stack's mode, exactly like `AdminCspMode`. |
+| `PublicCspConnectSrc` (`PUBLIC_CSP_CONNECT_SRC`) | Extra `connect-src` sources, space-separated. A site with CloudWatch RUM lists `https://dataplane.rum.<region>.amazonaws.com https://cognito-identity.<region>.amazonaws.com`. |
+| `ToolAppsCsp` (`TOOL_APPS_CSP`) | The whole policy for `/assets/tools/*`, a site's embedded tool apps. Empty gives them the public policy. |
+
+The two free-text values are sent when the variable is SET, even to the empty
+string, and kept from the deployed stack when it is UNSET, so a redeploy that
+forgets one cannot strip a site's analytics endpoints. Put them in the site's
+`infrastructure/site-params.env`.
+
+What it still allows, and why:
+
+- **Inline scripts and styles** (`'unsafe-inline'`). The theme's analytics
+  loader and share row, a site's own layout and an HTML embed in a post are
+  inline today. Dropping it from `script-src` is the next step: it would stop
+  a script written into a post from running anywhere, and it needs those
+  scripts moved into files first.
+- **`connect-src https://api.github.com` and `img-src blob:`**, for the live
+  preview page (`/preview/`), which shows an image the editor has uploaded but
+  not published by reading it from the entry's branch.
+
+**Tool apps get their own policy because they are applications, not content.**
+adamdaniel.ai's evals explorer fetches its results from
+`raw.githubusercontent.com` and loads Google Fonts; its memory map loads a
+diagram library from cdnjs. A post or page is never served from
+`/assets/tools/`, so what a site allows there widens nothing an author can
+write to. The policy that keeps both of that site's apps working, measured
+the same way:
+
+```
+default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://raw.githubusercontent.com; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'
+```
+
+Vendoring the diagram library and the fonts into the apps would shrink that
+to the one `connect-src` host.
+
+**Rolling it out, per site.** Nothing reaches a site until its stack is
+updated, and the first update only reports.
+
+1. Add the site's `PUBLIC_CSP_CONNECT_SRC` and `TOOL_APPS_CSP` to
+   `infrastructure/site-params.env`, then
+   `bash infrastructure/bootstrap/deploy.sh`. Read the change set as in the
+   runbook above: one new response headers policy, two modified, and a new
+   `/assets/tools/*` behavior on each distribution. Nothing removed.
+2. Confirm with GET that a public page now sends
+   `Content-Security-Policy-Report-Only` and still sends
+   `Content-Security-Policy: frame-ancestors 'self'`.
+3. Load every public page in a browser and read the console: there must be no
+   `[Report Only]` violation. Then open the editor's live preview on a draft
+   with a newly uploaded image.
+4. `PUBLIC_CSP_MODE=enforce bash infrastructure/bootstrap/deploy.sh`. Back out
+   with `PUBLIC_CSP_MODE=report-only`.
+
 ## Rules that follow
 
 - **Bumping Decap means recomputing the hash**, in all three shells, from the

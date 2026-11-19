@@ -106,6 +106,9 @@ function deployedAs(template, hasAdmin) {
     HstsIncludesSubdomains: false,
     HstsPreloads: false,
     AdminCspEnforced: false,
+    // The public policy's conditions (#1067), at their parameter defaults.
+    PublicCspEnforced: false,
+    HasToolAppsCsp: false,
   };
   const resources = {};
   for (const [name, res] of Object.entries(template.Resources)) {

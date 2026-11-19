@@ -154,6 +154,42 @@ Parameters:
       policy as Content-Security-Policy. Flip it only after an editor
       round-trip shows no violations (docs/ADMIN-AUTH-SECURITY.md).
 
+  PublicCspMode:
+    Type: String
+    Default: "report-only"
+    AllowedValues: ["report-only", "enforce"]
+    Description: >
+      How the public pages (everything but /admin/*) send their
+      Content-Security-Policy. 'report-only' (the default) sends the full
+      policy as Content-Security-Policy-Report-Only, so a violation is logged
+      to the browser console and nothing is blocked, while frame-ancestors
+      stays enforced. 'enforce' sends it as Content-Security-Policy. Flip it
+      only after a crawl of every page and an editor live-preview round trip
+      show no violations (docs/ADMIN-AUTH-SECURITY.md).
+
+  PublicCspConnectSrc:
+    Type: String
+    Default: ""
+    AllowedPattern: "^[^;,\"]*$"
+    Description: >
+      Extra connect-src sources for the public pages, space-separated, for a
+      site that reports to a service from the browser. A site with CloudWatch
+      RUM lists its region's endpoints, e.g.
+      "https://dataplane.rum.us-east-1.amazonaws.com
+      https://cognito-identity.us-east-1.amazonaws.com". Empty for a site
+      that reports nowhere.
+
+  ToolAppsCsp:
+    Type: String
+    Default: ""
+    AllowedPattern: "^[^\"]*$"
+    Description: >
+      The whole Content-Security-Policy for /assets/tools/* (a site's embedded
+      tool apps), without frame-ancestors, which is always added. Empty (the
+      default) gives the apps the public policy. A site whose app loads from
+      another host on purpose writes the policy that names it; a post or page
+      is never served from this path, so nothing here widens theirs.
+
 Conditions:
   ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
   ShouldCreateApexDnsRecords: !Equals [!Ref CreateApexDnsRecords, "true"]
@@ -162,6 +198,8 @@ Conditions:
   HstsIncludesSubdomains: !Not [!Equals [!Ref HstsScope, "this-host-only"]]
   HstsPreloads: !Equals [!Ref HstsScope, "include-subdomains-preload"]
   AdminCspEnforced: !Equals [!Ref AdminCspMode, "enforce"]
+  PublicCspEnforced: !Equals [!Ref PublicCspMode, "enforce"]
+  HasToolAppsCsp: !Not [!Equals [!Ref ToolAppsCsp, ""]]
 
 Resources:
 
@@ -487,7 +525,8 @@ Resources:
   # S3 website hosting sends no security headers, so CloudFront adds them.
   # A cache behavior takes ONE policy, so the /admin/* policy repeats the
   # baseline and adds the admin CSP. Both policies serve both distributions
-  # (a third, for preview regression.json CORS, is below, #789);
+  # (a third, for preview regression.json CORS, is below, #789, and a fourth,
+  # for a site's embedded tool apps, follows the baseline, #1067);
   # names derive from ResourcePrefix because they are unique per account
   # (and an account holds at most 20 custom response headers policies).
   #
@@ -496,12 +535,35 @@ Resources:
   # /admin, embedded tool pages use same-origin /assets/tools/ iframes, the
   # live preview is a separate tab on a BroadcastChannel, and the
   # visual-regression harness navigates top-level.
+  #
+  # The public CSP (#1067), built from what the public pages of both
+  # consumers actually load, measured by loading every built page under it:
+  #   default-src 'self'  a page loads nothing from another host: no outside
+  #               script, frame, stylesheet, font, image, plugin or media.
+  #               scripts/outside-resources.rb is the same rule at publish
+  #               time, where the author can still act on it.
+  #   script-src  'unsafe-inline' for now: the theme's analytics loader and
+  #   style-src   share row, a site's own layout and an HTML embed in a post
+  #               are inline. Dropping it from script-src is the next step
+  #               and needs those moved into files first.
+  #   img-src     data: for inline icons; blob: because the live preview page
+  #               (/preview/) shows an image the editor has uploaded but not
+  #               published through an object URL.
+  #   connect-src https://api.github.com for that same page, which reads the
+  #               draft image from the entry's branch. PublicCspConnectSrc
+  #               adds a site's own reporting endpoints (CloudWatch RUM).
+  #   base-uri 'none'  a <base> pasted into a post body sent every menu link
+  #               on that page to another site.
+  #   form-action 'self', object-src 'none'  nothing here posts elsewhere or
+  #               embeds a plugin.
+  # Report-Only until PublicCspMode is 'enforce', the way the admin policy
+  # was introduced; frame-ancestors is enforced in both modes.
   BaselineResponseHeadersPolicy:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:
       ResponseHeadersPolicyConfig:
         Name: !Sub "${ResourcePrefix}-baseline-headers"
-        Comment: "HSTS, nosniff, referrer policy, same-origin framing (cms-platform#515)"
+        Comment: "HSTS, nosniff, referrer policy, same-origin framing, the public CSP (cms-platform#515, #1067)"
         SecurityHeadersConfig:
           StrictTransportSecurity:
             AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
@@ -517,8 +579,66 @@ Resources:
             FrameOption: SAMEORIGIN
             Override: true
           ContentSecurityPolicy:
-            ContentSecurityPolicy: "frame-ancestors 'self'"
+            ContentSecurityPolicy: !If
+              - PublicCspEnforced
+              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com ${PublicCspConnectSrc}; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'"
+              - "frame-ancestors 'self'"
             Override: true
+        CustomHeadersConfig: !If
+          - PublicCspEnforced
+          - !Ref AWS::NoValue
+          - Items:
+              - Header: Content-Security-Policy-Report-Only
+                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com ${PublicCspConnectSrc}; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+                Override: true
+
+  # The policy for /assets/tools/*, a site's embedded tool apps. They are
+  # whole applications the site vendors, not CMS content, and one may load
+  # from another host on purpose (adamdaniel.ai's evals explorer fetches its
+  # results from GitHub). A cache behavior takes ONE policy, so this repeats
+  # the baseline and swaps in ToolAppsCsp when the site sets it; unset, the
+  # apps get the public policy. Its mode follows PublicCspMode. A post or page
+  # is never served from this path, so a wider policy here widens nothing an
+  # author can write to.
+  ToolAppsResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ResourcePrefix}-tool-apps-headers"
+        Comment: "Baseline headers plus the embedded tool apps' CSP (cms-platform#1067)"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: !Ref HstsMaxAgeSeconds
+            IncludeSubdomains: !If [HstsIncludesSubdomains, true, false]
+            Preload: !If [HstsPreloads, true, false]
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          FrameOptions:
+            FrameOption: SAMEORIGIN
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: !If
+              - PublicCspEnforced
+              - !If
+                - HasToolAppsCsp
+                - !Sub "${ToolAppsCsp}; frame-ancestors 'self'"
+                - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com ${PublicCspConnectSrc}; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'"
+              - "frame-ancestors 'self'"
+            Override: true
+        CustomHeadersConfig: !If
+          - PublicCspEnforced
+          - !Ref AWS::NoValue
+          - Items:
+              - Header: Content-Security-Policy-Report-Only
+                Value: !If
+                  - HasToolAppsCsp
+                  - !Ref ToolAppsCsp
+                  - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com ${PublicCspConnectSrc}; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+                Override: true
 
   # The admin CSP, built from what theme/admin actually loads:
   #   script-src  Decap from unpkg (SRI-pinned in the shells); 'unsafe-eval'
@@ -678,6 +798,22 @@ Resources:
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
             ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt PreviewRouterFunction.FunctionARN
+              - EventType: viewer-response
+                FunctionARN: !GetAtt PreviewLocationFixerFunction.FunctionARN
+          # A site's embedded tool apps (#1067): same as the default behavior
+          # but with their own policy, and the same functions for the same
+          # reason as /admin/* above.
+          - PathPattern: /assets/tools/*
+            TargetOriginId: s3-website
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            ResponseHeadersPolicyId: !Ref ToolAppsResponseHeadersPolicy
             AllowedMethods: [GET, HEAD, OPTIONS]
             CachedMethods: [GET, HEAD]
             Compress: true
@@ -876,6 +1012,22 @@ Resources:
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
             ResponseHeadersPolicyId: !Ref AdminResponseHeadersPolicy
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            FunctionAssociations: !If
+              - HasAdminDomain
+              - - EventType: viewer-request
+                  FunctionARN: !GetAtt ApexAdminRedirectFunction.FunctionARN
+              - !Ref "AWS::NoValue"
+          # A site's embedded tool apps (#1067): the default behavior with
+          # their own policy. It carries the admin redirect association only
+          # to stay identical to the default; no /admin path matches it.
+          - PathPattern: /assets/tools/*
+            TargetOriginId: s3-website
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+            ResponseHeadersPolicyId: !Ref ToolAppsResponseHeadersPolicy
             AllowedMethods: [GET, HEAD, OPTIONS]
             CachedMethods: [GET, HEAD]
             Compress: true
