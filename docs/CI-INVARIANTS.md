@@ -1847,16 +1847,20 @@ watcher missed.
 
 An open, non-draft `cms/` PR that someone armed (auto-merge set, or the
 `cms/ready` or `decap-cms/pending_publish` label) is **stuck** when a newest
-check run (newest per name) failed, was cancelled, timed out, needed action or
-failed to start AND is a required context (any failure counts when the rules
-cannot be read), or when every check finished at least the grace period ago (3
-minutes while watching live, 15 in a sweep) and it still has not merged. A
+check run (newest per name) failed, timed out, needed action or failed to start
+AND is a required context (any failure counts when the rules cannot be read),
+or when every check finished at least the grace period ago (3 minutes while
+watching live, 15 in a sweep) and it still has not merged. A `cancelled` run
+counts as a failure only once it has stayed the newest run of its name for that
+grace period: a concurrency group cancels a run a moment before its
+replacement registers, on every label the editorial workflow sees. A
 watcher still in flight after its 25 minutes also opens an issue ("not gone live
 after 25 minutes"). Check runs named `publish-watchdog...` are dropped first, or
 the watcher would wait on itself. An unparseable timestamp never makes a PR
 stuck by itself: an unknown must not raise an alert. One issue per PR, found by a
-hidden marker; it closes with a comment when the PR goes live, closes, or is
-pushed again and is back in flight.
+hidden marker; it closes with a comment when the PR goes live, is closed, or
+is no longer armed. It stays open while the PR is open and armed, even back in
+flight, so a sweep never closes what a timed-out watcher just opened.
 
 **Why not `workflow_run`?** It is a privileged trigger, and the contributor
 trust boundary (`e2e/contributor-trust-boundary-rules.js`) forbids a

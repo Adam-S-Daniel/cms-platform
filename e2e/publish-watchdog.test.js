@@ -123,6 +123,29 @@ test.describe("classifyPublish", () => {
       { checkRuns: [run("build", "completed", c)] },
       "stuck",
     ]),
+    // A cancelled run is usually a concurrency group about to replace it, so
+    // it only counts once it has stayed the newest run for the grace window;
+    // a real failure counts the moment it lands.
+    [
+      "required cancelled a minute ago: not a failure yet",
+      { checkRuns: [run("build", "completed", "cancelled", { completed_at: iso(1) }), run("slow", "in_progress", null)] },
+      "in-flight",
+    ],
+    [
+      "required cancelled, alone, a minute ago: still waiting",
+      { checkRuns: [run("build", "completed", "cancelled", { completed_at: iso(1) })] },
+      "in-flight",
+    ],
+    [
+      "required cancelled with an unreadable time: never stuck by itself",
+      { checkRuns: [run("build", "completed", "cancelled", { completed_at: "nonsense" }), run("slow", "in_progress", null)] },
+      "in-flight",
+    ],
+    [
+      "required failure a minute ago: stuck at once",
+      { checkRuns: [run("build", "completed", "failure", { completed_at: iso(1) })] },
+      "stuck",
+    ],
     [
       "failing NON-required check while others pend",
       { checkRuns: [run("optional", "completed", "failure"), run("build", "in_progress", null)] },
@@ -311,22 +334,29 @@ test.describe("planSweep", () => {
     expect(plan).toEqual({ open: [], close: [] });
   });
 
-  test("closes when the PR is back in flight, merged (closed), or gone from the list", () => {
+  test("closes when the PR is merged or closed, gone from the list, or no longer armed; not while it is in flight", () => {
     const plan = planSweep({
-      prs: [inFlightEntry(7), { ...stuckEntry(8), pr: makePr({ number: 8, state: "closed" }) }],
+      prs: [
+        // Still open and armed, checks running again: a watcher that timed out
+        // opened this issue, and closing it here would flap.
+        inFlightEntry(7),
+        { ...stuckEntry(8), pr: makePr({ number: 8, state: "closed" }) },
+        { ...stuckEntry(10), pr: makePr({ number: 10, auto_merge: null, labels: [] }) },
+      ],
       openIssues: [
         { number: 50, body: issueMarker(7) },
         { number: 51, body: issueMarker(8) },
         { number: 52, body: issueMarker(9) },
+        { number: 53, body: issueMarker(10) },
       ],
       nowMs: NOW,
       graceMinutes: 15,
     });
     expect(plan.open).toEqual([]);
     expect(plan.close).toEqual([
-      { issueNumber: 50, prNumber: 7 },
       { issueNumber: 51, prNumber: 8 },
       { issueNumber: 52, prNumber: 9 },
+      { issueNumber: 53, prNumber: 10 },
     ]);
   });
 

@@ -120,11 +120,22 @@ function classifyPublish({
     (r) => !(selfCheckPrefix && String(r.name).startsWith(selfCheckPrefix)),
   );
   const newest = newestPerName(others);
+  // A `cancelled` run is usually a concurrency group replacing it with a newer
+  // run that has not registered yet (the editorial workflow does this on every
+  // label), so by itself it is not a failure until it has stayed the newest
+  // run of its name for the grace window. Every other bad conclusion is final
+  // the moment it lands.
+  const settled = (r) => {
+    if (r.conclusion !== "cancelled") return true;
+    const t = ts(r.completed_at);
+    return t !== null && Number.isFinite(nowMs) && nowMs - t >= grace * 60 * 1000;
+  };
   const failing = newest
     .filter(
       (r) =>
         r.status === "completed" &&
         FAILING_CONCLUSIONS.has(r.conclusion) &&
+        settled(r) &&
         (requiredContexts === null || requiredContexts === undefined || requiredContexts.includes(r.name)),
     )
     .map((r) => ({ name: r.name, conclusion: r.conclusion, url: r.html_url }));
@@ -184,8 +195,14 @@ function renderIssue({ repo, pr, verdict }) {
   return { title: `Publish stuck: pull request #${pr.number} has not gone live`, body };
 }
 
+// An issue closes when its pull request went live, was closed, or is no longer
+// a publish anyone is waiting on (`ignored`). It stays open while the pull
+// request is open and armed, stuck or not: a watcher that timed out on a
+// publish still in flight opened it for a reason, and a sweep that closed it
+// again would flap with the next watcher.
 function planSweep({ prs, openIssues, nowMs, graceMinutes, selfCheckPrefix }) {
   const stuck = new Map();
+  const waiting = new Set();
   for (const entry of prs || []) {
     const verdict = classifyPublish({
       pr: entry.pr,
@@ -197,6 +214,7 @@ function planSweep({ prs, openIssues, nowMs, graceMinutes, selfCheckPrefix }) {
       selfCheckPrefix,
     });
     if (verdict.state === "stuck") stuck.set(entry.pr.number, { pr: entry.pr, verdict });
+    if (verdict.state !== "ignored") waiting.add(entry.pr.number);
   }
   const marked = new Map();
   for (const issue of openIssues || []) {
@@ -207,7 +225,7 @@ function planSweep({ prs, openIssues, nowMs, graceMinutes, selfCheckPrefix }) {
   for (const [n, entry] of stuck) if (!marked.has(n)) open.push(entry);
   const close = [];
   for (const [n, issueNumber] of marked) {
-    if (!stuck.has(n)) close.push({ issueNumber, prNumber: n });
+    if (!waiting.has(n)) close.push({ issueNumber, prNumber: n });
   }
   return { open, close };
 }
@@ -389,6 +407,7 @@ function readRequiredContexts(repo) {
 async function watchMain({ repo, prNumber, dryRun, issueLabel, workLabel, opts, nowFn }) {
   let requiredContexts;
   let haveRequired = false;
+  let filesFor = { sha: null, files: null };
   const fetchState = async () => {
     const pr = ghApi(`reading pull request #${prNumber}`, `repos/${repo}/pulls/${prNumber}`);
     if (pr.state !== "open") {
@@ -402,13 +421,18 @@ async function watchMain({ repo, prNumber, dryRun, issueLabel, workLabel, opts, 
       `reading check runs for #${prNumber}`,
       `repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`,
     );
-    let files = null;
-    try {
-      const list = ghApi(`reading files for #${prNumber}`, `repos/${repo}/pulls/${prNumber}/files?per_page=100`);
-      files = Array.isArray(list) && list.length < 100 ? list.map((f) => f.filename) : null;
-    } catch (err) {
-      console.log(`::warning::${err.message}`);
+    // The file list only changes with the head commit: read it once per sha,
+    // not on every poll (a 25-minute watch is 75 polls on a shared token).
+    if (filesFor.sha !== pr.head.sha) {
+      filesFor = { sha: pr.head.sha, files: null };
+      try {
+        const list = ghApi(`reading files for #${prNumber}`, `repos/${repo}/pulls/${prNumber}/files?per_page=100`);
+        filesFor.files = Array.isArray(list) && list.length < 100 ? list.map((f) => f.filename) : null;
+      } catch (err) {
+        console.log(`::warning::${err.message}`);
+      }
     }
+    const files = filesFor.files;
     return {
       pr,
       checkRuns: (runs && runs.check_runs) || [],
