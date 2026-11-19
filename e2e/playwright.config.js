@@ -324,6 +324,10 @@ const PLATFORM_META_SPECS = [
   // reusable DEFINITION (via readWorkflow) plus the examples/site caller —
   // platform-internal, self-CI only.
   "content-pr-guard.test.js",
+  // The content route: reads the platform's own workflows, composite action
+  // and scripts/ (content-route.js requires ../scripts/content-pr-guard, which
+  // a consumer's placed harness does not have). Platform-internal.
+  "content-route.test.js",
   // Reads the scheduled-run-health reusable + caller DEFINITIONS and the
   // scripts/audit-scheduled-runs.js helpers (consumer ships only a thin
   // wrapper) — platform-internal, self-CI only.
@@ -799,6 +803,9 @@ const PLATFORM_META_SPECS = [
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
+  // Pages and feeds revalidate, assets cache: parses the same platform
+  // deploy-production.yml DEFINITION.
+  "deploy-production-document-cache.test.js",
   // The production admin prefix is uploaded no-cache (#663): same reason.
   "deploy-production-admin-cache.test.js",
   // #635 — ASCII, length-capped entry file names: parses the theme/admin

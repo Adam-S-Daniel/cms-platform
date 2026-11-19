@@ -166,13 +166,43 @@ cd e2e/fixture-site && bundle config set --local path vendor/bundle && bundle in
 precisely what does NOT travel with a clone, so this is a one-time step on every
 fresh checkout, not a fix someone forgot to commit.
 
+## Pages and feeds revalidate; only assets cache for a day
+
+`deploy-production.yml` uploads the site in two passes, because one
+`aws s3 sync` sets one `Cache-Control`:
+
+| Pass | What | Header |
+|---|---|---|
+| 1 | everything that is not a document: images, CSS, scripts, fonts | `public, max-age=86400` |
+| 2 | documents: `*.html`, `*.xml` (feeds, sitemap), `*.txt`, `*.json` | `public, max-age=0, s-maxage=86400, must-revalidate` |
+
+Until 2026-11-19 there was one pass and everything got the day-long header.
+A browser or feed reader that had fetched a page before a deploy was entitled
+to keep it for 24 hours: the owner's new post was in `feed.xml` and missing
+from his own NetNewsWire subscription to that URL, and a returning visitor saw
+yesterday's home page. Now a client asks again on every visit and gets a 304
+until something changed. `s-maxage` lets CloudFront keep its own copy, which is
+safe only because the deploy invalidates `/*` afterwards.
+
+Check it: `curl -sSI https://<apex>/feed.xml | grep -i cache-control`. A page
+uploaded before the release that carries this keeps its old header until the
+next deploy re-uploads it (every deploy re-uploads every file: a CI build
+gives each one a new modification time).
+
+Filter order in pass 2 is load-bearing (`aws s3 sync` applies filters in order
+and the last match wins): it excludes `*`, includes the document types, and
+only then excludes `404.html` and `admin/*`. `e2e/deploy-production-document-
+cache.test.js` evaluates both passes' filters the way the CLI does and fails
+if a document lands on the day-long pass, an asset on the revalidating one, or
+`404.html` or `admin/` in either.
+
 ## The production 404 page is never cacheable
 
 CloudFront answers every missing key on the production distribution with
 `/404.html` (`CustomErrorResponses`, `ErrorCachingMinTTL: 0`) and passes that
-object's own `Cache-Control` through. `deploy-production.yml` syncs the site
-with `public, max-age=86400`, so while `404.html` rode that sync every 404
-reached browsers as cacheable for a day
+object's own `Cache-Control` through. `deploy-production.yml` used to sync the
+whole site with `public, max-age=86400`, so while `404.html` rode that sync
+every 404 reached browsers as cacheable for a day
 (`curl -sSI https://<apex>/assets/images/uploads/nonexistent.jpeg` showed it).
 An editor's draft image 404s on the admin's origin until its post publishes,
 and that cached 404 kept the image broken in the editor's browser after the

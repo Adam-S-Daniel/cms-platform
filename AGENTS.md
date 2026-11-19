@@ -102,7 +102,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/FLEET-CALLER-CURRENCY.md` | how a fleet repo's `scheduled-run-health` caller stays current: the self-resolving checkout, the currency lane, a fleet repo's cms-platform Dependabot `ignore`. |
 | `docs/CI-INVARIANTS.md` | a required check, a scheduled workflow, the label audit, `site-verify.yml`, `site-agent-checks.yml`, the webServer, a loop. |
 | `docs/E2E-PARALLELISM.md` | e2e workers, sharding, the browser install. |
-| `docs/CONTENT-PUBLISH-LATENCY.md` | a content-only e2e lane (shelved), a post's time-to-live. |
+| `docs/CONTENT-PUBLISH-LATENCY.md` | the content route, a post's time-to-live, an e2e or site-verify job that did no work. |
 | `docs/PUBLISHING-UX.md` | what an editor sees of publish/status, or a spec that publishes. |
 | `docs/CROSS-POSTING.md` | `cross-post.yml`, `scripts/cross_post/cross_post.py`, Mastodon dedupe, the LinkedIn leg and its 60-day token, the Substack paste-by-hand leg. |
 | `docs/MEDIA-DISCOVERY.md` | `media-discovery.yml`: checks, config, secrets. |
@@ -186,6 +186,20 @@ control RETARGETS selectors matching it by ROLE AND NAME; `mergeable` is absent
 from the `/pulls` LIST response (§4); every GitHub GET
 under `theme/admin/` passes `cache: "no-cache"` (#386); a spec publishes ONE
 entry per page (#342). Incidents → `docs/PUBLISHING-UX.md` §2.3, §4.
+
+### A content-only pull request skips the machinery tests (the content route)
+
+A post is gated by checks about the post. On a same-repository `cms/` pull
+request whose every changed path is CMS content, `e2e / e2e` succeeds without
+running a test, `site-verify` skips only the verifier's self-tests, and a CMS
+edit to a seam file collection skips visual review. **Every doubt routes
+`full`**; the site's publish gate (`cms.site_gate.path`) and `_tools/` always
+do. A spec that reads served content must not judge an author's value: it now
+fails the next bump or candidate, not the publish. **A classifier that can skip
+tests or a review never does `require("<name>")`**: it runs inside the pull
+request's tree, where a committed `node_modules/` wins (`e2e/trusted-yaml.js`).
+Rule: `e2e/content-route.js` (`content-route.test.js`). →
+`docs/CONTENT-PUBLISH-LATENCY.md`.
 
 ### A required status check nobody publishes blocks forever, silently (#371)
 

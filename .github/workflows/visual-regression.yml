@@ -218,22 +218,32 @@ jobs:
             exit "$diff_status"
           fi
           printf 'Changed files vs origin/%s:\n' "$(escape_workflow_data "$BASE")"
-          has_tool_edit=false
+          # A MODIFIED `_tools/` entry or `_data/` file is the only change a
+          # CMS pull request can have skipped by reading file CONTENT (a tool
+          # entry's review fields; the seam's file collections and the site's
+          # publish gate), so only then is the merge base and a YAML parser
+          # needed.
+          has_cms_edit=false
           while IFS= read -r -d '' status && IFS= read -r -d '' f; do
             printf '  - %q\n' "$(escape_workflow_data "$f")"
-            if [ "$status" = M ] && [[ "$f" == _tools/* ]]; then has_tool_edit=true; fi
+            if [ "$status" = M ] && [[ "$f" == _tools/* || "$f" == _data/* ]]; then has_cms_edit=true; fi
           done < "$changed_paths"
           merge_base=""
-          if [ "$VR_FROM_CMS" = true ] && [ "$has_tool_edit" = true ]; then
+          if [ "$VR_FROM_CMS" = true ] && [ "$has_cms_edit" = true ]; then
             merge_base=$(git merge-base "origin/${BASE}" HEAD)
-            # The classifier reads tool front matter with the `yaml` package
-            # (exact pin, no dependencies). If the install fails it cannot
-            # load it and keeps the review: never a skip it cannot justify.
+            # The classifier reads tool front matter and `_config.yml` with
+            # the `yaml` package (exact pin, no dependencies). If the install
+            # fails it cannot load it and keeps the review: never a skip it
+            # cannot justify.
+            # Installed outside the workspace and named by absolute path: the
+            # classifier never resolves `yaml` by name, because the workspace
+            # is the pull request's tree and a `node_modules/yaml` committed
+            # there would be loaded first (e2e/trusted-yaml.js).
             yaml_dir="${RUNNER_TEMP:-$(mktemp -d)}/vr-yaml"
             if npm install --prefix "$yaml_dir" --no-audit --no-fund --ignore-scripts yaml@2.9.1 > /dev/null 2>&1; then
-              export NODE_PATH="$yaml_dir/node_modules"
+              export CMS_PLATFORM_YAML_PACKAGE="$yaml_dir/node_modules/yaml"
             else
-              echo "::warning::could not install yaml; a CMS edit to a _tools/ entry keeps its review"
+              echo "::warning::could not install yaml; a CMS edit to a _tools/ entry or a _data/ file keeps its review"
             fi
           fi
           salient=$(node .cms-platform/e2e/visual-regression-salient.js --status --base-rev "$merge_base" < "$changed_paths")

@@ -225,10 +225,46 @@ jobs:
         # cached 404 kept the image broken in the editor's browser after
         # publish. An excluded key is also spared by `--delete`, so the
         # existing object stays in place until the next step overwrites it.
+        #
+        # TWO PASSES, because one `aws s3 sync` sets one Cache-Control.
+        # Pass 1 is everything that is NOT a document (images, CSS, scripts,
+        # fonts): a day in the browser, as before. Pass 2 is the DOCUMENTS
+        # (pages, feeds, the sitemap, robots.txt, JSON): `max-age=0,
+        # must-revalidate`, so a browser or a feed reader asks again on every
+        # visit and gets a cheap 304 until something changed. Under the old
+        # single day-long header a feed reader that had fetched `feed.xml`
+        # before a post went live was entitled to keep that copy for 24 hours:
+        # the owner's post was in the feed and absent from his own reader
+        # (NetNewsWire, 2026-11-19), and a returning visitor's browser showed
+        # yesterday's home page. `s-maxage=86400` keeps CloudFront's own copy
+        # for a day, which is safe ONLY because "Invalidate CloudFront cache"
+        # below clears `/*` on every deploy; e2e/deploy-production-document-
+        # cache.test.js holds the two together.
+        #
+        # Filter order is load-bearing: `aws s3 sync` applies filters in
+        # order and the LAST match wins. Pass 2 therefore starts from
+        # `--exclude '*'`, includes the document types, and only THEN excludes
+        # `404.html` and `admin/*` again (both end in `.html` or hold HTML).
+        # `--delete` in each pass removes only keys its own filters cover, so
+        # a deleted page is pruned by pass 2 and a deleted image by pass 1.
         run: |
           aws s3 sync ./_site "s3://${PRODUCTION_BUCKET}/" \
             --delete \
             --cache-control "public, max-age=86400" \
+            --exclude '*.html' \
+            --exclude '*.xml' \
+            --exclude '*.txt' \
+            --exclude '*.json' \
+            --exclude '404.html' \
+            --exclude 'admin/*'
+          aws s3 sync ./_site "s3://${PRODUCTION_BUCKET}/" \
+            --delete \
+            --cache-control "public, max-age=0, s-maxage=86400, must-revalidate" \
+            --exclude '*' \
+            --include '*.html' \
+            --include '*.xml' \
+            --include '*.txt' \
+            --include '*.json' \
             --exclude '404.html' \
             --exclude 'admin/*'
 
