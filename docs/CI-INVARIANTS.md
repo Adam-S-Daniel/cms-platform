@@ -1790,6 +1790,38 @@ that serves its own stylesheet (jodidaniel.com) must carry the same three
 rules for any post or page body it renders. jodidaniel.com has no posts
 today (`cms.base_collections: []`); if posts are added there, both apply.
 
+## A built page loads nothing from another site: `outside-resources.rb`
+
+The owner's rule: a page on these sites loads no script, frame, plugin,
+video, stylesheet, font or image from another host. A browser policy that
+enforces it blocks silently (the post publishes green and the embed is blank),
+so `site-verify.yml` runs `scripts/outside-resources.rb` over the built site
+on every pull request and on both routes: it fails with a line naming the page
+and the address, where the author can still act on it.
+
+- **It reads the built pages, parsed as a browser parses them** (Nokogiri's
+  HTML5 parser, from the site's bundle through the theme gem's `sanitize`
+  dependency), never the source and never a regex over markup. A tag inside a
+  comment or a code sample loads nothing and is not a finding.
+- **A load is something the browser fetches or submits to by itself**: the
+  elements in the script's `LOADS` table, and a `<link>` whose `rel` fetches.
+  A link the reader may click is not one.
+- **This site is a relative address or the `url:` host in `_config.yml`.**
+  `data:` passes only on images. A protocol-relative `//host` is a finding
+  even for this host: write the path.
+- **A `<base>` element is always a finding**, and a `<meta http-equiv=refresh>`
+  that leaves the site: pasted into a post body, `<base>` sent every menu link
+  on that page to another site with every check green.
+- **`admin/` and `assets/tools/` are not read.** The editor has its own policy
+  and loads Decap from a pinned CDN; a site's embedded tool apps are whole
+  applications it vendors, and may fetch live data (adamdaniel.ai's evals
+  explorer reads its results from GitHub).
+
+The theme's own preview page loads `marked` from the gem's copy for the same
+reason. Locked by `theme/spec/outside_resources_test.rb` (the rule as a table,
+and the script run over real files) and `e2e/site-verify.test.js` (the step,
+its place after the build, and the sparse fetch).
+
 ## JavaScript HTML sinks take escaped values only: `eslint.html-sinks.config.mjs` (#982)
 
 The same rule for JavaScript that writes HTML. `eslint-plugin-no-unsanitized`

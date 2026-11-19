@@ -21,7 +21,8 @@
 # `scripts/verify-build-artifacts.rb`, this builds the site and runs it;
 # otherwise it prints a notice and succeeds. It always runs the platform's
 # `scripts/destination-conflicts.rb` (no two source files may be written to
-# one address) and `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
+# one address), `scripts/outside-resources.rb` (no built page loads from
+# another site) and `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
 # self-test list (`scripts/test-verify-build-artifacts.rb`) when present, using
 # the site's bundle before building, except on a pull request that changes CMS
 # content only (the `content` route, e2e/content-route.js): content cannot
@@ -132,6 +133,7 @@ jobs:
             package.json
             scripts/liquid-escape-lint.rb
             scripts/destination-conflicts.rb
+            scripts/outside-resources.rb
             scripts/content-pr-guard.js
             e2e/package.json
             e2e/content-route.js
@@ -229,6 +231,21 @@ jobs:
         env:
           JEKYLL_ENV: production
         run: bundle exec ruby .cms-platform/scripts/destination-conflicts.rb .
+
+      - name: Check that no page loads from another site
+        # The owner's rule: a page on these sites loads nothing from another
+        # host. The public Content-Security-Policy blocks it in the reader's
+        # browser, silently: the post publishes green and the embed is blank.
+        # This is the same rule at publish time, naming the page and the
+        # address. It also refuses a `<base>` element, which sent every menu
+        # link on a post's page to another site (cms-platform issue 1067).
+        # It reads the site the build step above wrote, with Nokogiri's HTML5
+        # parser from the site's own bundle (the theme gem's `sanitize`
+        # dependency brings it), and skips `admin/` and `assets/tools/`, which
+        # carry their own policy. Unconditional: on a site with no verifier
+        # nothing was built, and the script says so and succeeds. Runs on
+        # BOTH routes: it is a check about the content.
+        run: bundle exec ruby .cms-platform/scripts/outside-resources.rb .
 
       - name: Lint Liquid output escaping
         # Every `{{ ... }}` in the site's HTML/XML templates must end in a
