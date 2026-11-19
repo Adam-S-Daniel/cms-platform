@@ -62,4 +62,21 @@ Gem::Specification.new do |spec|
   spec.add_runtime_dependency "jekyll-seo-tag", ">= 2.9.1", "< 3"
   spec.add_runtime_dependency "jekyll-feed", ">= 0.18.0", "< 1"
   spec.add_runtime_dependency "jekyll-sitemap"
+  # The HTML sanitizer behind the `listing_excerpt` filter (#1067): an
+  # established library for it, never a hand-rolled filter. It parses with
+  # Nokogiri's HTML5 parser, and scripts/outside-resources.rb uses Nokogiri
+  # directly.
+  #
+  # BOTH ARE PINNED EXACTLY, AND NOKOGIRI IS NAMED HERE ON PURPOSE (owner
+  # decision 2026-11-19): every consumer gets these two gems from the platform
+  # and from nowhere else, so every consumer locks the identical version. A
+  # range, or leaving Nokogiri to arrive through sanitize's own `>= 1.19.7`,
+  # would let each site's lockfile resolve it on its own day, and the bump's
+  # relock is `--conservative`, so two sites would stay apart for good. A site
+  # must not declare either gem in its own Gemfile. To move a version: change
+  # it here (the newest release at least 7 days old), relock both fixture
+  # sites, and it reaches each consumer at its next platform bump.
+  # theme/spec/gemspec_pins_test.rb locks the exactness.
+  spec.add_runtime_dependency "sanitize", "7.0.2"
+  spec.add_runtime_dependency "nokogiri", "1.19.7"
 end

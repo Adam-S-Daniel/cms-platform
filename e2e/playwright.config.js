@@ -262,6 +262,9 @@ const PLATFORM_META_SPECS = [
   "theme-share-row-css.test.js",
   // #729 — same, for the bare Markdown table rules (padding, borders, header).
   "theme-table-css.test.js",
+  // #1067 — same, for the rules that keep a post or page body inside its own
+  // box (float containment, max-width on children and replaced media).
+  "theme-body-containment-css.test.js",
   // #753 — the same shape for overflow-wrap on post text, excerpts and inline
   // code in main.css. Pure-fs; self-ci node-unit-lints.
   "theme-overflow-wrap-css.test.js",
