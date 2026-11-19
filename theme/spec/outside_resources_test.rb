@@ -40,8 +40,29 @@ class OutsideResourcesJudgeTest < Minitest::Test
   def test_a_data_address_is_allowed_only_where_the_policy_allows_it
     assert_equal :same, judge('data:image/png;base64,AAAA', 'img', HOST)
     assert_equal :same, judge('data:image/png;base64,AAAA', 'source', HOST)
-    %w[script iframe embed object link video].each do |element|
+    assert_equal :same, judge('data:image/png;base64,AAAA', 'video', HOST), 'a poster is an image'
+    assert_equal :same, judge('data:,', 'link-icon', HOST), 'an icon link is an image'
+    %w[script iframe embed object link audio].each do |element|
       refute_equal :same, judge('data:text/html,x', element, HOST), element
+    end
+  end
+
+  # Addresses a browser accepts and Ruby's own URI refuses: each used to be
+  # reported as "does not parse" and would have failed a publish that is fine.
+  def test_a_same_site_address_a_browser_accepts_is_this_site
+    ['https://example.com/a b.png', 'https://example.com/café.png', 'https://example.com/x|y.png',
+     'https://example.com:443/a.png', 'https://user@example.com/a.png'].each do |address|
+      assert_equal :same, judge(address, 'img', HOST), address.inspect
+    end
+  end
+
+  # Read as a browser reads them: a backslash is a slash, and a tab or a
+  # newline inside the address is dropped before it is resolved.
+  def test_spellings_a_browser_resolves_to_another_host_are_not_this_site
+    ['\\\\example.net/x.png', '/\\example.net/x.png', "ht\ttps://example.net/x.png",
+     "h\nttps://example.net/x.png", "\u0001https://example.net/x.png", "  //example.net/x.png",
+     'https:/example.net/x.png', 'https:example.net/x.png'].each do |address|
+      refute_equal :same, judge(address, 'img', HOST), address.inspect
     end
   end
 
@@ -78,6 +99,28 @@ class OutsideResourcesJudgeTest < Minitest::Test
     }.each do |html, expected|
       assert_includes findings(html).map(&:first), expected, html
     end
+  end
+
+  def test_loads_the_first_table_missed
+    {
+      '<svg><image href="https://example.net/a.png"/></svg>' => '<image href>',
+      '<svg><image xlink:href="https://example.net/a.png"/></svg>' => '<image href>',
+      '<svg><use href="https://example.net/s.svg#x"/></svg>' => '<use href>',
+      '<body background="https://example.net/b.png">' => '<body background>',
+      '<table background="https://example.net/b.png"><tr><td>x</td></tr></table>' => '<table background>',
+      '<link rel="preload" as="image" imagesrcset="/a.png 1x, https://example.net/b.png 2x">' =>
+        '<link rel=preload>',
+      '<iframe srcdoc="&lt;img src=https://example.net/a.png&gt;"></iframe>' => '<iframe srcdoc> <img src>',
+      '<meta http-equiv="refresh" content="0; https://example.net/">' => '<meta http-equiv=refresh>',
+    }.each do |html, expected|
+      assert_includes findings(html).map(&:first), expected, html
+    end
+  end
+
+  def test_an_icon_may_be_a_data_address_and_a_stylesheet_may_not
+    assert_empty findings('<link rel="icon" href="data:,">')
+    assert_empty findings('<video poster="data:image/png;base64,AAAA"></video>')
+    assert_equal 1, findings('<link rel="stylesheet" href="data:text/css,body{}">').size
   end
 
   def test_srcset_is_read_as_a_list
@@ -190,6 +233,25 @@ class OutsideResourcesCliTest < Minitest::Test
     out, code = run_check
     assert_equal 1, code, out
     assert_includes out, 'FAIL "/" loads <script src>'
+  end
+
+  # Jekyll loads a date, a time or a symbol in `_config.yml`; refusing one
+  # would fail every publish on a site whose config is valid.
+  def test_a_config_jekyll_accepts_is_read
+    File.write(File.join(@root, '_config.yml'),
+               "url: https://example.com\nlaunched: 2024-01-01\nat: 2024-01-01 10:00:00 -0500\nmode: :fast\n")
+    page('index.html', '<img src="https://example.com/a b.png" alt="">')
+    out, code = run_check
+    assert_equal 0, code, out
+    assert_includes out, 'ok   no page loads anything from another site'
+  end
+
+  def test_a_deeply_nested_page_is_read_not_refused
+    page('index.html', "#{'<div>' * 600}<img src=\"https://example.net/a.png\" alt=\"\">#{'</div>' * 600}")
+    out, code = run_check
+    assert_equal 1, code, out
+    assert_includes out, 'FAIL "/" loads <img src> from "https://example.net/a.png"'
+    refute_includes out, 'could not read this site'
   end
 
   def test_an_unreadable_config_fails_closed

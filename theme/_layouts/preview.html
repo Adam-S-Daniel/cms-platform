@@ -160,12 +160,6 @@ layout: default
 </div>
 
 <!--
-  Try unpkg first so browsers with a warm CDN edge load ~0ms; fall back to
-  the vendored copy synchronously (via document.write during parsing, so
-  it's loaded before the inline script below runs) when the CDN is
-  blocked, offline, or returning a bad response.
--->
-<!--
   Draft media fallback, shared with the admin (theme/admin/draft-media-fallback.js).
   An image the editor uploaded is not on this origin until the post publishes,
   so its /assets/images/uploads/<name> src 404s here; the script retries such an
