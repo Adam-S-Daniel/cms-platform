@@ -418,9 +418,46 @@ test.describe("preview.html loads the fallback only where /admin/ is served", ()
   }
 
   test("update() waits for the helper before using it", () => {
-    const html = fs.readFileSync(PREVIEW_LAYOUT, "utf8");
-    const body = html.slice(html.indexOf("function update(data)"));
-    expect(body.indexOf("window.CMSDraftMediaReady")).toBeGreaterThan(-1);
-    expect(body.indexOf("window.CMSDraftMediaReady")).toBeLessThan(body.indexOf("window.CMSDraftMedia;"));
+    const acorn = require("acorn");
+    const walk = require("acorn-walk");
+    const parse5 = require("parse5");
+    const doc = parse5.parse(fs.readFileSync(PREVIEW_LAYOUT, "utf8"));
+    const bodies = [];
+    (function collect(node) {
+      if (node.tagName === "script" && !(node.attrs || []).some((a) => a.name === "src")) {
+        bodies.push((node.childNodes || []).map((c) => c.value || "").join(""));
+      }
+      for (const child of node.childNodes || []) collect(child);
+      if (node.content) collect(node.content);
+    })(doc);
+    let update = null;
+    for (const body of bodies) {
+      let ast;
+      try {
+        ast = acorn.parse(body, { ecmaVersion: "latest" });
+      } catch (_) {
+        continue; // a block with Liquid in it is not the render script
+      }
+      walk.simple(ast, {
+        FunctionDeclaration(n) {
+          if (n.id && n.id.name === "update") update = n;
+        },
+      });
+    }
+    expect(update, "preview.html declares function update").not.toBeNull();
+    // Positions of each window.<name> read inside update(), in source order.
+    const reads = [];
+    walk.simple(update.body, {
+      MemberExpression(n) {
+        if (n.object.type === "Identifier" && n.object.name === "window" && n.property.type === "Identifier") {
+          reads.push({ name: n.property.name, start: n.start });
+        }
+      },
+    });
+    const ready = reads.find((r) => r.name === "CMSDraftMediaReady");
+    const media = reads.find((r) => r.name === "CMSDraftMedia");
+    expect(ready, "update() reads window.CMSDraftMediaReady").toBeTruthy();
+    expect(media, "update() reads window.CMSDraftMedia").toBeTruthy();
+    expect(ready.start).toBeLessThan(media.start);
   });
 });
