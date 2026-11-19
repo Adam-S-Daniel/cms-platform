@@ -10,9 +10,12 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.184)
+## Version history (v0.1.0 → v0.1.185)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.185 — The live preview page stops asking the editor's host for files it cannot use, so the public Content-Security-Policy can be enforced.**
+Fixes [#1078](https://github.com/Adam-S-Daniel/cms-platform/issues/1078). With v0.1.184's public policy deployed report-only on both consumer sites, a live crawl found two violations, both on `/preview/`: the page loaded `/admin/draft-media-fallback.js`, which reads `/admin/config.yml`, and on a site whose editor has its own host (`cms.admin_origin`) the production hosts answer `/admin/*` with a redirect to that host, which the policy does not allow. Under enforce both requests would have been blocked. They also had no work to do there: Live Preview is hidden when the editor runs on its own origin (`site-hostname.js`), so nothing sends updates to the apex's `/preview/`, and that page cannot read the editor's stored token on the other origin. `theme/_layouts/preview.html` now loads the helper from a small inline loader that skips it on the production apex and its `www` host when `cms.admin_origin` names another origin. Preview hosts (`preview-pr<N>.<apex>`), local builds and sites with no separate editor host still load it, so the draft-image fallback keeps working wherever Live Preview does. The public policy is unchanged; `e2e/draft-media-fallback.test.js` parses the layout with parse5 and runs the loader for each host shape.
 
 **v0.1.184 — One post can no longer break or run code on the listing pages, a publish that loads from another site fails, and the public pages get a Content-Security-Policy.**
 The first-parent range since v0.1.183 holds four entries on main before this release PR, all merge commits: [#1069](https://github.com/Adam-S-Daniel/cms-platform/pull/1069), [#1071](https://github.com/Adam-S-Daniel/cms-platform/pull/1071), [#1074](https://github.com/Adam-S-Daniel/cms-platform/pull/1074) and [#1077](https://github.com/Adam-S-Daniel/cms-platform/pull/1077). They came out of an independent check of the sentence "content cannot break any of it" in the content route's description ([#1055](https://github.com/Adam-S-Daniel/cms-platform/pull/1055)); issues [#1061](https://github.com/Adam-S-Daniel/cms-platform/issues/1061) and [#1067](https://github.com/Adam-S-Daniel/cms-platform/issues/1067) hold the reproductions.
