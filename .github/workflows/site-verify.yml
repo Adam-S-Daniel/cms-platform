@@ -222,8 +222,10 @@ jobs:
         # slug took its URL, with every check green (cms-platform issue 1061).
         # Runs on every site and on BOTH routes: it is a check about the
         # content, and the content route no longer runs the browser test that
-        # caught the first of those. The script asks Jekyll for each file's
-        # destination through the site's own bundle; nothing is written.
+        # caught the first of those. The script loads the site as `jekyll
+        # build` does (the Gemfile's plugin group included, which is where the
+        # theme's generated pages come from) and asks Jekyll for each file's
+        # destination; nothing is written.
         env:
           JEKYLL_ENV: production
         run: bundle exec ruby .cms-platform/scripts/destination-conflicts.rb .

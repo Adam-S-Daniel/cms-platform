@@ -185,9 +185,18 @@ until something changed. `s-maxage` lets CloudFront keep its own copy, which is
 safe only because the deploy invalidates `/*` afterwards.
 
 Check it: `curl -sSI https://<apex>/feed.xml | grep -i cache-control`. A page
-uploaded before the release that carries this keeps its old header until the
-next deploy re-uploads it (every deploy re-uploads every file: a CI build
-gives each one a new modification time).
+uploaded before the release that carries this keeps its old header until a
+deploy re-uploads it. `aws s3 sync` re-uploads a file whose size changed or
+whose local copy is newer than the bucket's: rendered pages and files from the
+site's checkout are new on every CI build, so the first deploy after the bump
+moves them all. A static document that comes from the theme gem keeps the
+gem's install time and is re-uploaded when the gem is reinstalled, which a
+bump does (it changes `Gemfile.lock`, the bundler cache key).
+
+Only lower-case `.html`, `.xml`, `.txt` and `.json` are documents here (the
+filters are case-sensitive). A site that publishes `.htm`, `.atom`, `.rss` or
+a web manifest would serve those with the day-long header; neither consumer
+does.
 
 Filter order in pass 2 is load-bearing (`aws s3 sync` applies filters in order
 and the last match wins): it excludes `*`, includes the document types, and

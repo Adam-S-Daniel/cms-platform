@@ -15,15 +15,30 @@
 # caught the first of them. Two files on one URL is a broken build, never an
 # authoring choice, so `site-verify.yml` runs this on every pull request.
 #
-# HOW. It asks Jekyll, never predicts: it loads the site through the site's own
-# bundle (so the theme gem's generators run and their pages count), reads and
-# generates without rendering or writing, and groups everything Jekyll would
-# write (`Site#each_site_file`: pages, generated pages, documents, static
-# files) by `destination`. That is the enumeration Jekyll's own build-time
-# warning uses (`Jekyll::Commands::Doctor`), including its one exemption for
-# jekyll-redirect-from's pages. Reading the result here, not the warning in
-# the build log, means a site that sets `quiet: true` cannot hide it and a
-# reworded warning cannot disarm it.
+# HOW. It asks Jekyll, never predicts: it loads the site the way `jekyll
+# build` does, reads and generates without rendering or writing, and groups
+# everything Jekyll itself writes (`Site#each_site_file`: pages, generated
+# pages, documents, static files) by `destination`. That is the enumeration
+# Jekyll's own build-time warning uses (`Jekyll::Commands::Doctor`), including
+# its one exemption for jekyll-redirect-from's pages. Reading the result here,
+# not the warning in the build log, means a site that sets `quiet: true`
+# cannot hide it and a reworded warning cannot disarm it.
+#
+# "The way `jekyll build` does" has one step that is easy to lose:
+# `Jekyll::PluginManager.require_from_bundler`. The `jekyll` executable calls
+# it before anything else; `Jekyll::Site.new` does NOT, and `bundle exec` only
+# sets up load paths. Without it the gems in the Gemfile's `:jekyll_plugins`
+# group never load, and that is where a consumer gets the theme gem: its
+# generated tag pages were not counted (a page that took over `/tags/<tag>/`
+# passed), and its hook that repairs an empty `slug:` did not run (a post the
+# CMS really saves read as a collision with the blog index and would have
+# blocked a legitimate publish). The independent review of the release found
+# both before it shipped. The site's own `source:` and `destination:` are
+# honored too: this runs from the site's directory and overrides neither.
+#
+# NOT COVERED: files a plugin copies into `_site` from a post-write hook, such
+# as the theme's `admin/`. Jekyll does not know their destinations, so a page
+# claiming `/admin/` is not reported here.
 #
 # Output: one `FAIL` line per shared address naming the address and every
 # file, JSON-quoted (a file name may hold a newline, which must not start a
@@ -36,10 +51,13 @@ require "json"
 begin
   require "jekyll"
 
-  source = File.expand_path(ARGV[0] || ".")
-  destination = File.join(source, "_site")
-  config = Jekyll.configuration("source" => source, "destination" => destination, "quiet" => true)
-  site = Jekyll::Site.new(config)
+  # From the site's own directory, like the build: `_config.yml`, the Gemfile
+  # and a configured `source:` all resolve from there.
+  Dir.chdir(File.expand_path(ARGV[0] || "."))
+  Jekyll::PluginManager.require_from_bundler
+  site = Jekyll::Site.new(Jekyll.configuration("quiet" => true))
+  source = site.source
+  destination = site.dest
   site.reset
   site.read
   site.generate
