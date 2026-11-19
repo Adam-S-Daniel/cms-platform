@@ -116,6 +116,13 @@ There is no PAT fallback and no `GITHUB_TOKEN` fallback: without the App,
 `platform-bump` and `dev-hooks-sync` each fail with an `::error::` naming both
 knobs (#871).
 
+The same App is the credential of `publish-watchdog-signal`, which sends a
+`repository_dispatch` (token scoped to this repository with `contents: write`,
+all that `POST /repos/{owner}/{repo}/dispatches` needs) so the publish watchdog
+sweep runs within minutes of a failed publish check. Without both knobs it is a
+green no-op that names them as a `::notice::`; the 6-hourly sweep still runs.
+(`docs/CI-INVARIANTS.md` § "Publish watchdog".)
+
 Why an App and not another PAT: a fine-grained PAT cannot span owners, so the
 PAT was one token per consumer, and each expired on its own calendar — taking
 the ONLY platform down-sync path with it, on a schedule, silently

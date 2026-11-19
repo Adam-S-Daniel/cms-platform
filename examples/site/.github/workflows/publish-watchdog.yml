@@ -1,26 +1,24 @@
 name: Publish watchdog
-# Alerts within minutes when a CMS publish (a `cms/` pull request that someone
-# armed with Publish) is stuck: a required check failed, or every check
-# finished and it still has not merged. Opens ONE issue per stuck pull request
-# (the issue notification is the alert; `agent-ready` queues it for the fleet
-# worker); it closes itself when the change goes live. A `pull_request` event
-# on a same-repository `cms/` branch starts a watcher for that pull request
-# (`labeled` is the moment Publish arrives); a 6-hourly sweep catches anything
-# a watcher missed. NOT a required check: it watches the required checks, and
-# requiring it would make a publish wait on its own watcher. No `workflow_run`
-# (privileged triggers may not hold a write token). The platform owns the
-# logic; this thin caller needs no site-specific values.
+# Sweeps this repo's open `cms/` pull requests and opens ONE issue per stuck
+# publish (a required check failed, a check has waited more than an hour, or
+# every check finished and it has not merged); the issue notification is the
+# alert and `agent-ready` queues it for the fleet worker. Issues close
+# themselves when the change goes live. Runs on the `publish-watchdog`
+# repository_dispatch knock that `Publish watchdog signal` sends, and every 6
+# hours as a catch-all. No `pull_request` trigger: a job there would be a check
+# run on the pull request, and the editor counts a cancelled or pending check
+# run against the publish. The platform owns the logic; this thin caller needs
+# no site-specific values.
 run-name: >-
-  ${{ github.event_name == 'pull_request'
-        && format('watch — PR #{0}', github.event.pull_request.number)
+  ${{ github.event_name == 'repository_dispatch'
+        && 'signal — a publish check failed or a deploy finished'
      || github.event_name == 'schedule'
         && format('scheduled — {0}', github.event.schedule)
      || format('manual — @{0}', github.actor) }}
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
-    branches: [main]
+  repository_dispatch:
+    types: [publish-watchdog]
   schedule:
     # Every 6 hours at an off-peak minute; lag does not matter for a catch-all.
     - cron: '23 */6 * * *'
@@ -40,21 +38,13 @@ permissions:
   checks: read
   issues: write
 
-# A newer event for the same pull request supersedes the older watcher. Safe
-# because this job is not a required check; duplicates are prevented by the
-# issue marker either way.
+# A queued sweep runs after the current one; never cancel a sweep mid-write.
 concurrency:
-  group: publish-watchdog-${{ github.event.pull_request.number || 'sweep' }}
-  cancel-in-progress: true
+  group: publish-watchdog
+  cancel-in-progress: false
 
 jobs:
-  publish-watchdog:
-    if: >-
-      github.event_name != 'pull_request'
-      || (github.event.pull_request.head.repo.full_name == github.repository
-          && startsWith(github.event.pull_request.head.ref, 'cms/'))
+  sweep:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog.yml@v0.1.181
     with:
-      mode: ${{ github.event_name == 'pull_request' && 'watch' || 'sweep' }}
-      pr_number: ${{ github.event.pull_request.number || '' }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}

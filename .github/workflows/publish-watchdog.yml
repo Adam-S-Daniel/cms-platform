@@ -6,18 +6,21 @@
 # anyone; the post sat unpublished for a day. The only net was the daily
 # scheduled-run-health audit, which reports a PR left red for 24 hours.
 #
-# THE FIX: scripts/publish-watchdog.js opens ONE issue per stuck `cms/` pull
-# request (a required check failed, or every check finished and it still has
-# not merged). The issue notification is the alert; the `agent-ready` work
-# label queues it for the fleet worker, exactly like scheduled-run-health. The
-# issue closes by itself when the pull request goes live or is closed. Test
-# fixtures are ignored. See docs/CI-INVARIANTS.md "Publish watchdog".
+# THE FIX: scripts/publish-watchdog.js sweeps every open `cms/` pull request
+# and opens ONE issue per stuck one (a required check failed, a check has been
+# waiting for more than an hour, or every check finished and it still has not
+# merged). The issue notification is the alert; the `agent-ready` work label
+# queues it for the fleet worker, exactly like scheduled-run-health. An issue
+# stays open while its pull request is open and armed and closes when the
+# change goes live, the pull request closes, or it is no longer marked for
+# publishing. Test fixtures are ignored. See docs/CI-INVARIANTS.md "Publish
+# watchdog".
 #
-# TWO MODES. `watch` (called from a pull_request event) polls ONE pull request
-# for `watch_minutes` and alerts the moment it is stuck. `sweep` (every 6
-# hours, or by hand) looks at every open armed `cms/` pull request and catches
-# anything a watcher missed. There is deliberately no workflow_run trigger: it
-# is privileged and may not hold a write token (contributor trust boundary).
+# TRIGGERS (in the caller): a `repository_dispatch` knock sent by
+# publish-watchdog-signal.yml (a gating check failed, or a production deploy
+# succeeded) and a 6-hourly catch-all. There is deliberately no pull_request
+# trigger: this job would be a check run on the pull request, and the editor
+# counts a cancelled or pending check run against the publish.
 #
 # The script and the helper it requires are sparse-checked-out at the commit
 # this reusable was called at (resolved from the job context, the same way
@@ -29,12 +32,8 @@ on:
     inputs:
       # Strings so a thin caller can pass a workflow_dispatch value straight
       # through with no type coercion.
-      # `watch` (one pull request, polled) or `sweep` (every open one).
-      mode:          { type: string, default: "sweep" }
-      pr_number:     { type: string, default: "" }
-      watch_minutes: { type: string, default: "25" }
-      poll_seconds:  { type: string, default: "20" }
       grace_minutes: { type: string, default: "15" }
+      stall_minutes: { type: string, default: "60" }
       issue_label:   { type: string, default: "publish-stuck" }
       work_label:    { type: string, default: "agent-ready" }
       dry_run:       { type: boolean, default: false }
@@ -47,10 +46,9 @@ permissions:
   issues: write
 
 jobs:
-  watch:
+  sweep:
     runs-on: ubuntu-latest
-    # Must exceed watch_minutes with margin.
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
       - name: Resolve the platform commit this reusable was called at
         id: self
@@ -127,6 +125,7 @@ jobs:
             e2e/public-content.js
           sparse-checkout-cone-mode: false
           path: .cms-platform
+          persist-credentials: false
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -153,24 +152,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WATCHDOG_REPO: ${{ github.repository }}
-          WATCHDOG_MODE: ${{ inputs.mode }}
-          WATCHDOG_PR_NUMBER: ${{ inputs.pr_number }}
-          WATCHDOG_WATCH_MINUTES: ${{ inputs.watch_minutes }}
-          WATCHDOG_POLL_SECONDS: ${{ inputs.poll_seconds }}
           WATCHDOG_GRACE_MINUTES: ${{ inputs.grace_minutes }}
+          WATCHDOG_STALL_MINUTES: ${{ inputs.stall_minutes }}
           WATCHDOG_LABEL: ${{ inputs.issue_label }}
           WATCHDOG_WORK_LABEL: ${{ inputs.work_label }}
           WATCHDOG_DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          args=(--repo "$WATCHDOG_REPO" --issue-label "$WATCHDOG_LABEL" --work-label "$WATCHDOG_WORK_LABEL")
-          if [[ "$WATCHDOG_MODE" == "watch" ]]; then
-            if ! [[ "$WATCHDOG_PR_NUMBER" =~ ^[0-9]+$ ]]; then
-              echo "::error::watch mode needs a numeric pr_number."
-              exit 1
-            fi
-            args+=(--watch "$WATCHDOG_PR_NUMBER" --watch-minutes "$WATCHDOG_WATCH_MINUTES" --poll-seconds "$WATCHDOG_POLL_SECONDS")
-          else
-            args+=(--grace-minutes "$WATCHDOG_GRACE_MINUTES")
-          fi
+          args=(--repo "$WATCHDOG_REPO" --issue-label "$WATCHDOG_LABEL" --work-label "$WATCHDOG_WORK_LABEL" --grace-minutes "$WATCHDOG_GRACE_MINUTES" --stall-minutes "$WATCHDOG_STALL_MINUTES")
           if [[ "$WATCHDOG_DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
           node .cms-platform/scripts/publish-watchdog.js "${args[@]}"

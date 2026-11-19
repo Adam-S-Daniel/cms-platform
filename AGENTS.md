@@ -438,13 +438,13 @@ TARGET=prod PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
 
 ## Publish watchdog
 
-A stuck Decap publish (a required check failed on an armed `cms/` PR, or every
-check finished and it has not merged) opens one `publish-stuck` issue within
-minutes: a `pull_request` watcher plus a 6-hourly sweep (`publish-watchdog.yml`,
-`scripts/publish-watchdog.js`, thin caller `examples/site/.github/workflows/
-publish-watchdog.yml`). No `workflow_run` (trust boundary: no write token under
-a privileged trigger), no PAT (GitHub does not notify an author of their own
-issue). **Its job `publish-watchdog / watch` is deliberately NOT a required
-check**: it watches the required checks, and requiring it would make a publish
-wait on its own watcher. Rule and rationale: `docs/CI-INVARIANTS.md` § "Publish
-watchdog".
+A stuck Decap publish (a required check failed on an armed `cms/` PR, a check
+waited over an hour, or every check finished and it has not merged) opens one
+`publish-stuck` issue within minutes. `publish-watchdog-signal.yml` (a
+`workflow_run` caller with a read-only token) knocks with a `repository_dispatch`
+through the CMS automation App, and the sweep `publish-watchdog.yml` +
+`scripts/publish-watchdog.js` opens the issue (and runs every 6 hours). Two hops
+because no write token may run under `workflow_run`, and the App has no `issues`
+permission. No `pull_request` trigger: the editor counts a cancelled or pending
+check run against a publish. Rule and rationale: `docs/CI-INVARIANTS.md` §
+"Publish watchdog".
