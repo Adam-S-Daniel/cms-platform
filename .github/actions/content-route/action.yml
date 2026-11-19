@@ -1,0 +1,89 @@
+name: Content route
+description: >-
+  Decide whether a consumer pull request is CMS content only (`content`) or
+  anything else (`full`), for a job that has checked the pull request's merge
+  commit out with `fetch-depth: 2` and the platform into `platform-dir`.
+
+  A job gated on this skips its machinery tests on `content`: a post, a page,
+  an upload or a CMS data file cannot change the theme, the admin or a
+  workflow, so testing those against it only gives a brittle test the power to
+  block a publish (adamdaniel.ai PR 5001). The rule itself is
+  `e2e/content-route.js`; this action only gathers its inputs.
+
+  FAIL-SAFE: every path that is not a clean `content` answer outputs `full`,
+  and the step never fails. A wrong `full` costs minutes; a wrong `content`
+  skips tests, so nothing here may guess toward it. Not a pull request, no
+  second parent on HEAD (not a merge commit), a diff that cannot be computed,
+  a classifier that throws or prints anything else: all `full`.
+
+  The diff is `HEAD^1` to `HEAD`: on a pull request's merge commit the first
+  parent is the base tip, so that is the whole pull request's net change, not
+  the last push. NUL-delimited and `--no-renames`, like every other salience
+  reader (e2e/salience-git-paths.test.js). The seam and `_config.yml` are
+  read from `HEAD^1`, the base, so a pull request cannot widen its own route.
+
+  The caller must have set up Node. `yaml` is installed here only when the
+  diff edits a `_data/` file (the one case the rule parses `_config.yml`,
+  for the site's publish gate); if that install fails the rule cannot tell
+  the gate apart and answers `full`.
+
+inputs:
+  platform-dir:
+    description: Where the platform is checked out.
+    required: false
+    default: .cms-platform
+  from-cms:
+    description: >-
+      "true" only for a pull request from a same-repository `cms/` branch. Pass
+      the expression's result, never branch text.
+    required: true
+
+outputs:
+  route:
+    description: "`content` or `full`."
+    value: ${{ steps.route.outputs.route }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide the route
+      id: route
+      shell: bash
+      env:
+        ROUTE_FROM_CMS: ${{ inputs.from-cms }}
+        PLATFORM_DIR: ${{ inputs.platform-dir }}
+      run: |
+        set -uo pipefail
+        route=full
+        reason=""
+        changed=$(mktemp)
+        trap 'rm -f -- "$changed"' EXIT
+        if [ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]; then
+          reason="not a pull request"
+        elif [ "$ROUTE_FROM_CMS" != "true" ]; then
+          reason="not a same-repository cms/ branch"
+        elif ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+          reason="HEAD is not a pull request merge commit with both parents fetched"
+        elif ! git diff --name-status -z --no-renames 'HEAD^1' HEAD > "$changed" 2> /dev/null; then
+          reason="the pull request's diff could not be computed"
+        else
+          needs_yaml=false
+          while IFS= read -r -d '' status && IFS= read -r -d '' f; do
+            if [[ "$f" == _data/* ]]; then needs_yaml=true; fi
+          done < "$changed"
+          if [ "$needs_yaml" = true ]; then
+            yaml_dir="${RUNNER_TEMP:-$(mktemp -d)}/content-route-yaml"
+            if npm install --prefix "$yaml_dir" --no-audit --no-fund --ignore-scripts yaml@2.9.1 > /dev/null 2>&1; then
+              export NODE_PATH="$yaml_dir/node_modules"
+            else
+              echo "::warning::could not install yaml; a CMS edit to a _data/ file takes the full route"
+            fi
+          fi
+          answer=$(node "$PLATFORM_DIR/e2e/content-route.js" --base-rev 'HEAD^1' < "$changed") || answer=""
+          if [ "$answer" = "content" ]; then route=content; fi
+        fi
+        if [ -n "$reason" ]; then echo "route=full: $reason"; fi
+        echo "route=${route}" >> "$GITHUB_OUTPUT"
+        if [ "$route" = content ]; then
+          echo "::notice title=content route::This pull request changes CMS content only, so this job's machinery tests do not run for it."
+        fi

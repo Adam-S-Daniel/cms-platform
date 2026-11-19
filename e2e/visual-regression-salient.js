@@ -123,15 +123,34 @@ function toolEditKeepsReviewFields(before, after, YAML) {
 }
 
 // Salience over `git diff --name-status --no-renames` records
-// ({ status, path }). Same as isSalient, except that a MODIFIED tool entry on
-// a pull request from the CMS is skipped when `readBlobs(path)` shows its
-// review fields unchanged. `readBlobs` returns { before, after } text, or
-// null when either side cannot be read.
-function isSalientChange(records, { fromCms = false, readBlobs = () => null, YAML = null } = {}) {
+// ({ status, path }). Same as isSalient, except that on a pull request from
+// the CMS a MODIFIED tool entry is skipped when `readBlobs(path)` shows its
+// review fields unchanged, and a MODIFIED CMS file collection named in
+// `cmsFiles` is skipped (isCmsFileEdit below). `readBlobs` returns
+// { before, after } text, or null when either side cannot be read.
+function isSalientChange(
+  records,
+  { fromCms = false, readBlobs = () => null, YAML = null, cmsFiles = [] } = {},
+) {
   return (records || []).some(({ status, path: p }) => {
     if (!isSalient([p])) return false;
+    if (isCmsFileEdit({ status, path: p }, { fromCms, cmsFiles })) return false;
     return !isCmsToolEdit({ status, path: p }, { fromCms, readBlobs, YAML });
   });
+}
+
+// A Decap FILE collection (`file: _data/about.yml` in the site's seam) is CMS
+// content like a folder collection's entry: the pixel and text delta of an
+// edit is its intent. It lives under `_data/`, which is salient above because
+// a data file nobody edits through the CMS can reshape any page, so without
+// this every edit to such a section parked on the manual review with no
+// error in `/admin` (jodidaniel.com PR 348). `cmsFiles` is the caller's list
+// of those files, read from the BASE commit and already WITHOUT the site's
+// publish gate (content-route.js's cmsDataFiles): taking a site live keeps
+// its review. Only a MODIFIED file from the CMS skips; an added or deleted
+// one changes what the site is made of.
+function isCmsFileEdit({ status, path: p }, { fromCms, cmsFiles }) {
+  return Boolean(fromCms) && status === "M" && (cmsFiles || []).includes(p);
 }
 
 function isCmsToolEdit({ status, path: p }, { fromCms, readBlobs, YAML }) {
@@ -180,7 +199,8 @@ module.exports = {
 };
 
 // The YAML parser, or null when it is not installed (the `detect` job
-// installs it only when a tool entry changed). Null keeps every review.
+// installs it only when a tool entry or a `_data/` file changed). Null keeps
+// every review.
 function loadYaml() {
   try {
     return require("yaml");
@@ -226,7 +246,17 @@ if (require.main === module) {
       const after = gitShow("HEAD", p);
       return before === null || after === null ? null : { before, after };
     };
-    const salient = isSalientChange(parseNulStatus(raw), { fromCms, readBlobs, YAML: loadYaml() });
+    const YAML = loadYaml();
+    // Required here, not at the top: content-route.js requires this module.
+    const { SEAM_PATH, CONFIG_PATH, cmsDataFiles } = require("./content-route");
+    const cmsFiles = fromCms
+      ? cmsDataFiles({
+          seamYamlText: gitShow(baseRev, SEAM_PATH),
+          configYamlText: gitShow(baseRev, CONFIG_PATH),
+          YAML,
+        })
+      : [];
+    const salient = isSalientChange(parseNulStatus(raw), { fromCms, readBlobs, YAML, cmsFiles });
     process.stdout.write(salient ? "true" : "false");
     process.exit(0);
   }

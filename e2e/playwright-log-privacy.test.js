@@ -72,6 +72,9 @@ function uploadRunsFor(condition, { canceled, failed }) {
       salient: { outputs: { salient: "true" }, outcome: "success" },
       select: { outputs: { count: "1" } },
       preview: { outputs: { reachable: "true" } },
+      // e2e-tests.yml's content route: a `full` run is the one that has a
+      // report to upload.
+      route: { outputs: { route: "full" } },
     },
   };
   return Boolean(vm.runInNewContext(expression, context, { timeout: 1000 }));

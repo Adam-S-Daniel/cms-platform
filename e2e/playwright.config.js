@@ -321,6 +321,10 @@ const PLATFORM_META_SPECS = [
   // reusable DEFINITION (via readWorkflow) plus the examples/site caller —
   // platform-internal, self-CI only.
   "content-pr-guard.test.js",
+  // The content route: reads the platform's own workflows, composite action
+  // and scripts/ (content-route.js requires ../scripts/content-pr-guard, which
+  // a consumer's placed harness does not have). Platform-internal.
+  "content-route.test.js",
   // Reads the scheduled-run-health reusable + caller DEFINITIONS and the
   // scripts/audit-scheduled-runs.js helpers (consumer ships only a thin
   // wrapper) — platform-internal, self-CI only.

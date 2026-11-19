@@ -1,10 +1,91 @@
-# Content publish latency: a focused lane for content PRs (shelved)
+# Content publish latency: the content route
 
-**Status: shelved by the owner on 2026-10-02, before any implementation.** No
-code, workflow, ruleset or consumer change was made. This page is the record to
-resume from: what was measured, the design the review arrived at, the
-constraints a revival has to respect, and the defects found along the way that
-are still live.
+**Status: a content route shipped on 2026-11-19, in a simpler form than the
+2026-10 proposal recorded below.** The owner shelved that proposal on
+2026-10-02 and reversed the decision on 2026-11-19, after a real post was
+blocked for a day by a test that had nothing to do with it. Read "What
+shipped" for the system as it is; everything from "The 2026-10 proposal" down
+is the historical record that design work started from.
+
+## What shipped
+
+**The incident.** adamdaniel.ai PR 5001 (2026-11-18): a three-line post whose
+featured image had author-written alt text. One browser spec still required
+`alt=""` on every served featured image, eight e2e projects failed, the
+required `e2e / e2e` check went red and the post never merged. Nothing was
+wrong with the post. The spec was fixed, but the cause was structural: every
+publish had to pass the whole machinery suite, so any brittle, flaky or
+content-sensitive test anywhere in it could block a post.
+
+**The rule.** A pull request that changes CMS content only is gated by the
+checks that are about the content. `e2e/content-route.js` decides `content` or
+`full` from the pull request's net diff; the composite
+`.github/actions/content-route` gathers its inputs. On `content`:
+
+| Check | What it does on the content route |
+|---|---|
+| `e2e / e2e` | Every project job decides the route, skips its work and succeeds; the gate reports as before. No browser test runs. |
+| `site-verify / site-verify` | Builds the site and runs the site's verifier and the escaping lint. Skips only the verifier's self-tests. |
+| `visual-regression / approve-regression` | Unchanged for folder collections (already skipped). A CMS edit to a file collection (`file: _data/x.yml` in the seam) now skips the review too. |
+| Everything else | Unchanged: the content guard, the secrets scan, the preview deploy and its probes, the prerelease guard. |
+
+**`content` is the narrow answer and every doubt is `full`.** The route is
+`content` only when the pull request is a same-repository `cms/` branch and
+every changed path is CMS-managed content by `scripts/content-pr-guard.js`'s
+definition (base collections plus the site's seam) that
+`e2e/visual-regression-salient.js` does not call salient. A `_tools/` entry
+stays `full` (its page embeds an app). A file collection routes `content` only
+when it is edited, never added or deleted, and never when it is the site's
+publish gate (`cms.site_gate.path`): taking a site live runs the whole suite
+and keeps its visual review. The seam and `_config.yml` are read from the base
+commit, so a pull request cannot widen its own route. Not a pull request, no
+merge commit, a diff that cannot be computed, a classifier that throws: `full`.
+A wrong `full` costs minutes; nothing may guess toward `content`.
+
+**What a content pull request no longer gets, and what covers it.**
+
+- No browser check of the new page. The site's post-build verifier is the
+  content gate, under its own design rule: an assertion may fail only on a
+  genuinely broken build, never on a legitimate authoring choice. The author
+  sees the real page on the per-PR preview before publishing.
+- The suite still runs against each site's real content on every pull request
+  that is not content-only: each release's candidate pull requests on both
+  consumers, each platform bump, dependency and tooling pull requests. So a
+  spec that a published post would fail (for example `image-alt-text.spec.js`
+  on an inline image with no alt) now fails the next of those, where an
+  engineer or an agent is already looking, instead of the author's publish.
+  That is the intended place for it. Fix the spec or the content there.
+
+**Why this and not the focused lane below.** The 2026-10 design built a new
+browser lane for content pull requests, a router with a gate truth table and a
+three-release caller migration. This keeps every job name, every required
+context and every caller as they are: the decision is one step inside each
+existing job, so one release delivers it and constraint 1 below never applies.
+It reuses two of the three existing path taxonomies and adds none
+(constraint 6). It supersedes
+[Rejected: skipping tests per diff](E2E-PARALLELISM.md#rejected-skipping-tests-per-diff)
+for content pull requests only; the matrix for everything else is unchanged.
+
+**Measured before (2026-11-19, adamdaniel.ai, 76 merged `cms/*` pull requests):**
+open-to-merge min 452 s, median 608 s, 90th percentile 746 s, up from the
+195 s median recorded below. The critical path was `site-verify` at 8 to 10
+minutes (the verifier's self-tests rebuilt scratch copies of the site twice
+per run, once in the self-test step and once through the verifier's default
+entrypoint) and `e2e / e2e` at about 5.5 minutes. The after numbers belong in
+this section once ten real content pull requests have run on the route; use
+the command under "Re-measuring".
+
+**Tests.** `e2e/content-route.test.js`: the rule as a table, the composite
+over a real merge commit with `npm` stubbed, the wiring (every work step of
+`e2e-tests.yml` after the route carries the route condition), and the visual
+review skip. `e2e/site-verify.test.js` holds the verifier's half.
+
+## The 2026-10 proposal (historical; shelved 2026-10-02, superseded above)
+
+**Status at the time: shelved by the owner on 2026-10-02, before any
+implementation.** No code, workflow, ruleset or consumer change was made then.
+What follows is that record: what was measured, the design the review arrived
+at, the constraints, and the defects found along the way.
 
 **Verification boundary.** The measurements, design and constraints below were
 taken against cms-platform v0.1.122 on 2026-10-01. They are a historical record
@@ -26,9 +107,10 @@ re-measured; re-check them before relying on them.
 
 Reviving this **reverses a recorded decision**:
 [Rejected: skipping tests per diff](E2E-PARALLELISM.md#rejected-skipping-tests-per-diff).
-Supersede that section explicitly; do not work around it.
+Supersede that section explicitly; do not work around it. (Done on 2026-11-19:
+see "What shipped".)
 
-## The proposal
+### The proposal
 
 Route a consumer PR by what it changes: content-only PRs run a small focused
 check of the pages that change (phone, tablet, desktop: readable content,
