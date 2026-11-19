@@ -10,9 +10,16 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.179)
+## Version history (v0.1.0 → v0.1.180)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.180 — A post whose featured image has alt text publishes again.**
+The first-parent range since v0.1.179 holds one entry on main before this release PR: the squash commit of [#1052](https://github.com/Adam-S-Daniel/cms-platform/pull/1052).
+
+Featured image alt ([#1052](https://github.com/Adam-S-Daniel/cms-platform/pull/1052)). `e2e/public-a11y-polish.spec.js` visited every post a site serves and required `alt=""` on `img.featured-image`. The Posts editor has offered `featured_image_alt` since v0.1.168's [#920](https://github.com/Adam-S-Daniel/cms-platform/pull/920), which updated the build test but not this browser spec, and no fixture post used the field. The first real post that filled it in ([adamdaniel.ai PR 5001](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/5001), 2026-11-18) failed eight of fourteen e2e jobs on that one test ([run 44415872806](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/44415872806)), the required `e2e / e2e` check went red and the publish never merged. The spec now asserts only that the attribute is present; `theme/spec/public_a11y_polish_build_test.rb` still locks what it says. `e2e/fixture-site`'s Hello world post gains a featured image with alt text, so the old assertion fails `fixture-e2e` in this repo. `docs/CONSUMER-COMPATIBILITY.md` records the rule: a spec that reads a consumer's served content asserts only what no author can break.
+
+Consumer effect. Test harness, fixture and docs only: the theme, the admin and every workflow are unchanged, so no served page differs. On adamdaniel.ai a post may set `featured_image_alt` again; PR 5001 was published without the line as a stopgap, and it goes back after the bump. jodidaniel.com has no posts and no featured images, so nothing changes there.
 
 **v0.1.179 — The editor signs in again in the same tab when the GitHub sign-in ends, so typed work is not lost.**
 The first-parent range since v0.1.178 holds fourteen entries on main before this release PR: the squash commits of [#1050](https://github.com/Adam-S-Daniel/cms-platform/pull/1050) (the sign-in fix below), [#1047](https://github.com/Adam-S-Daniel/cms-platform/pull/1047) (visual review below), [#1045](https://github.com/Adam-S-Daniel/cms-platform/pull/1045) (skill gates below), [#1043](https://github.com/Adam-S-Daniel/cms-platform/pull/1043) (dev-hooks-sync below), three docs-only PRs ([#1042](https://github.com/Adam-S-Daniel/cms-platform/pull/1042), [#1046](https://github.com/Adam-S-Daniel/cms-platform/pull/1046), [#1048](https://github.com/Adam-S-Daniel/cms-platform/pull/1048)), four Dependabot bumps ([#1037](https://github.com/Adam-S-Daniel/cms-platform/pull/1037) parse5 8.1.1, [#1038](https://github.com/Adam-S-Daniel/cms-platform/pull/1038) `@playwright/test` 1.65.0, [#1040](https://github.com/Adam-S-Daniel/cms-platform/pull/1040) serve 14.2.7, [#1041](https://github.com/Adam-S-Daniel/cms-platform/pull/1041) ruby/setup-ruby) and three `_agent-guidance` syncs ([#1033](https://github.com/Adam-S-Daniel/cms-platform/pull/1033), [#1034](https://github.com/Adam-S-Daniel/cms-platform/pull/1034), [#1035](https://github.com/Adam-S-Daniel/cms-platform/pull/1035)).
