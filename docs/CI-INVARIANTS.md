@@ -1664,10 +1664,19 @@ Six decisions in it that are not obvious from the YAML:
   only a warning, and one of them is silently not published: a page saved with
   permalink `/tags/` replaced the tags index, and a second post with an older
   post's slug took its URL, with every check green (issue 1061). The script
-  groups everything `Site#each_site_file` would write by `destination`, the
-  enumeration Jekyll's own warning uses, and reads the result, not the build
-  log, so `quiet: true` cannot hide it. `theme/spec/destination_conflicts_test.rb`
-  runs it over real site directories.
+  groups everything Jekyll itself writes (`Site#each_site_file`) by
+  `destination`, the enumeration Jekyll's own warning uses, and reads the
+  result, not the build log, so `quiet: true` cannot hide it. It must load the
+  site as `jekyll build` does, which includes
+  `Jekyll::PluginManager.require_from_bundler`: a bare `Jekyll::Site.new`
+  does not load the Gemfile's `:jekyll_plugins` group, where a consumer gets
+  the theme gem, and the first version therefore missed a page taking over a
+  generated tag page and reported a false collision for a post the CMS saved
+  with `slug: ""` (found by the release's independent review, before it
+  shipped). Files a plugin copies into `_site` from a post-write hook, such as
+  the theme's `admin/`, are outside what it sees.
+  `theme/spec/destination_conflicts_test.rb` runs it over real site
+  directories, one of them with a plugin gem loaded only through that group.
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through

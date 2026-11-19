@@ -122,7 +122,7 @@ jobs:
           # (tag call), "...@refs/heads/main" (branch or local ./ call), or
           # "...@<40-hex sha>" (sha call). Strip the file-path prefix, then
           # the refs/tags|refs/heads namespace, to land on the bare ref a
-          # caller would actually recognise as its own pin.
+          # caller would actually recognize as its own pin.
           ref=${wref##*@}
           ref=${ref#refs/tags/}
           ref=${ref#refs/heads/}

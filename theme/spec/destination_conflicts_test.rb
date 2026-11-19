@@ -16,6 +16,7 @@ require 'fileutils'
 require 'open3'
 require 'rbconfig'
 require 'tmpdir'
+require 'jekyll'
 
 class DestinationConflictsTest < Minitest::Test
   SCRIPT = File.expand_path('../../scripts/destination-conflicts.rb', __dir__)
@@ -120,6 +121,113 @@ class DestinationConflictsTest < Minitest::Test
     assert_equal 1, code, out
     refute(out.lines.any? { |line| line.start_with?('::') }, out)
     assert_includes out, 'a\n::error::forged.md'
+  end
+
+  # A consumer gets the theme gem, and so its generated tag pages and its
+  # empty-slug repair, from the Gemfile's `:jekyll_plugins` group. `jekyll
+  # build` loads that group (PluginManager.require_from_bundler); a bare
+  # `Jekyll::Site.new` does not, and the first version of the script therefore
+  # missed a page taking over a generated tag page and reported a false
+  # collision for a post saved with `slug: ""`. This site carries a tiny local
+  # plugin gem that does both jobs, loaded ONLY through that group, and the
+  # script is run from the site directory as `site-verify.yml` runs it.
+  def with_plugin_gem
+    write('Gemfile', <<~GEMFILE)
+      source 'https://rubygems.org'
+      gem 'jekyll', '#{Jekyll::VERSION}'
+      group :jekyll_plugins do
+        gem 'conflict-fixture-plugin', path: '_fixture_plugin'
+      end
+    GEMFILE
+    write('_fixture_plugin/conflict-fixture-plugin.gemspec', <<~GEMSPEC)
+      Gem::Specification.new do |spec|
+        spec.name = 'conflict-fixture-plugin'
+        spec.version = '0.0.1'
+        spec.summary = 'test fixture'
+        spec.authors = ['fixture']
+        spec.files = ['lib/conflict-fixture-plugin.rb']
+        spec.require_paths = ['lib']
+      end
+    GEMSPEC
+    write('_fixture_plugin/lib/conflict-fixture-plugin.rb', <<~PLUGIN)
+      require 'jekyll'
+
+      # A generated page, like the theme's per-tag archive.
+      class FixtureTagPages < Jekyll::Generator
+        def generate(site)
+          page = Jekyll::PageWithoutAFile.new(site, site.source, 'tags/ai', 'index.html')
+          page.content = 'generated tag page'
+          site.pages << page
+        end
+      end
+
+      # The theme's empty-slug repair (normalize_empty_slug.rb): after the
+      # site is read, `slug: ""` falls back to the file name.
+      Jekyll::Hooks.register :site, :post_read do |site|
+        site.documents.each do |doc|
+          next unless doc.data['slug'].is_a?(String) && doc.data['slug'].strip.empty?
+
+          doc.data['slug'] = File.basename(doc.relative_path, '.*').sub(/\\A\\d{4}-\\d{2}-\\d{2}-/, '')
+        end
+      end
+    PLUGIN
+    write('_config.yml', "title: Example\npermalink: /blog/:slug/\nexclude: [_fixture_plugin, Gemfile, Gemfile.lock]\n")
+  end
+
+  # Bundler resolves from the gems already installed (no network); a stray
+  # BUNDLE_GEMFILE or RUBYOPT from the shell must not choose the bundle.
+  def run_script_in_site
+    env = { 'JEKYLL_ENV' => 'production', 'BUNDLE_GEMFILE' => File.join(@site, 'Gemfile'),
+            'RUBYOPT' => nil, 'JEKYLL_NO_BUNDLER_REQUIRE' => nil }
+    out, status = Open3.capture2e(env, RbConfig.ruby, SCRIPT, '.', chdir: @site)
+    [out, status.exitstatus]
+  end
+
+  def test_pages_generated_by_a_bundler_plugin_are_counted
+    before, = run_script_in_site_without_gemfile
+    with_plugin_gem
+    out, code = run_script_in_site
+    assert_equal 0, code, out
+    count = ->(text) { text[/\((\d+) files checked\)/, 1].to_i }
+    assert_equal count.call(before) + 1, count.call(out),
+                 "the generated tag page must be one of the files checked: #{before} then #{out}"
+  end
+
+  def test_a_page_that_takes_over_a_generated_page_fails
+    with_plugin_gem
+    write('pages/tag-takeover.md', "---\ntitle: Mine\npermalink: /tags/ai/\n---\nx\n")
+    out, code = run_script_in_site
+    assert_equal 1, code, out
+    assert_includes out, 'FAIL 2 files are written to "/tags/ai/index.html"'
+    assert_includes out, '"pages/tag-takeover.md"'
+  end
+
+  # Without the plugin's hook this post's address would be /blog/ itself.
+  def test_a_post_whose_empty_slug_a_plugin_repairs_is_not_a_false_collision
+    with_plugin_gem
+    write('_posts/2026-06-01-blank-slug.md', "---\ntitle: Blank slug\nslug: \"\"\n---\nx\n")
+    out, code = run_script_in_site
+    assert_equal 0, code, out
+  end
+
+  # The site's own `source:` is honored, not overridden.
+  def test_a_configured_source_directory_is_honored
+    write('_config.yml', "title: Example\npermalink: /blog/:slug/\nsource: site\n")
+    write('site/index.html', "---\ntitle: Home\n---\nhome\n")
+    write('site/tags/index.html', "---\ntitle: Tags\n---\ntags\n")
+    write('site/pages/sneaky.md', "---\ntitle: Sneaky\npermalink: /tags/\n---\nx\n")
+    out, code = run_script_in_site_without_gemfile
+    assert_equal 1, code, out
+    assert_includes out, 'FAIL 2 files are written to "/tags/index.html"'
+    assert_includes out, '"pages/sneaky.md"'
+    refute_includes out, '/blog/index.html', 'files outside the configured source are not the site'
+  end
+
+  def run_script_in_site_without_gemfile
+    env = { 'JEKYLL_ENV' => 'production', 'BUNDLE_GEMFILE' => nil, 'RUBYOPT' => nil,
+            'JEKYLL_NO_BUNDLER_REQUIRE' => nil }
+    out, status = Open3.capture2e(env, RbConfig.ruby, SCRIPT, '.', chdir: @site)
+    [out, status.exitstatus]
   end
 
   # A check that cannot run must not read as a pass.

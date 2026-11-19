@@ -89,8 +89,8 @@ in `content-pr-guard.js`.
   with permalink `/tags/` replaced the tags index, and only a matrix spec
   noticed. Jekyll builds such a site with a warning. `site-verify.yml` now
   fails it on both routes and both sites (`scripts/destination-conflicts.rb`,
-  which asks Jekyll for every file's destination), naming the address and the
-  files. The same check found two gaps that exist on both routes and are not
+  which loads the site as the build does and asks Jekyll for the destination
+  of every file Jekyll writes), naming the address and the files. The same check found two gaps that exist on both routes and are not
   closed here: an unclosed tag in a post's first paragraph is copied raw into
   the excerpt on the home and blog pages, and nothing checks an entry's
   `layout:`.
