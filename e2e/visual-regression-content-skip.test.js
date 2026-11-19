@@ -2,7 +2,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
 const { test, expect } = require("./base");
-const { isSalient } = require("./visual-regression-salient");
+const {
+  isSalient,
+  isSalientChange,
+  parseNulStatus,
+} = require("./visual-regression-salient");
 
 // Locks the "content-only PRs do not trigger the visual-regression build /
 // review" invariant.
@@ -104,6 +108,54 @@ test.describe("visual-regression: content-only PRs are non-salient", () => {
         "_data/tool_sources/my-new-tool.yml",
       ]),
     ).toBe(true);
+  });
+
+  test("a CMS edit to an existing tool entry is non-salient unless it moves or re-points the page", () => {
+    // cms-platform#1044: adamdaniel.ai#4904 retitled a tool in the CMS and
+    // waited for a regression approval it could only ever get.
+    const fm = (o) => `---\n${YAML.stringify(o)}---\nBody.\n`;
+    const base = { title: "Evals", slug: "evals", embed_src: "/assets/tools/skills-evals/" };
+    const edit = (after, opts = {}) =>
+      isSalientChange([{ status: "M", path: "_tools/evals.md" }], {
+        fromCms: true,
+        readBlobs: () => ({ before: fm(base), after }),
+        YAML,
+        ...opts,
+      });
+    expect(edit(fm({ ...base, title: "Improvement Loop Explorer", featured: true }))).toBe(false);
+    expect(edit(fm({ ...base, slug: "loop" })), "a slug change moves the page").toBe(true);
+    expect(edit(fm({ ...base, embed_src: "/x/" })), "an embed change swaps the app").toBe(true);
+    expect(edit(fm(base), { fromCms: false }), "a hand edit keeps its review").toBe(true);
+    expect(edit(fm(base), { YAML: null }), "no parser, no skip").toBe(true);
+    expect(edit(fm(base), { readBlobs: () => null }), "unreadable blob, no skip").toBe(true);
+    expect(edit("no front matter\n"), "unparseable entry, no skip").toBe(true);
+    expect(edit("---\n: [\n---\n"), "invalid YAML, no skip").toBe(true);
+    for (const status of ["A", "D", "T"]) {
+      expect(
+        isSalientChange([{ status, path: "_tools/evals.md" }], {
+          fromCms: true,
+          readBlobs: () => ({ before: fm(base), after: fm(base) }),
+          YAML,
+        }),
+        `status ${status} keeps the review`,
+      ).toBe(true);
+    }
+    expect(
+      isSalientChange([{ status: "M", path: "_tools/sub/evals.md" }], {
+        fromCms: true,
+        readBlobs: () => ({ before: fm(base), after: fm(base) }),
+        YAML,
+      }),
+      "only a top-level entry qualifies",
+    ).toBe(true);
+  });
+
+  test("name-status parsing pairs status with path and refuses truncated input", () => {
+    expect(parseNulStatus("M\0_tools/a.md\0A\0b c.md\0")).toEqual([
+      { status: "M", path: "_tools/a.md" },
+      { status: "A", path: "b c.md" },
+    ]);
+    expect(() => parseNulStatus("M\0_tools/a.md\0A\0")).toThrow();
   });
 
   test("the tool_sources carve-out does not swallow the rest of _data/", () => {

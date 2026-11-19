@@ -1,11 +1,11 @@
 """How self-ci.yml runs the skill gates: in the REQUIRED python-unit-tests job,
-on pull_request only, behind an in-job salience step, WARN-ONLY.
+on pull_request only, behind an in-job salience step, ENFORCING (#946).
 
 Parses the workflow with PyYAML (no line scanning for structure), and runs
 both steps' own `run:` scripts under bash the way GitHub does
 (`bash --noprofile --norc -eo pipefail`) inside depth-2 clones of a real merge
 commit, so a broken path filter, a checkout too shallow for the diff, or a
-fail-safe that fails the job shows up here. Deterministic: local git only, no
+salience step that fails the job shows up here. Deterministic: local git only, no
 network.
 
 Run: python3 -m pytest scripts/skill_gates -q
@@ -105,14 +105,19 @@ def test_gate_runs_only_on_salient_pull_requests(steps):
     assert steps.index(salience) < steps.index(gate)
 
 
-def test_gate_is_warn_only_on_the_merge_commit(steps):
+def test_gate_is_enforcing_on_the_merge_commit(steps):
     gate = _step(steps, runs=GATE_SCRIPT)
-    [argv] = [c for c in _commands(gate["run"]) if GATE_SCRIPT in c]
+    commands = _commands(gate["run"])
+    [argv] = [c for c in commands if GATE_SCRIPT in c]
     assert argv[:2] == ["python3", GATE_SCRIPT]
-    assert "--warn-only" in argv
+    assert "--warn-only" not in argv
     assert argv[argv.index("--base") + 1] == "HEAD^1"
     assert argv[argv.index("--head") + 1] == "HEAD"
-    assert "continue-on-error" not in gate  # warn-only is the script's job, not the runner's
+    # Nothing may swallow the gate's exit code: it is the last command, no
+    # `||` fallback follows it, and the runner is not told to carry on.
+    assert commands[-1] is argv
+    assert "||" not in gate["run"]
+    assert "continue-on-error" not in gate
 
 
 def test_scripts_interpolate_no_expressions(steps):
@@ -247,16 +252,31 @@ def _remove_skill_a(repo):
     _git(repo, "rm", "-q", "skills/a/SKILL.md")
 
 
-def test_gate_step_warns_and_exits_0_on_a_failing_change(steps, tmp_path):
+def test_gate_step_fails_the_job_on_a_failing_change(steps, tmp_path):
     work = _clone(tmp_path, _origin(tmp_path, _remove_skill_a))
     _with_gate_script(work)
     summary = tmp_path / "summary.md"
     proc, _ = _run_step(_step(steps, runs=GATE_SCRIPT), work, tmp_path,
                         env={"GITHUB_STEP_SUMMARY": str(summary)})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "skill-gates: cms-platform/a: SKILL.md was removed" in proc.stdout
+    assert "skill-gates: 1 failure(s)" in proc.stdout
+    assert "## Skill gates (enforcing)" in summary.read_text(encoding="utf-8")
+
+
+def _reword_skill_a_with_a_light_entry(repo):
+    _write(repo / "skills" / "a" / "SKILL.md", "v1, reworded\n")
+    _write(repo / "docs" / "skill-impact.md",
+           "# log\n\n## 2026-11-17 — cms-platform/a — edit\n\n"
+           "- Change: one phrase reworded.\n- Eval: wording-only: no rule changed.\n")
+
+
+def test_gate_step_passes_a_wording_only_edit_with_its_light_entry(steps, tmp_path):
+    work = _clone(tmp_path, _origin(tmp_path, _reword_skill_a_with_a_light_entry))
+    _with_gate_script(work)
+    proc, _ = _run_step(_step(steps, runs=GATE_SCRIPT), work, tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "::warning title=skill-gates::cms-platform/a: SKILL.md was removed" in proc.stdout
-    assert "1 finding(s) that would fail once enforcing" in proc.stdout
-    assert "## Skill gates (warn-only)" in summary.read_text(encoding="utf-8")
+    assert "checked 0 created, 1 edited, 0 removed" in proc.stdout
 
 
 def test_gate_step_reads_a_depth_2_clone_with_no_error(steps, tmp_path):
@@ -270,7 +290,7 @@ def test_gate_step_reads_a_depth_2_clone_with_no_error(steps, tmp_path):
     assert "could not run" not in proc.stdout
 
 
-def test_gate_step_fail_safe_on_a_non_merge_head(steps, tmp_path):
+def test_gate_step_fails_loudly_on_a_non_merge_head(steps, tmp_path):
     work = _clone(tmp_path, _origin(tmp_path, _edit("README.md"), merge=False))
     # A depth-2 clone of a single-parent HEAD has HEAD^1 but not its parent:
     # cut it to depth 1 so HEAD^1 is unresolvable, as on a broken checkout.
@@ -278,11 +298,11 @@ def test_gate_step_fail_safe_on_a_non_merge_head(steps, tmp_path):
                    check=True, capture_output=True)
     _with_gate_script(work)
     proc, _ = _run_step(_step(steps, runs=GATE_SCRIPT), work, tmp_path)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "::warning title=skill-gates::the check could not run" in proc.stdout
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "skill-gates: error: the check could not run" in proc.stderr
 
 
-def test_gate_step_survives_a_crashing_interpreter(steps, tmp_path):
+def test_gate_step_fails_on_a_crashing_interpreter(steps, tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     stub_dir = tmp_path / "bin"
@@ -292,5 +312,4 @@ def test_gate_step_survives_a_crashing_interpreter(steps, tmp_path):
     stub.chmod(0o755)
     proc, _ = _run_step(_step(steps, runs=GATE_SCRIPT), work, tmp_path,
                         env={"PATH": f"{stub_dir}:{os.environ['PATH']}"})
-    assert proc.returncode == 0, proc.stderr
-    assert "::warning title=skill-gates::the skill gates exited 3" in proc.stdout
+    assert proc.returncode == 3, proc.stderr

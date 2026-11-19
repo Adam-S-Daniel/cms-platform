@@ -1,0 +1,53 @@
+name: Publish watchdog
+# Sweeps this repo's open `cms/` pull requests and opens ONE issue per stuck
+# publish (a required check failed, a check has waited more than an hour, or
+# every check finished and it has not merged); the issue notification is the
+# alert and `agent-ready` queues it for the fleet worker. Issues close
+# themselves at the next sweep after the change goes live. Runs on the `publish-watchdog`
+# repository_dispatch knock that `Publish watchdog signal` sends, and every 6
+# hours as a catch-all. No `pull_request` trigger: a job there would be a check
+# run on the pull request, and the editor counts a cancelled or pending check
+# run against the publish. The platform owns the logic; this thin caller needs
+# no site-specific values.
+run-name: >-
+  ${{ github.event_name == 'repository_dispatch'
+        && 'signal — a publish check failed or a deploy finished'
+     || github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+     || format('manual — @{0}', github.actor) }}
+
+on:
+  repository_dispatch:
+    types: [publish-watchdog]
+  schedule:
+    # Every 6 hours at an off-peak minute; lag does not matter for a catch-all.
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report findings without opening or closing issues (true/false)'
+        # Declared `string` and fromJSON-coerced below: a typed boolean would
+        # startup-fail the workflow_call handoff (see scheduled-run-health.yml).
+        type: string
+        default: 'false'
+
+# The reusable's permissions are capped by this caller's grant.
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  issues: write
+
+# A queued sweep runs after the current one; never cancel a sweep mid-write.
+concurrency:
+  group: publish-watchdog
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog.yml@v0.1.182
+    with:
+      # A repository variable (comma-separated logins), so this caller carries no
+      # site-specific value. Empty means issues are not assigned.
+      assignees: ${{ vars.PUBLISH_ALERT_ASSIGNEES }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}

@@ -49,7 +49,7 @@ same Jekyll + Decap + AWS stack and improvements sync **both ways**. Design:
 (consumer 1, the dogfood) and **jodidaniel.com** (consumer 2, a single-page
 bio).
 
-**Current release: `v0.1.177`** (`v0.1.0`–`v0.1.177` are tagged; cut one with
+**Current release: `v0.1.182`** (`v0.1.0`–`v0.1.182` are tagged; cut one with
 `gh workflow run release.yml -f version=vX.Y.Z`). The bump is ONE atomic edit in
 the release PR, before the dispatch: this line, both plugin manifests
 (`plugin.json` + `.claude-plugin/plugin.json`), the `docs/VERSION-HISTORY.md`
@@ -102,7 +102,7 @@ Each section below keeps the rule and its incident; `docs/` has the long form.
 | `docs/FLEET-CALLER-CURRENCY.md` | how a fleet repo's `scheduled-run-health` caller stays current: the self-resolving checkout, the currency lane, a fleet repo's cms-platform Dependabot `ignore`. |
 | `docs/CI-INVARIANTS.md` | a required check, a scheduled workflow, the label audit, `site-verify.yml`, `site-agent-checks.yml`, the webServer, a loop. |
 | `docs/E2E-PARALLELISM.md` | e2e workers, sharding, the browser install. |
-| `docs/CONTENT-PUBLISH-LATENCY.md` | a content-only e2e lane (shelved), a post's time-to-live. |
+| `docs/CONTENT-PUBLISH-LATENCY.md` | the content route, a post's time-to-live, an e2e or site-verify job that did no work. |
 | `docs/PUBLISHING-UX.md` | what an editor sees of publish/status, or a spec that publishes. |
 | `docs/CROSS-POSTING.md` | `cross-post.yml`, `scripts/cross_post/cross_post.py`, Mastodon dedupe, the LinkedIn leg and its 60-day token, the Substack paste-by-hand leg. |
 | `docs/MEDIA-DISCOVERY.md` | `media-discovery.yml`: checks, config, secrets. |
@@ -187,6 +187,20 @@ from the `/pulls` LIST response (§4); every GitHub GET
 under `theme/admin/` passes `cache: "no-cache"` (#386); a spec publishes ONE
 entry per page (#342). Incidents → `docs/PUBLISHING-UX.md` §2.3, §4.
 
+### A content-only pull request skips the machinery tests (the content route)
+
+A post is gated by checks about the post. On a same-repository `cms/` pull
+request whose every changed path is CMS content, `e2e / e2e` succeeds without
+running a test, `site-verify` skips only the verifier's self-tests, and a CMS
+edit to a seam file collection skips visual review. **Every doubt routes
+`full`**; the site's publish gate (`cms.site_gate.path`) and `_tools/` always
+do. A spec that reads served content must not judge an author's value: it now
+fails the next bump or candidate, not the publish. **A classifier that can skip
+tests or a review never does `require("<name>")`**: it runs inside the pull
+request's tree, where a committed `node_modules/` wins (`e2e/trusted-yaml.js`).
+Rule: `e2e/content-route.js` (`content-route.test.js`). →
+`docs/CONTENT-PUBLISH-LATENCY.md`.
+
 ### A required status check nobody publishes blocks forever, silently (#371)
 
 A ruleset requiring `validate-content` where the consumer publishes
@@ -210,8 +224,9 @@ deleted in v0.1.83. → `docs/SYNC.md` § Skills, `docs/VERSION-HISTORY.md` v0.1
 
 ### Skill changes are recorded, and evals gate them
 
-The rules are in `docs/skill-impact.md`'s header; python-unit-tests checks
-them (warn-only for now) with `scripts/skill_gates/check_skill_gates.py`.
+The rules are in `docs/skill-impact.md`'s header; python-unit-tests enforces
+them with `scripts/skill_gates/check_skill_gates.py`: a finding fails the job.
+A small wording fix takes the light entry: `Eval: wording-only: …`.
 
 ## Every cross-post target gets text in ITS format, never raw Markdown
 
@@ -434,3 +449,19 @@ local reds are `self-ci.yml`'s DENY list and anything needing Jekyll:
 TARGET=prod PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
   npx playwright test --project=chromium-light --reporter=line ./*.test.js
 ```
+
+## Publish watchdog
+
+A stuck Decap publish (a required check failed on an armed `cms/` PR, a check
+waited over an hour, or every check finished and it has not merged) opens one
+`publish-stuck` issue per pull request and head commit. `publish-watchdog-signal.yml`
+(a `workflow_run` caller with a read-only token) knocks with a `repository_dispatch`
+through the CMS automation App, and the sweep `publish-watchdog.yml` +
+`scripts/publish-watchdog.js` opens the issue, looks again at 5 and 16 minutes
+while a publish is in flight, and runs every 6 hours. Timing differs per
+condition (a failed check: a minute or two; green but unmerged: about 6 to 17 minutes;
+a check stalled over an hour: up to the 6-hourly sweep; no App credential: the
+schedule only), in the table in `docs/CI-INVARIANTS.md` § "Publish watchdog".
+Two hops because no write token may run under `workflow_run` and the App has no
+`issues` permission. No `pull_request` trigger: the editor counts a cancelled or
+pending check run against a publish.

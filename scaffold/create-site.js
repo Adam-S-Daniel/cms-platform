@@ -27,7 +27,7 @@ const PLATFORM_REPO = "Adam-S-Daniel/cms-platform";
 // (v-prefixed) and the examples/site template pins by
 // e2e/examples-site-pins-current.test.js — the release PR moves all of them
 // together.
-const PLATFORM_VERSION = "v0.1.177";
+const PLATFORM_VERSION = "v0.1.182";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -690,7 +690,7 @@ Next:
                           automation GitHub App; powers platform-bump + dev-hooks-sync, nothing to rotate
        (CMS_PLATFORM_PAT is GONE as of v0.1.103 -- do not create it. The App
         above is the only push credential for platform-bump and dev-hooks-sync;
-        without it platform-bump fails loudly naming both knobs.)
+        without it both fail loudly naming both knobs.)
        - AWS_ROLE_ARN, PREVIEW_CLOUDFRONT_ID, PRODUCTION_CLOUDFRONT_ID (bootstrap stack outputs)
      Also enable Settings -> General -> Allow auto-merge.
   6. Set the repo VARIABLES the reusable workflows read via vars.* (CMS_APEX,

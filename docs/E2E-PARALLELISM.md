@@ -762,10 +762,16 @@ run the *same* coverage faster, not to run less of it. Selection trades coverage
 for speed and adds a "did the selector miss something?" failure mode; the
 project matrix needs no such trade.
 
-A 2026-10 proposal to route content-only PRs to a focused lane would have
-reversed this. It was shelved before implementation; the measurements, design
-and live defects it turned up are in
-[`CONTENT-PUBLISH-LATENCY.md`](CONTENT-PUBLISH-LATENCY.md).
+**Superseded for content pull requests on 2026-11-19.** A pull request that
+changes CMS content only now skips the matrix: each project job decides the
+route in its first steps and succeeds without running a test. The reasoning
+above still holds for every other pull request, which runs the same coverage
+as before. What changed the decision is that the trade was never coverage for
+speed on a content pull request: content cannot break the machinery the suite
+tests, while the suite could, and did, block a post. The rule, its fail-safe
+and what still runs the suite against real content are in
+[`CONTENT-PUBLISH-LATENCY.md`](CONTENT-PUBLISH-LATENCY.md), with the 2026-10
+focused-lane proposal that was shelved first.
 
 ## Rejected: generating the matrix from a setup job
 

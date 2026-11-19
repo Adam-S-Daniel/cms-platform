@@ -1,0 +1,155 @@
+# Publish watchdog signal (reusable): knock the sweep after a gating check
+# fails or a production deploy succeeds.
+#
+# WHY TWO HOPS. The sweep (publish-watchdog.yml) needs the issues write scope. This
+# workflow runs under `workflow_run`, a privileged trigger, and the contributor
+# trust boundary (e2e/contributor-trust-boundary-rules.js) forbids a
+# write-capable GITHUB_TOKEN there: writes go through a named secret. The sites'
+# CMS automation GitHub App has `contents: write` but no `issues` permission, so
+# it cannot open the issue itself; it CAN send a `repository_dispatch`
+# (`POST /repos/{owner}/{repo}/dispatches` needs contents: write), and the
+# sweep, which runs under the dispatch with the repo's own token, does the rest.
+# If the App is ever granted the issues write scope, the two hops can become one.
+#
+# This job checks out NO site code, reads NO artifacts and passes nothing from
+# the triggering run to the dispatch (it sends the event type and no payload). A site without
+# the App variable and secret simply has no fast signal: it gets a notice and a
+# green run, and the scheduled sweep still runs. See docs/CI-INVARIANTS.md
+# "Publish watchdog".
+name: Publish watchdog signal (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      app_private_key:
+        description: "The CMS automation GitHub App's private key (with vars.CMS_AUTOMATION_APP_ID on the caller's repo). Without both, the run is a green no-op that names them."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          # actionlint types `job` as a STRICT object that does not (yet)
+          # know about job.workflow_ref / job.workflow_sha /
+          # job.workflow_repository / job.workflow_file_path
+          # (rhysd/actionlint#647, open against both the 1.7.7 this repo
+          # pins in self-ci.yml and the latest 1.7.12) — writing
+          # `${{ job.workflow_sha }}` directly fails this repo's REQUIRED
+          # actionlint lane. `${{ toJSON(job) }}` IS fully typed (job itself
+          # is a known context), and the RUNTIME object carries these
+          # properties regardless of what actionlint's declarations know —
+          # GitHub's own contexts reference documents all four. So values
+          # reach this step only through JOB_CONTEXT (env — never
+          # interpolated into `run:`) and are read out with jq.
+          # e2e/scheduled-run-health-self-resolve.test.js locks both halves:
+          # that this step reads toJSON(job), and that no `${{ }}`
+          # expression anywhere in this file reads job.workflow_ directly.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          # Here-strings into jq, never a pipe — a pipe into a command that
+          # can exit early is its own footgun (AGENTS.md's grep -q trap);
+          # jq reads its whole input regardless, but the here-string form
+          # costs nothing and keeps this step consistent with that rule.
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          wref=$(jq -r '.workflow_ref // ""' <<<"$JOB_CONTEXT")
+
+          # GitHub runs `run:` under `bash -e`, so every failure path below is
+          # an explicit `if` + `exit 1` — a bare `[[ ... ]] && ...` as the
+          # last statement of the step would only fail the step on its OWN
+          # false test, not on the condition this is actually policing.
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::the job context carries no usable workflow_repository ('${repo}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the job context carries no usable workflow_sha ('${sha}'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+          if [[ "$wref" != *"@"* ]]; then
+            echo "::error::the job context carries no usable workflow_ref ('${wref}', no '@'). This reusable needs a runner that populates job.workflow_* (github.com) and refuses to guess which platform commit to run."
+            exit 1
+          fi
+
+          # job.workflow_ref looks like
+          # "Adam-S-Daniel/cms-platform/.github/workflows/scheduled-run-health.yml@refs/tags/v0.1.108"
+          # (tag call), "...@refs/heads/main" (branch or local ./ call), or
+          # "...@<40-hex sha>" (sha call). Strip the file-path prefix, then
+          # the refs/tags|refs/heads namespace, to land on the bare ref a
+          # caller would actually recognize as its own pin.
+          ref=${wref##*@}
+          ref=${ref#refs/tags/}
+          ref=${ref#refs/heads/}
+          if ! [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::resolved ref '${ref}' (from workflow_ref '${wref}') is not safe to write to GITHUB_OUTPUT — refusing to guess."
+            exit 1
+          fi
+
+          {
+            echo "repository=$repo"
+            echo "sha=$sha"
+            echo "ref=$ref"
+          } >>"$GITHUB_OUTPUT"
+          echo "Platform commit resolved from the job context: ${repo}@${sha} (called at ${ref})"
+      - name: Check for the CMS automation App
+        id: gate
+        env:
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+        run: |
+          if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "::notice::No fast publish signal: set the variable CMS_AUTOMATION_APP_ID and the secret CMS_AUTOMATION_APP_PRIVATE_KEY (docs/CONSUMER-PROVISIONING.md in cms-platform). The 6-hourly publish watchdog sweep still runs."
+            echo "present=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "present=true" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Fetch the token minting script from the platform
+        if: steps.gate.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          sparse-checkout: |
+            scripts/mint-app-token.js
+          sparse-checkout-cone-mode: false
+          path: .cms-platform
+          persist-credentials: false
+      - name: Setup Node
+        if: steps.gate.outputs.present == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+          package-manager-cache: false
+      - name: Mint a GitHub App installation token
+        if: steps.gate.outputs.present == 'true'
+        id: app
+        env:
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+        run: |
+          set -euo pipefail
+          # Scoped DOWN: this one repository, contents: write (what
+          # POST /repos/{owner}/{repo}/dispatches needs) and nothing else.
+          node .cms-platform/scripts/mint-app-token.js \
+            --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
+            --repositories "${GITHUB_REPOSITORY#*/}" \
+            --permissions contents=write
+      - name: Knock the publish watchdog sweep
+        if: steps.gate.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=publish-watchdog >/dev/null 2>"$RUNNER_TEMP/dispatch.err"; then
+            status=$(grep -oE 'HTTP [0-9]{3}' "$RUNNER_TEMP/dispatch.err" | head -n 1 || true)
+            echo "::error::could not send the publish-watchdog dispatch (${status:-no HTTP status})."
+            exit 1
+          fi
+          echo "Sent the publish-watchdog dispatch."

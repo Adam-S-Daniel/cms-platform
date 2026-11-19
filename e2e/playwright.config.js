@@ -35,6 +35,9 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 // basenames; the regex below matches them anywhere under the testDir.
 const CONSUMER = !!process.env.SITE_ROOT;
 const PLATFORM_META_SPECS = [
+  // Publish watchdog: unit tests of scripts/publish-watchdog.js and a parse of its
+  // two workflow files; platform-internal, runs in self-ci node-unit-lints.
+  "publish-watchdog.test.js",
   // #982: lints the platform's theme/ and scaffold/ browser code for HTML sinks.
   "html-sink-lint.test.js",
   // #755: platform admin SOURCE; the browser spec uses the offline caret config,
@@ -194,6 +197,9 @@ const PLATFORM_META_SPECS = [
   "editor-component-image.test.js",
   // #732 — platform-only code widget registration and initialization regression.
   "code-block-language.test.js",
+  // #516 row 11 — vm-sandboxes theme/admin/sign-in-renewal.js and the fetch
+  // wrap that calls it, and reads the production shell's script order.
+  "sign-in-renewal.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",
@@ -318,6 +324,10 @@ const PLATFORM_META_SPECS = [
   // reusable DEFINITION (via readWorkflow) plus the examples/site caller —
   // platform-internal, self-CI only.
   "content-pr-guard.test.js",
+  // The content route: reads the platform's own workflows, composite action
+  // and scripts/ (content-route.js requires ../scripts/content-pr-guard, which
+  // a consumer's placed harness does not have). Platform-internal.
+  "content-route.test.js",
   // Reads the scheduled-run-health reusable + caller DEFINITIONS and the
   // scripts/audit-scheduled-runs.js helpers (consumer ships only a thin
   // wrapper) — platform-internal, self-CI only.
@@ -687,6 +697,10 @@ const PLATFORM_META_SPECS = [
   // stalled one for 39 min, blocking a canary PR and failing a prod loop).
   // Platform-internal, self-CI only.
   "playwright-install-bounded.test.js",
+  // Reads every platform workflow DEFINITION to assert each Playwright browser
+  // cache key names the runner image (a 24.04 WebKit build restored on 26.04
+  // failed every webkit-iphone16 test). Platform-internal, self-CI only.
+  "playwright-browser-cache-image-key.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +
@@ -734,6 +748,10 @@ const PLATFORM_META_SPECS = [
   // 26.04 from 2026-10-19). Reads the PLATFORM's own workflow and composite
   // action definitions — a consumer has neither.
   "workflow-runtime-pinned.test.js",
+  // await-prod-deploy follows redirects when it reads prod commit.json (a site
+  // with its own admin host 302s <apex>/admin/*). Reads the PLATFORM's own
+  // composite action definition — a consumer has none.
+  "await-prod-deploy-follows-redirects.test.js",
   // #145 — reads the canonical examples/site thin-caller DEFINITIONS + the
   // platform's own self-dependabot-auto-merge.yml / self-secrets-scan.yml to
   // lock the base-retarget `edited` trigger + caller-job gate. Platform-
@@ -785,6 +803,9 @@ const PLATFORM_META_SPECS = [
   // The production 404 page is uploaded no-cache: parses the platform's own
   // deploy-production.yml DEFINITION, which a consumer does not carry.
   "deploy-production-404-cache.test.js",
+  // Pages and feeds revalidate, assets cache: parses the same platform
+  // deploy-production.yml DEFINITION.
+  "deploy-production-document-cache.test.js",
   // The production admin prefix is uploaded no-cache (#663): same reason.
   "deploy-production-admin-cache.test.js",
   // #635 — ASCII, length-capped entry file names: parses the theme/admin

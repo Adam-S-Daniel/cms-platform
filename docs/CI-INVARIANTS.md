@@ -1631,7 +1631,7 @@ absent from `examples/site/` as EXTRA on a required check. So it is a platform
 seam: the `site-verify.yml` reusable plus a dictated thin caller of the same
 name, which `platform-bump` seeds into both consumers on the next bump (#315).
 
-Four decisions in it that are not obvious from the YAML:
+Six decisions in it that are not obvious from the YAML:
 
 - **Convention, not configuration.** No inputs, no secrets. If the caller's
   tree has `scripts/verify-build-artifacts.rb` the reusable builds the site
@@ -1643,6 +1643,40 @@ Four decisions in it that are not obvious from the YAML:
   the verifier or self-tests exist; absent self-tests produce a notice and
   succeed. Both consumers have verifiers, and adamdaniel.ai has self-tests.
   Generalizing to a non-Ruby verifier waits for a second case.
+- **A content-only pull request skips the SELF-TESTS, and only those.** The
+  self-tests prove the verifier still tells good edits from real defects by
+  rebuilding scratch copies of the site; a post cannot change the verifier,
+  a layout or the theme. On adamdaniel.ai they were over three of the job's
+  seven minutes on every publish. The build, the verifier and the escaping
+  lint always run: they are the gate a content pull request has in place of
+  the browser matrix (`CONTENT-PUBLISH-LATENCY.md` § What shipped). The job
+  fetches `e2e/content-route.js`, the modules it requires and the composite
+  in its sparse checkout; `e2e/site-verify.test.js` holds that list and the
+  one `if:`. The verifier step sets `SITE_VERIFY_SELF_TESTS_HANDLED=true`, so
+  a verifier whose default entrypoint also runs its self-tests for a bare
+  local run can leave them alone here instead of running them a second time
+  (adamdaniel.ai's does once
+  [adamdaniel.ai PR 5008](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/5008)
+  is merged; until then it ignores the variable and nothing is saved there).
+- **No two files may share an address.** After the verifier, the job runs the
+  platform's `scripts/destination-conflicts.rb` through the site's bundle, on
+  every site and every route. Two source files that claim one URL build with
+  only a warning, and one of them is silently not published: a page saved with
+  permalink `/tags/` replaced the tags index, and a second post with an older
+  post's slug took its URL, with every check green (issue 1061). The script
+  groups everything Jekyll itself writes (`Site#each_site_file`) by
+  `destination`, the enumeration Jekyll's own warning uses, and reads the
+  result, not the build log, so `quiet: true` cannot hide it. It must load the
+  site as `jekyll build` does, which includes
+  `Jekyll::PluginManager.require_from_bundler`: a bare `Jekyll::Site.new`
+  does not load the Gemfile's `:jekyll_plugins` group, where a consumer gets
+  the theme gem, and the first version therefore missed a page taking over a
+  generated tag page and reported a false collision for a post the CMS saved
+  with `slug: ""` (found by the release's independent review, before it
+  shipped). Files a plugin copies into `_site` from a post-write hook, such as
+  the theme's `admin/`, are outside what it sees.
+  `theme/spec/destination_conflicts_test.rb` runs it over real site
+  directories, one of them with a plugin gem loaded only through that group.
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through
@@ -1825,3 +1859,102 @@ failure-summary comment behavior is separate and unchanged. The offline
 `e2e/playwright-log-privacy.test.js` checks parsed workflow structure and runs
 the shell steps with a local `npx` stub, so it belongs in the platform-only
 `PLATFORM_META_SPECS` registry and needs no browser, network, or site secrets.
+
+## Publish watchdog: a stuck publish raises an issue
+
+On 2026-11-18 a real post's required check failed on adamdaniel.ai PR 5001 and
+nothing alerted anyone; the post sat unpublished for a day, because the only net
+was the daily `scheduled-run-health` audit, which reports a PR left red for 24
+hours. **The rule: a Decap publish that is stuck opens a GitHub issue** (the
+issue notification is the alert; `agent-ready` queues it for the fleet worker),
+on the timing in the table below.
+
+**Signal, then sweep.** `publish-watchdog-signal.yml` (thin caller
+`examples/site/.github/workflows/publish-watchdog-signal.yml`) runs on
+`workflow_run` when, on a same-repository `cms/` pull request, a gating workflow
+fails, times out, fails to start or is cancelled, or the editorial workflow
+completes (it runs on every label, so that is the moment Publish is pressed); and
+when the production deploy succeeds. It mints a token for the CMS automation App
+scoped to this repository with `contents: write` and sends a `repository_dispatch`
+with `event_type` `publish-watchdog` (no payload). The sweep `publish-watchdog.yml`
+(caller `publish-watchdog.yml`) runs on that dispatch and every 6 hours, reads
+every open `cms/` pull request through `scripts/publish-watchdog.js` and opens, or
+closes, issues. While an armed publish is still in flight after a pass it looks
+again at 5 and 16 minutes after the first pass (`follow_up_minutes`: at most
+four values, none above 25, so three passes by default; never on `--dry-run`),
+which is how "every check green but no merge" is caught without the cron. A
+sweep waiting on a follow-up holds the one `publish-watchdog` concurrency
+group, so a later knock runs after it; nothing is lost, because every pass
+re-reads every pull request. The 60-minute stall rule is not covered by the
+follow-ups.
+
+**When it alerts**
+
+| Situation | Alert |
+|---|---|
+| A required check fails (or the required list is unreadable and every check has finished) on an armed pull request | The next sweep: normally a minute or two after the failed run finishes. If a sweep is already waiting on a follow-up, at its next pass, so up to about 11 minutes |
+| A required check is cancelled | Once it has stayed cancelled for the 3-minute grace window (a concurrency group replaces a run a moment after cancelling it): at the next pass, 5 or 16 minutes after the sweep began |
+| Publish pressed on a pull request whose checks already failed | A minute or two: the editorial workflow's completion signals |
+| Every check green but no merge | At the first pass that comes 3 minutes after the last check finished: about 6 minutes after Publish when the checks take under 3 (a content pull request's take about 2), about 17 when they take up to 13. Checks slower than that are judged by a later sweep |
+| A check waiting or running for over an hour (including a visual review approval) | The next sweep after the hour: the next signal, or the 6-hourly schedule, so up to about 6 hours plus GitHub's cron lag |
+| GitHub has not caught up with the pull request (branch tip differs from `head.sha`, or the check-run list is partial) for over an hour | Same as the line above |
+| A site without the App credential | Every alert at the scheduled cadence (a `::notice::` names the two knobs) |
+
+**Why two hops.** `workflow_run` is a privileged trigger, and the contributor
+trust boundary (`e2e/contributor-trust-boundary-rules.js`) forbids a
+write-capable `GITHUB_TOKEN` there: writes go through a named secret. The App
+(`CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY`) has no `issues`
+permission, so it can only knock; and a PAT-authored issue would not notify its
+own author. If the App is ever granted `issues: write`, the two hops can become
+one. **Why not cron alone:** these repos' crons lag by hours.
+
+**Why no `pull_request` trigger.** A watcher on the pull request would be a check
+run on its head. The editor (`theme/admin/publish-progress.js`,
+`posts-list-enhance.js`) counts a cancelled or pending check run against the
+publish, so a healthy publish would read "Needs attention". Neither workflow
+runs on `pull_request` or polls, and neither is a check on the pull request.
+
+**What counts as stuck.** An open, non-draft `cms/` PR that someone armed
+(auto-merge set, or the `cms/ready` or `decap-cms/pending_publish` label) is
+stuck when: a newest check run (newest by id per name) failed, timed out, needed
+action or failed to start AND is a required context (any failure counts when the
+required list is unreadable or empty, but then only once nothing is still
+running; a `cancelled` run counts only after the grace period); or a check has
+been unfinished for 60 minutes (`--stall-minutes`), aged from the pull request's
+last update when it has no start time, and the issue says per check whether it is
+waiting for someone to approve it, has not started, or has been running too long;
+or every check finished 3 minutes (`--grace-minutes`, the editor's own stall
+grace) ago and it has not merged.
+While the branch tip differs from the PR's `head.sha` (GitHub updates it a moment
+late) or the check-run list could not be read in full, it is in flight, and stuck
+only once the pull request has been untouched for the stall window. An unknown
+never alerts, and neither does an unparseable timestamp.
+
+**Lifecycle.** One issue per PR and head commit. Its first line is a hidden
+marker `<!-- publish-watchdog:pr=<n> sha=<head sha> -->`; only issues authored by
+`github-actions[bot]` count. The sweep reads every open issue with the label,
+however old, and the closed ones updated in the last 14 days. When the SWEEP
+closes an issue it rewrites the marker (`publish-watchdog-resolved:`), so only
+an issue a person closed keeps suppressing a new alert for the same commit: an
+alert a human closed is respected until the pull request
+gets a new commit. An open issue stays open while the PR is open and armed, stuck
+or not, and closes with a comment at the next sweep after the pull request merges,
+closes or is no longer armed. That sweep is prompt when the production deploy
+succeeds; if the deploy fails the issue still closes at the next sweep, because the
+pull request did merge, and the failed deploy is reported by `scheduled-run-health`,
+not here. A PR whose state could not be read in a run keeps its issues; the run
+goes red only if every PR failed to read. An issue create retries without the work
+label (and without assignees) only on HTTP 422. The repository variable
+`PUBLISH_ALERT_ASSIGNEES` optionally assigns the alert
+(`docs/CONSUMER-PROVISIONING.md`).
+
+**Test fixtures are ignored** (every changed file under `_e2e/`, named `e2e-*`,
+or an e2e-slug post under `_posts/`; an unreadable or empty file list is not
+"all fixtures"), as are `on-hold` and `automated-test` PRs, drafts and unarmed
+ones (skipped before any per-PR API call): the e2e loops publish canaries all day
+and most are expected to be abandoned.
+
+**The issue omits the PR title and branch name**: anyone who can push a branch
+chooses them, and an issue notification mails them out. It carries only the
+number, API-built URLs and check names from our own workflows.
+`e2e/publish-watchdog.test.js` locks all of this.

@@ -23,13 +23,16 @@
 //      (`--repositories`) and to the narrowest permission set the job needs —
 //      `workflows=write` for the bump, which rewrites workflow files, and NOT
 //      for dev-hooks-sync, which never touches one;
-//   3. the App token WINS when the App is provisioned — App, then PAT, then
-//      `github.token` — on EVERY credential the job resolves (the checkout
-//      token that git persists for the push, and the `gh` GH_TOKEN), so
-//      provisioning the App is what retires the PAT, with no second switch;
-//   4. the mint FAILS SOFT when the App is not provisioned (v0.1.76 rule): one
-//      `::notice::` naming BOTH knobs, then the PAT path exactly as before;
-//      a present-but-broken key is the script's own loud failure;
+//   3. the App token is the credential on EVERY one the job resolves (the
+//      checkout token that git persists for the bump's push, and the `gh`
+//      GH_TOKEN). dev-hooks-sync's GH_TOKEN is the App token ALONE (#871):
+//      `github.token` cannot create a pull request while "Allow GitHub Actions
+//      to create and approve pull requests" is off, so a fallback to it only
+//      hid the missing App behind a later, unexplained `gh pr create` failure;
+//   4. the mint FAILS LOUDLY when the App is not provisioned: one `::error::`
+//      naming BOTH knobs and exit 1, in both reusables (the PAT path it once
+//      fell back to was removed in v0.1.103, dev-hooks-sync's `github.token`
+//      path in #871); a present-but-broken key is the script's own failure;
 //   5. the thin-caller TEMPLATES pass both secrets, so the next platform-bump
 //      lands the secrets-map change on every consumer — #29's
 //      `structuralShape()` compares each caller's `secrets:` map against the
@@ -47,10 +50,13 @@ const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 
 const TEMPLATES = path.join(__dirname, "..", "examples", "site", ".github", "workflows");
 
-// The exact resolution order, whitespace-normalised: App token, then the PAT,
-// then the job's own GITHUB_TOKEN.
+// platform-bump's resolution, whitespace-normalised: the App token, then the
+// job's own GITHUB_TOKEN (its mint step has already failed without the App, so
+// the second operand is never the push credential).
 const RESOLUTION = (mintId) =>
   `\${{ steps.${mintId}.outputs.token || github.token }}`;
+// dev-hooks-sync's: the App token and nothing else (#871).
+const APP_ONLY = (mintId) => `\${{ steps.${mintId}.outputs.token }}`;
 const norm = (s) => String(s).replace(/\s+/g, " ").trim();
 
 function load(file, job) {
@@ -116,29 +122,21 @@ for (const { file, job, wantsWorkflows } of [
       expect(mint.run).toMatch(
         /::(error|warning)::[^\n]*CMS_AUTOMATION_APP_ID[^\n]*CMS_AUTOMATION_APP_PRIVATE_KEY/,
       );
-      // Severity is NOT a style choice; it tracks whether the credential is
-      // load-bearing for that workflow (v0.1.103, when the gh_token PAT
-      // fallback was removed and there is nothing left to fall back TO).
-      if (wantsWorkflows) {
-        // platform-bump rewrites .github/workflows/*, which needs
-        // workflows:write. github.token does not have it and cannot be granted
-        // it, so continuing only defers the failure to an opaque
-        // "refusing to allow ... without 'workflows' permission" push
-        // rejection. Fail here, loudly, instead.
-        expect(
-          mint.run,
-          "platform-bump must ERROR and exit 1 — its credential is load-bearing",
-        ).toMatch(/::error::[^\n]*CMS_AUTOMATION_APP_ID[\s\S]{0,400}exit 1/);
-      } else {
-        // dev-hooks-sync writes no workflow file and its branch push rides
-        // checkout's own GITHUB_TOKEN. The only cost of continuing is that the
-        // sync PR fires no CI, so failing a weekly sync over it would be worse
-        // than reporting it.
-        expect(
-          mint.run,
-          "dev-hooks-sync must WARN and exit 0 — the degradation is cosmetic",
-        ).toMatch(/::warning::[^\n]*CMS_AUTOMATION_APP_ID[\s\S]{0,400}exit 0/);
-      }
+      // Both ERROR and exit 1: neither job can do its work without the App.
+      // platform-bump rewrites .github/workflows/*, which needs
+      // workflows:write, and github.token cannot be granted it.
+      // dev-hooks-sync opens a pull request, and github.token cannot create
+      // one while "Allow GitHub Actions to create and approve pull requests"
+      // is off, which repo-settings.yml keeps off on purpose (#871). Warning
+      // and continuing only deferred the failure to an opaque `gh pr create`
+      // refusal after the branch was already pushed.
+      expect(
+        mint.run,
+        `${file} must ERROR and exit 1 without the App: its credential is load-bearing`,
+      ).toMatch(/::error::[^\n]*CMS_AUTOMATION_APP_ID[\s\S]{0,400}exit 1/);
+      expect(mint.run, "no path through the mint step may exit 0 without a token").not.toMatch(
+        /exit 0/,
+      );
     });
   });
 }
@@ -174,7 +172,7 @@ test.describe("platform-bump.yml: the App token is the push credential (#238)", 
 });
 
 test.describe("dev-hooks-sync.yml: the App token opens the sync PR (#238)", () => {
-  test("mints AFTER the platform checkout, from .cms-platform/scripts, and GH_TOKEN resolves App first", () => {
+  test("mints AFTER the platform checkout, from .cms-platform/scripts, and GH_TOKEN is the App token alone", () => {
     const { steps, mintIdx, mint } = load("dev-hooks-sync.yml", "sync");
     const platformIdx = steps.findIndex(
       (s) =>
@@ -187,7 +185,24 @@ test.describe("dev-hooks-sync.yml: the App token opens the sync PR (#238)", () =
     expect(mintIdx).toBeGreaterThan(platformIdx);
     expect(mint.run).toMatch(/node \.cms-platform\/scripts\/mint-app-token\.js/);
     const sync = steps.find((s) => typeof s.run === "string" && /gh pr create/.test(s.run));
-    expect(norm(sync.env.GH_TOKEN)).toBe(RESOLUTION(mint.id));
+    expect(norm(sync.env.GH_TOKEN)).toBe(APP_ONLY(mint.id));
+  });
+
+  test("no step falls back to github.token, and none claims GITHUB_TOKEN opens the PR (#871)", () => {
+    const { wf, steps } = load("dev-hooks-sync.yml", "sync");
+    for (const step of steps) {
+      for (const [key, value] of Object.entries({ ...(step.env || {}), ...(step.with || {}) })) {
+        expect(String(value), `step "${step.name || step.uses}" ${key}`).not.toMatch(
+          /github\.token|secrets\.GITHUB_TOKEN/,
+        );
+      }
+      if (typeof step.run === "string") {
+        expect(step.run, `step "${step.name}" run`).not.toMatch(/opened by GITHUB_TOKEN/);
+      }
+    }
+    expect(wf.on.workflow_call.secrets.app_private_key.description).not.toMatch(
+      /opened by GITHUB_TOKEN/,
+    );
   });
 });
 

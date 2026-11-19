@@ -790,6 +790,10 @@ const SPEC_RULES = {
   // context route-mocked tests. Trigger on any change to the shim
   // itself or the admin shell that loads it.
   "e2e/publish-via-auto-merge.test.js": [/^(theme\/)?admin\/publish-via-auto-merge\.js$/],
+  "e2e/sign-in-renewal.test.js": [
+    /^(theme\/)?admin\/(sign-in-renewal|publish-via-auto-merge|notice-toast-clearance)\.js$/,
+    /^(theme\/)?admin\/index\.html$/,
+  ],
   "e2e/publish-via-auto-merge-browser.spec.js": [
     /^(theme\/)?admin\/publish-via-auto-merge\.js$/,
     /^(theme\/)?admin\/index\.html$/,

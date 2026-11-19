@@ -119,12 +119,13 @@ checks on a plain PR). It runs six FAST lanes on `pull_request` + `push` to `mai
    `oauth-proxy/test_lambda.py`; hard-fail; REQUIRED since #525). On a pull
    request that changes `skills/`, `docs/skill-impact.md` or
    `scripts/skill_gates/` (an in-job salience step; the job always reports), it
-   then runs `scripts/skill_gates/check_skill_gates.py --warn-only --base HEAD^1
-   --head HEAD` on the PR merge commit: the skill graduation and touch gates,
-   whose rules are in `docs/skill-impact.md`'s header. Warn-only for now: its
-   findings are `::warning::` lines and a step-summary section, never a
-   failure. Run it locally, enforcing, with
-   `python3 scripts/skill_gates/check_skill_gates.py --base origin/main --head HEAD`.
+   then runs `scripts/skill_gates/check_skill_gates.py --base HEAD^1 --head HEAD`
+   on the PR merge commit: the skill graduation and touch gates, whose rules
+   are in `docs/skill-impact.md`'s header. Enforcing since #946: a finding
+   fails the job, and so does a check that could not run (a census that cannot
+   be read stays a warning). Run it locally with
+   `python3 scripts/skill_gates/check_skill_gates.py --base origin/main --head HEAD`;
+   add `--warn-only` for a dry run that always exits 0.
 
 `self-secrets-scan.yml` (#126) runs alongside it as its own workflow,
 gitleaks-scanning the platform repo's diff on `pull_request`, incrementally on
@@ -336,7 +337,7 @@ Keep the umbrella open while these acceptance gaps remain:
 | [Preview OAuth sign-in (#524)](https://github.com/Adam-S-Daniel/cms-platform/issues/524) | [The deploy warning and explicit preview opt-out merged](https://github.com/Adam-S-Daniel/cms-platform/pull/560). Local allowlist configuration, the live proxy build, and production/preview sign-in on both consumers still need verification. A platform release does not deploy the proxy. |
 | [Release gating (#526)](https://github.com/Adam-S-Daniel/cms-platform/issues/526) | [The current-head independent review stamp merged](https://github.com/Adam-S-Daniel/cms-platform/pull/620). The release workflow still creates a stable tag without requiring each consumer's checks against that exact candidate. The stamp alone does not establish the automated acceptance criteria. |
 | [Bot-closure investigation (_agent-guidance#227)](https://github.com/Adam-S-Daniel/_agent-guidance/issues/227) | [Branch-reuse prevention merged](https://github.com/Adam-S-Daniel/_agent-guidance/pull/252), and [the investigation records delayed branch-deletion processing](https://github.com/Adam-S-Daniel/_agent-guidance/issues/227#issuecomment-5996840529). Credential-use inventory, close-reason policy and remaining cleanup evidence belong to that still-open external issue. Prevention does not resolve all its criteria. |
-| [Latency tracker (#529)](https://github.com/Adam-S-Daniel/cms-platform/issues/529) | All five defects have child links in [the latency design](CONTENT-PUBLISH-LATENCY.md#defects-found-that-outlive-the-shelving); three children are closed. The two open children below prevent treating the group as complete. The focused content lane remains shelved. |
+| [Latency tracker (#529)](https://github.com/Adam-S-Daniel/cms-platform/issues/529) | All five defects have child links in [the latency design](CONTENT-PUBLISH-LATENCY.md#defects-found-that-outlive-the-shelving); three children are closed. The two open children below prevent treating the group as complete. The focused content lane stayed shelved; a simpler content route shipped on 2026-11-19 ([What shipped](CONTENT-PUBLISH-LATENCY.md#what-shipped)). |
 | [Responsive tables/iframes (#540)](https://github.com/Adam-S-Daniel/cms-platform/issues/540) | [Proportional embeds and required fixture coverage merged](https://github.com/Adam-S-Daniel/cms-platform/pull/804). [The latency design records local consumer-layout evidence](CONTENT-PUBLISH-LATENCY.md#local-candidate-verification-for-responsive-content-540). Consumer CSS adoption and acceptance still need evidence; the owner must decide whether fixtures plus served CSS satisfy the criterion when no live page exercises the elements. |
 | [Critical-path checkout latency (#541)](https://github.com/Adam-S-Daniel/cms-platform/issues/541) | [Shallow checkout and merge-base handling merged](https://github.com/Adam-S-Daniel/cms-platform/pull/565). [The recorded before/after measurements](CONTENT-PUBLISH-LATENCY.md#defects-found-that-outlive-the-shelving) cover adamdaniel.ai only; they do not establish jodidaniel.com verification or timing. |
 

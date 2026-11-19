@@ -20,10 +20,14 @@
 # CONVENTION, NOT CONFIGURATION. There are NO inputs. If the caller's tree has
 # `scripts/verify-build-artifacts.rb`, this builds the site and runs it;
 # otherwise it prints a notice and succeeds. It always runs the platform's
-# `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
+# `scripts/destination-conflicts.rb` (no two source files may be written to
+# one address) and `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
 # self-test list (`scripts/test-verify-build-artifacts.rb`) when present, using
-# the site's bundle before building. Both consumers have verifiers;
-# adamdaniel.ai also has verifier self-tests. Nothing to misconfigure.
+# the site's bundle before building, except on a pull request that changes CMS
+# content only (the `content` route, e2e/content-route.js): content cannot
+# change the verifier, so its self-tests are skipped there and the verifier
+# still runs. Both consumers have verifiers; adamdaniel.ai also has verifier
+# self-tests. Nothing to misconfigure.
 # Generalizing to a non-Ruby verifier is deliberately out of scope: Jekyll
 # guarantees Ruby.
 #
@@ -60,6 +64,10 @@ jobs:
     steps:
       # The CALLER's tree: the site whose verifier and build are under test.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The pull request's merge commit plus its two parents, which
+          # "Decide the route" diffs. Not full history.
+          fetch-depth: 2
 
       - name: Detect the site's verifier and self-tests
         id: detect
@@ -107,21 +115,59 @@ jobs:
             echo "sha=$sha"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Fetch the escaping lint from the platform
+      - name: Fetch the escaping lint and the route rule from the platform
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ steps.self.outputs.repository }}
           ref: ${{ steps.self.outputs.sha }}
           path: .cms-platform
           persist-credentials: false
+          # The route rule is content-route.js plus the modules it requires,
+          # and the composite that gathers its inputs. The two package.json
+          # files are there so Node reads the PLATFORM's module type for
+          # those scripts: without them it walks up to the site's own
+          # package.json, and a site that sets `"type": "module"` would make
+          # the rule fail to load (safely, as `full`, but always).
           sparse-checkout: |
+            package.json
             scripts/liquid-escape-lint.rb
+            scripts/destination-conflicts.rb
+            scripts/content-pr-guard.js
+            e2e/package.json
+            e2e/content-route.js
+            e2e/trusted-yaml.js
+            e2e/visual-regression-salient.js
+            .github/actions/content-route/action.yml
           sparse-checkout-cone-mode: false
+
+      # Pinned: content-route.js runs under node (ubuntu-latest's default
+      # Node moves with the runner image).
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+
+      # A pull request that changes CMS content only skips the verifier's
+      # SELF-TESTS below, and nothing else. The self-tests rebuild scratch
+      # copies of the site to prove the VERIFIER still tells good edits from
+      # real defects; content cannot change the verifier, the layouts or the
+      # theme, and on adamdaniel.ai they were over three of this job's seven
+      # minutes on every post. The build, the verifier itself and the
+      # escaping lint always run: they are the checks that are about the
+      # content. Every doubt is `full` (the action's header).
+      - name: Decide the route
+        id: route
+        uses: ./.cms-platform/.github/actions/content-route
+        with:
+          # Renders "true"/"false", never branch text.
+          from-cms: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'cms/') }}
+          # A commit id, checked against the merge commit's second parent.
+          head-sha: ${{ github.event.pull_request.head.sha }}
 
       # Unconditional: the escaping lint runs on every site, and it parses
       # with the site bundle's `liquid` gem.
       - name: Set up Ruby
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199
         with:
           # Tracks deploy-preview.yml's `ruby_version` default, so the tree
           # this verifies is built by the same Ruby that builds the deploys.
@@ -130,6 +176,7 @@ jobs:
           bundler-cache: true
 
       - name: Run the site's verifier self-tests
+        if: steps.route.outputs.route != 'content'
         run: |
           set -euo pipefail
           found=false
@@ -155,7 +202,33 @@ jobs:
         if: steps.detect.outputs.verifier == 'true'
         # The script's own contract: `ok`/`FAIL` per assertion, exit 1 on any
         # FAIL. Its output is the finding; nothing here re-summarises it.
+        #
+        # SITE_VERIFY_SELF_TESTS_HANDLED tells a verifier whose default
+        # entrypoint ALSO runs its self-tests (adamdaniel.ai's does, so a bare
+        # local run proves both) that this job has already dealt with them:
+        # the step above ran them, or the content route decided they are not
+        # needed. Without it that site ran its regression matrix twice per
+        # pull request, and once on a post that skips it. A verifier that
+        # does not know the variable ignores it.
+        env:
+          SITE_VERIFY_SELF_TESTS_HANDLED: "true"
         run: ruby scripts/verify-build-artifacts.rb
+
+      - name: Check that no two files share an address
+        # Two source files that claim one URL build without error: Jekyll
+        # warns, writes one and carries on, so the other is silently not
+        # published. A page saved from the CMS with permalink `/tags/`
+        # replaced the tags index, and a second post with an older post's
+        # slug took its URL, with every check green (cms-platform issue 1061).
+        # Runs on every site and on BOTH routes: it is a check about the
+        # content, and the content route no longer runs the browser test that
+        # caught the first of those. The script loads the site as `jekyll
+        # build` does (the Gemfile's plugin group included, which is where the
+        # theme's generated pages come from) and asks Jekyll for each file's
+        # destination; nothing is written.
+        env:
+          JEKYLL_ENV: production
+        run: bundle exec ruby .cms-platform/scripts/destination-conflicts.rb .
 
       - name: Lint Liquid output escaping
         # Every `{{ ... }}` in the site's HTML/XML templates must end in a

@@ -1,7 +1,8 @@
 // @lane: local — public-site accessibility polish (cms-platform#657): skip
-// link, readable meta text, footer follow links. The decorative featured-image
-// alt is locked at build level by theme/spec/public_a11y_polish_build_test.rb;
-// this spec re-checks it on whatever post the site serves.
+// link, readable meta text, footer follow links. What a featured image's alt
+// SAYS is locked at build level by theme/spec/public_a11y_polish_build_test.rb
+// (empty by default, the author's `featured_image_alt` when set); this spec
+// only checks, on whatever posts the site serves, that the attribute is there.
 const { test, expect } = require("./base");
 const cap = require("./site-capabilities");
 
@@ -86,9 +87,12 @@ test.describe("Public-site accessibility polish", () => {
     await expect(follow.getByRole("link", { name: "RSS" })).toHaveAttribute("href", /\/feed\.xml$/);
   });
 
-  test("a featured image is decorative (empty alt), never a repeat of the title", async ({
-    page,
-  }) => {
+  // The alt's VALUE is the author's: `featured_image_alt` is an editor field
+  // (#920), so a served post may carry any text there. Requiring `alt=""` here
+  // failed every e2e project on the first real post that filled the field in
+  // and blocked its publish (adamdaniel.ai PR 5001). This run reads live
+  // content, so it asserts only what no author can break: the attribute exists.
+  test("a featured image always carries an alt attribute", async ({ page }) => {
     await page.goto("/blog/");
     const links = await page.locator("a[href^='/blog/']").evaluateAll((as) => [
       ...new Set(as.map((a) => a.getAttribute("href"))),
@@ -99,7 +103,7 @@ test.describe("Public-site accessibility polish", () => {
       const imgs = page.locator("img.featured-image");
       const count = await imgs.count();
       for (let i = 0; i < count; i += 1) {
-        await expect(imgs.nth(i)).toHaveAttribute("alt", "");
+        await expect(imgs.nth(i), `${href}: featured image #${i}`).toHaveAttribute("alt");
         checked += 1;
       }
     }

@@ -78,11 +78,16 @@ const findStep = (steps, pred, what) => {
 };
 const isCheckout = (s) => /^actions\/checkout@/.test(String(s.uses || ""));
 const isDetect = (s) => s.id === "detect";
+const isSetupNode = (s) => /^actions\/setup-node@/.test(String(s.uses || ""));
+const isRoute = (s) =>
+  s.id === "route" && s.uses === "./.cms-platform/.github/actions/content-route";
 const isSetupRuby = (s) => /^ruby\/setup-ruby@/.test(String(s.uses || ""));
 const isBuild = (s) => /\bjekyll build\b/.test(stepRun(s));
 const isRunVerifier = (s) => stepRun(s).includes(`ruby ${VERIFIER_PATH}`);
 const isRunSelfTests = (s) => s.name === "Run the site's verifier self-tests";
 const ESCAPE_LINT_PATH = "scripts/liquid-escape-lint.rb";
+const ADDRESS_CHECK_PATH = "scripts/destination-conflicts.rb";
+const isAddressCheck = (s) => stepRun(s).includes(`ruby .cms-platform/${ADDRESS_CHECK_PATH} .`);
 const isEscapeLint = (s) => stepRun(s).includes(`ruby .cms-platform/${ESCAPE_LINT_PATH} --all .`);
 const isResolveSelf = (s) => s.id === "self";
 const isFetchPlatform = (s) =>
@@ -204,13 +209,15 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     }
   });
 
-  test("the work job's steps are checkout → detect → platform fetch → setup-ruby → self-tests → build → verifier → escape lint", () => {
+  test("the work job's steps are checkout → detect → platform fetch → setup-node → route → setup-ruby → self-tests → build → verifier → address check → escape lint", () => {
     const steps = workSteps();
     const checkout = findStep(steps, (s) => isCheckout(s) && !isFetchPlatform(s), "a checkout of the CALLER's tree");
+    // `fetch-depth: 2` is the merge commit plus both parents, which the route
+    // step diffs; nothing else may be set, above all no `repository:`.
     expect(
       checkout.with,
       "the checkout names no `repository:` — the tree under test is the caller's own",
-    ).toBeUndefined();
+    ).toEqual({ "fetch-depth": 2 });
     const detect = findStep(steps, isDetect, "a step with id `detect`");
     const ruby = findStep(steps, isSetupRuby, "a ruby/setup-ruby step");
     const selfTests = findStep(steps, isRunSelfTests, "a verifier self-test step");
@@ -223,9 +230,16 @@ test.describe("#377 site-verify — the reusable's contract", () => {
       isEscapeLint,
       `a \`ruby .cms-platform/${ESCAPE_LINT_PATH} --all .\` step`,
     );
-    const order = [checkout, detect, self, fetch, ruby, selfTests, build, verifier, escapeLint].map((s) =>
-      steps.indexOf(s),
+    const node = findStep(steps, isSetupNode, "an actions/setup-node step");
+    const route = findStep(steps, isRoute, "a step with id `route` using the content-route composite");
+    const addressCheck = findStep(
+      steps,
+      isAddressCheck,
+      `a \`ruby .cms-platform/${ADDRESS_CHECK_PATH} .\` step`,
     );
+    const order = [
+      checkout, detect, self, fetch, node, route, ruby, selfTests, build, verifier, addressCheck, escapeLint,
+    ].map((s) => steps.indexOf(s));
     expect(order, "and they run in dependency order").toEqual([...order].sort((a, b) => a - b));
 
     // Ruby supports either script independently. The build and verifier need
@@ -244,11 +258,46 @@ test.describe("#377 site-verify — the reusable's contract", () => {
         `step ${JSON.stringify(s.name || s.uses)} must run only when the verifier is present`,
       ).toBe(gated);
     }
-    for (const s of [checkout, detect, self, fetch, ruby, selfTests, escapeLint]) {
+    // The address check is a check about the content: it runs on every site,
+    // with or without a verifier, and on the content route too (issue 1061).
+    for (const s of [checkout, detect, self, fetch, node, route, ruby, addressCheck, escapeLint]) {
       expect(s.if, `step ${JSON.stringify(s.name || s.uses)} must be unconditional`).toBeUndefined();
     }
+    expect(addressCheck["continue-on-error"], "a shared address must fail the work job").toBeUndefined();
+    expect(stepRun(addressCheck), "it runs through the site's own bundle").toContain("bundle exec ruby");
+    expect(addressCheck.env, "published and future filtering as the deploy builds it").toEqual({
+      JEKYLL_ENV: "production",
+    });
+    // The content route skips the verifier's SELF-TESTS and nothing else: the
+    // build, the verifier and the escaping lint are the checks about content.
+    expect(
+      String(selfTests.if || ""),
+      "the self-tests are the one step a content-only pull request skips",
+    ).toBe("steps.route.outputs.route != 'content'");
     expect(selfTests["continue-on-error"], "self-test failures must fail the work job").toBeUndefined();
-    expect(steps.length, "no other step: there is nothing else this job should do").toBe(9);
+    // The verifier step tells the site's script the self-tests are dealt with
+    // (run above, or not needed on the content route), so a verifier whose
+    // default entrypoint runs them too does not run them a second time.
+    expect(verifier.env, "the verifier step's whole env").toEqual({ SITE_VERIFY_SELF_TESTS_HANDLED: "true" });
+    // The route rule and everything it requires must be in the sparse fetch,
+    // or the composite fails to load and every pull request takes `full`.
+    const sparse = String(fetch.with["sparse-checkout"]).split("\n").map((l) => l.trim()).filter(Boolean);
+    for (const needed of [
+      ESCAPE_LINT_PATH,
+      ADDRESS_CHECK_PATH,
+      // So Node takes the module type from the platform, not from a site
+      // package.json that may say `"type": "module"`.
+      "package.json",
+      "e2e/package.json",
+      "scripts/content-pr-guard.js",
+      "e2e/content-route.js",
+      "e2e/trusted-yaml.js",
+      "e2e/visual-regression-salient.js",
+      ".github/actions/content-route/action.yml",
+    ]) {
+      expect(sparse, `the platform fetch must include ${needed}`).toContain(needed);
+    }
+    expect(steps.length, "no other step: there is nothing else this job should do").toBe(12);
   });
 
   test("the detect script BEHAVES: false + notice when absent, true when present (executed)", () => {

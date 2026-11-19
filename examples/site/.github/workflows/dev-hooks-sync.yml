@@ -10,12 +10,12 @@ permissions:
   pull-requests: write
 jobs:
   sync:
-    uses: Adam-S-Daniel/cms-platform/.github/workflows/dev-hooks-sync.yml@v0.1.177
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/dev-hooks-sync.yml@v0.1.182
     with:
-      platform_ref: v0.1.177
+      platform_ref: v0.1.182
     secrets:
-      # So the sync PR triggers this repo's CI: the CMS automation App's private
-      # key, with vars.CMS_AUTOMATION_APP_ID set on this repo. The only credential
-      # since v0.1.103 — the CMS_PLATFORM_PAT fallback is gone. Without it the PR
-      # is opened by GITHUB_TOKEN and fires no CI (a warning, not a failure).
+      # The CMS automation App's private key, with vars.CMS_AUTOMATION_APP_ID
+      # set on this repo: the only credential that can open the sync PR (and
+      # the PR then triggers this repo's CI). Without both the run fails with
+      # an error naming them; GITHUB_TOKEN is not a fallback.
       app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
