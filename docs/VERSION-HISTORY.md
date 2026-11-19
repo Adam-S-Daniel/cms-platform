@@ -19,7 +19,7 @@ The first-parent range since v0.1.180 holds one entry on main before this releas
 
 Deploy wait follows redirects ([#1054](https://github.com/Adam-S-Daniel/cms-platform/pull/1054)). The `await-prod-deploy` composite reads prod's `<apex>/admin/commit.json` to confirm CloudFront serves the merge. Once a site moves its editor to `cms.admin_origin`, `<apex>/admin/*` answers 302 to that host and a curl without `-L` read an empty body for the whole 600s window, so the Cross-post run failed after a successful deploy and its Mastodon and LinkedIn legs never ran (adamdaniel.ai [run 44557601632](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/44557601632), 2026-11-19: the post was live, the run red). The probe now follows redirects, locked by `e2e/await-prod-deploy-follows-redirects.test.js`.
 
-Consumer effect. Workflow behavior only: no served page differs. Any site whose editor lives on its own admin host stops failing the deploy wait on push runs of Cross-post and the preview and production deploy callers that use the composite.
+Consumer effect. Workflow behavior only: no served page differs. Any site whose editor lives on its own admin host stops failing the deploy wait in Cross-post and in the real-prod loops (`cms-publish-loop-prod`, `cms-publish-loop-host`, `cms-media-roundtrip`, `cms-scheduled-publish-loop`).
 
 **v0.1.180 — A post whose featured image has alt text publishes again.**
 The first-parent range since v0.1.179 holds one entry on main before this release PR: the squash commit of [#1052](https://github.com/Adam-S-Daniel/cms-platform/pull/1052).
