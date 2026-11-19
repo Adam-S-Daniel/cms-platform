@@ -174,14 +174,10 @@ layout: default
   bridge's `slug` names the branch: see setEntry() below.
 -->
 <script src="{{ "/admin/draft-media-fallback.js" | relative_url }}"></script>
-<script src="https://unpkg.com/marked@13.0.0/marked.min.js"></script>
-<script>
-  if (typeof window.marked === "undefined") {
-    document.write(
-      '<script src="{{ "/assets/js/marked.min.js" | relative_url }}"><\/script>'
-    );
-  }
-</script>
+<!-- marked comes from the theme's own copy, never a CDN: a public page loads
+     nothing from another host (scripts/outside-resources.rb, and the public
+     Content-Security-Policy in infrastructure/bootstrap/template.yaml). -->
+<script src="{{ "/assets/js/marked.min.js" | relative_url }}"></script>
 <script>
 (function () {
   "use strict";
