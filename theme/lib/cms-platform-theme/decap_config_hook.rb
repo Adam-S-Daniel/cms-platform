@@ -169,7 +169,8 @@ module CmsPlatformTheme
       # (reviews/*.html). Kept in lockstep with the script by
       # e2e/decap-config-render-parity.test.js — update both or the lint fails.
       js = %{<script>window.CMS_REPO=#{repo.inspect};window.CMS_SITE_ORIGIN=#{url.inspect};window.CMS_ADMIN_ORIGIN=#{admin_origin.inspect};window.CMS_APEX=#{apex.inspect};window.CMS_OAUTH_BASE_URL=#{oauth.inspect};window.CMS_SITE_TITLE=#{title.inspect};window.CMS_SITE_GATE=#{gate_js};window.CMS_PRODUCTION_BRANCH=#{prod_branch.inspect};window.CMS_CROSS_POST=#{cross_post_js};</script>}
-      shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html"))
+      shells = Dir.glob(File.join(out, "index*.html")) + Dir.glob(File.join(out, "reviews", "*.html")) +
+               Dir.glob(File.join(out, "media-search.html"))
       shells.each do |h|
         s = File.read(h, encoding: "utf-8")
         # Skip only if the file already DEFINES the identity (a prior render,

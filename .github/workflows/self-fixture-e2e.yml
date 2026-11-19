@@ -248,13 +248,21 @@ jobs:
           engine="$(node ci-matrix.js --engine "$PW_PROJECT")"
           echo "project=$PW_PROJECT engine=$engine"
           echo "engine=$engine" >> "$GITHUB_OUTPUT"
+          # The runner image's OS release (ubuntu24, ubuntu26...) for the
+          # browser cache key below: see that step's comment.
+          echo "image-os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
 
+      # Playwright downloads a separate browser build per OS release, but the
+      # browser directory name carries only the revision, so a build restored
+      # from another image looks installed and the download is skipped. Without
+      # the image in the key, ubuntu-latest's move to 26.04 restored the 24.04
+      # WebKit build and every webkit-iphone16 test failed at launch.
       - name: Cache Playwright browsers
         if: ${{ steps.salient.outputs.salient == 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ matrix.project }}-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+          key: playwright-${{ matrix.project }}-${{ runner.os }}-${{ steps.engine.outputs.image-os }}-${{ hashFiles('e2e/package-lock.json') }}
 
       - name: Install Playwright browser + system deps
         if: ${{ steps.salient.outputs.salient == 'true' }}
@@ -325,7 +333,7 @@ jobs:
       # gem release cannot change what this lane builds with.
       - name: Setup Ruby + Bundler
         if: ${{ steps.salient.outputs.salient == 'true' }}
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199
         with:
           ruby-version: '3.2'
           bundler-cache: true

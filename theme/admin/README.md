@@ -125,6 +125,14 @@ suite can exercise a slow real-time behaviour without waiting on the clock.
 |---|---|---|---|
 | `__AUTOSAVE_IDLE_MS` | `autosave-on-hide.js` | `120000` (2 min) | Idle threshold (ms) after which a dirty entry autosaves. The `@admin-write` e2e spec sets it low via `addInitScript` to drive the idle path. Autosave (idle, tab-hide, pagehide) is skipped while a required text field is empty, so Decap's Save never paints "… IS REQUIRED." errors on an entry the owner has not tried to save (#625 item 3). |
 
+`sign-in-renewal.js` (#516) keeps typed work when the GitHub sign-in ends
+mid-edit: it shows a "Sign in again" notice, renews the sign-in in the same tab
+and swaps the dead token on later GitHub API requests. It wraps nothing itself;
+`publish-via-auto-merge.js`'s fetch wrap (the only one) calls
+`window.CMSSignInRenewal.prepare()` / `.observe()`, so it loads non-deferred
+BEFORE that file, in `index.html` only. Reads `CMS_OAUTH_BASE_URL`. Detail:
+`docs/ADMIN-AUTH-SECURITY.md` § "Signing in again without a reload".
+
 The confirm-wrap (`confirm-wrap-local-backup.js`) + autosave
 (`autosave-on-hide.js`) shims (#161) also expose read-only test surfaces —
 `window.__confirmWrapLocalBackup` and `window.__autosaveOnHide` — for specs to

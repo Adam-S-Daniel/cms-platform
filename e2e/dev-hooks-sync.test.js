@@ -82,10 +82,13 @@ test.describe("dev-hooks centralization (#116)", () => {
     );
   });
 
-  test("the canonical caller exists, calls the reusable, and rides CMS_PLATFORM_PAT", () => {
+  test("the canonical caller exists, calls the reusable, and passes the App key", () => {
     const text = fs.readFileSync(CALLER, "utf8");
     expect(text).toMatch(/uses:\s*Adam-S-Daniel\/cms-platform\/\.github\/workflows\/dev-hooks-sync\.yml@/);
-    expect(text).toMatch(/CMS_PLATFORM_PAT/);
+    // The App key is the only credential (the CMS_PLATFORM_PAT this once
+    // asserted was removed in v0.1.103; the shape is locked by AST in
+    // app-token-platform-writers.test.js).
+    expect(text).toMatch(/CMS_AUTOMATION_APP_PRIVATE_KEY/);
   });
 
   test("the canonical pre-commit chain has secrets-scan + lint-staged and NOT the skills-mirror guard (P7)", () => {

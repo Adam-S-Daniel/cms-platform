@@ -186,6 +186,14 @@
   </script>
 
   <!--
+    sign-in-renewal shim (#516 row 11). Non-deferred and BEFORE
+    publish-via-auto-merge.js, whose fetch wrap calls it: when the GitHub
+    sign-in ends mid-edit it shows a "Sign in again" notice and renews the
+    sign-in in this tab, so the typed work is never lost to a reload. It
+    wraps nothing itself (that file owns the only fetch wrap).
+  -->
+  <script src="sign-in-renewal.js"></script>
+  <!--
     publish-via-auto-merge shim. MUST load before decap-cms.js so the
     window.fetch wrap is in place before Decap captures any reference
     to the original. Catches the 422 "rule violations" response from
@@ -342,6 +350,15 @@
        ?return= href, so the inline syncReviewsReturn above stays its only
        writer. See the file's header. -->
   <script src="reviews-nav-link.js" defer></script>
+
+  <!-- "New mentions" in the same header nav, after Reviews, at every width: the
+       page where the site owner decides which finds from the weekly search for
+       new mentions go on the site (/admin/media-search.html). See the file's header. -->
+  <script src="media-search-nav-link.js" defer></script>
+
+  <!-- Decap's own "Media" tab and library title read "Images & files" (locale
+       override; see the file's header and "Words we use" in docs/ADMIN-DELIVERY.md). -->
+  <script src="media-library-labels.js" defer></script>
 
   <!-- "HTML Embed" editor component — adds a toolbar button on every
        markdown body field so authors can drop a block of raw HTML / JS /

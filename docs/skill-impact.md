@@ -30,6 +30,15 @@ consumer's step, not the editing PR's.
   pasting it.
 ```
 
+A wording fix takes the **light entry** instead: the heading, a Change line
+and a `wording-only` Eval line, with no run and no Motivation or Outcome line:
+
+```
+## YYYY-MM-DD — <bundle>/<skill> — edit
+- Change: one line — what was reworded (PR #NNN)
+- Eval: wording-only: one line — why no rule, command or trigger changed
+```
+
 `<bundle>` is `cms-platform`. An entry covering several skills names each one,
 comma-separated (`cms-platform/a, b`); an aggregate such as `(13 skills)` is a
 valid heading but names no skill, so it satisfies no gate.
@@ -44,7 +53,19 @@ The Eval line's accepted forms:
   `evals/<skill>/`, only for a skill the census lists as `gap` (no fixture
   yet). `none — no eval exists yet` is not accepted: add the first fixture;
 - **a green graduation arm**, for a `create`: `with_skill X/Y, without_skill
-  A/B` with X > 0 and X/Y >= A/B, plus the run id or a results link.
+  A/B` with X > 0 and X/Y >= A/B, plus the run id or a results link;
+- **`wording-only: <why>`**, for an `edit` of any census status: a typo, a
+  rephrase, a corrected pointer or a fixed link that changes no rule, command
+  or trigger. The line must START with `wording-only`. The check measures the
+  claim: the SKILL.md's frontmatter (`name`, `description`) must parse to the
+  same value before and after, and the edit may add plus delete at most 20
+  lines of that SKILL.md. An edit outside those bounds needs one of the forms
+  above. Owner decision 2026-11-17
+  ([#946](https://github.com/Adam-S-Daniel/cms-platform/issues/946)): a
+  wording-only edit does not need a recorded run. It still moves the skill's
+  digest, so the skill's eval evidence starts over and consumers re-pin; a
+  skill whose evals look good gets wording changes only as correctness fixes
+  ([_agent-guidance ADR 0033](https://github.com/Adam-S-Daniel/_agent-guidance/blob/main/docs/decisions/0033-audits-leave-eval-protected-subjects-alone-except-for-correctness.md)).
 
 A line that negates its own evidence (`not run`, `not yet run (target 8/8)`,
 `skipped, previous 21/21`, `not exempt`, `outstanding`) shows no run.
@@ -56,7 +77,9 @@ Rules:
 - **Graduation gate.** A new skill (`skills/<skill>/SKILL.md` added) needs a
   `create` entry whose Eval line shows a green graduation arm.
 - **Touch gate.** An edited SKILL.md needs a new entry naming the skill (any
-  kind but `rejected`). What its Eval line must show depends on the census:
+  kind but `rejected`). A `wording-only` light entry within its bounds is
+  enough at any census status. Otherwise what its Eval line must show depends
+  on the census:
   `covered` — a run; `skipped` — a run or `exempt`; `gap` — a run or the first
   fixture.
 - **Removal.** A removed skill needs a `remove` entry.
@@ -68,9 +91,9 @@ Rules:
   `merged`): each is a NEW entry, never an edit of the old one.
 - **Checked on every PR** that changes `skills/` or this file, by
   `scripts/skill_gates/check_skill_gates.py` in self-CI's python-unit-tests
-  job. It reports findings as warnings for now (`--warn-only`); it does not
+  job. It is enforcing since #946: a finding fails the job. It does not
   dispatch an eval, it reads the Eval line. When the census cannot be read, an
-  edit whose Eval line shows nothing is a warning even in enforcing mode.
+  edit whose Eval line shows nothing is a warning, not a failure.
 - **This repo is public and scanned.** Nothing sensitive in an entry, ever;
   a sensitive rejection is recorded by PR link alone.
 
@@ -88,14 +111,35 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
-## 2026-11-12 — cms-platform/code-quality, github-actions-sha-pinning, browser-testing — edit
+## 2026-11-12 — cms-platform/code-quality, browser-testing — edit
 
-- Motivation: the prompt-audit findings in https://github.com/Adam-S-Daniel/cms-platform/issues/989: a stale pytest command and two un-prefixed table rows (code-quality), a stale reusable count (github-actions-sha-pinning), a worker-count and job-count that contradict the same file and `e2e/ci-matrix.js` (browser-testing).
-- Change: code-quality now names the four pytest paths `self-ci.yml` runs; github-actions-sha-pinning drops the count of reusables; browser-testing says CI runs 14 jobs at `150%` workers. Frontmatter untouched.
+- Motivation: the prompt-audit findings in https://github.com/Adam-S-Daniel/cms-platform/issues/989: a stale pytest command and two un-prefixed table rows (code-quality), a worker-count and job-count that contradict the same file and `e2e/ci-matrix.js` (browser-testing).
+- Change: code-quality now names the four pytest paths `self-ci.yml` runs; browser-testing says CI runs 14 jobs at `150%` workers. Frontmatter untouched.
 - Eval: outstanding — the skills-evals fixtures for these skills were not run in this change.
 - Outcome: pending merge.
 
 ---
+
+## 2026-11-13 — cms-platform/platform-release-and-bump — edit
+
+- Motivation: the skill's one pointer to `github-actions-sha-pinning` would dangle once that skill is removed (the entry below).
+- Change: the pointer now cites `docs/PIN-CONSISTENCY.md`; no rule changed (PR #1017).
+- Eval: none: a broken-path correctness fix (its pointer would dangle), no rule changed (ADR 0033).
+- Outcome: pending merge.
+
+## 2026-11-13 — cms-platform/github-actions-sha-pinning — remove
+
+- Motivation: skills-evals verdict `retire-pending` (remove it, queued) as of 2026-11-13: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
+- Change: deleted `skills/github-actions-sha-pinning/`; the facts other files relied on already live in AGENTS.md (no `actions.lock` here), `docs/PIN-CONSISTENCY.md` (platform refs stay on the release tag, no version comment) and `docs/CI-INVARIANTS.md` (Dependabot cooldown), so the two pointers (AGENTS.md, `platform-release-and-bump`) now cite those docs and its freshness-allow entries were dropped (PR #1017).
+- Eval: the skills-evals evals explorer, https://adamdaniel.ai/tools/evals/ (verdict `retire-pending` as of 2026-11-13: remove, queued behind consumer-repo-provisioning; the owner asked on 2026-11-13 that every remove decision act without him).
+- Outcome: pending merge.
+
+## 2026-11-13 — cms-platform/consumer-repo-provisioning — remove
+
+- Motivation: skills-evals verdict `retire`: no measurable benefit over 20 paired runs per roster model, while the skill's always-loaded description costs context in every session.
+- Change: deleted `skills/consumer-repo-provisioning/`; its body moved to `docs/CONSUMER-PROVISIONING.md` (section headings kept) and every pointer to it (workflow error strings, the audit script, repo-settings.yml, README, other docs, the scaffolder output) now cites that doc; its two freshness-allow entries and its REFERENCE_HEAVY listing were dropped (PR #1016).
+- Eval: https://github.com/Adam-S-Daniel/skills-evals/issues/998 (verdict `retire`).
+- Outcome: pending merge.
 
 ## 2026-10-28 — cms-platform/(13 skills) — edit
 

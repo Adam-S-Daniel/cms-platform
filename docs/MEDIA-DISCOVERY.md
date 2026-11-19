@@ -29,13 +29,23 @@ Publish.
    strict schema is a convenience, not the check.
 3. **Skip duplicates** (`dedupe.is_duplicate`).
 4. **Re-fetch** every URL the model cited (`fetch.fetch`) and **corroborate**
-   (`corroborate.verify`).
+   (`corroborate.verify`). If a candidate is not confirmed, the sources that
+   failed in a way a browser can fix (HTTP 403, 406, 429 or 503, an identity
+   check that found no name, or no match) are re-fetched once in headless
+   Chromium (`browser.py`, Playwright) and verified again; the better verdict
+   wins. The run line adds `browser_retries` (candidates retried) and
+   `browser_rescued` (of those, confirmed by the retry).
 5. **Propose.** Each confirmed find becomes one pull request shaped exactly
    like a Decap editorial-workflow entry (live mode), or a line in the email
    (email-only mode).
-6. **Email** one digest listing the new PRs (or, in email-only mode, what
-   would have been opened) and every find that did not check out, with the
-   reasons.
+6. **Email** one digest, written for a non-technical reader
+   (`render.render_digest`): the subject starts with the site's host and
+   "new mentions", the body lists each confirmed find as a draft addition in
+   the website editor (or, in email-only mode, a "preview run", as what would
+   be drafted), then every find that did not check out with a plain-English
+   reason per page (`corroborate.Problem`). Each URL sits alone on its own
+   line, since mail clients take a colon right after a URL as part of it. No
+   email is sent when there is nothing to list.
 
 ## The verification rules (phase 1, precisely)
 
@@ -68,7 +78,12 @@ date, a bare month counting as the month's last day) is today or later, and
 
 **A source qualifies** (`corroborate.verify`) when all of these hold:
 
-- it answered HTTP 2xx with an HTML or plain-text body;
+- it answered HTTP 2xx with an HTML, plain-text or PDF body. A PDF (served as
+  `application/pdf`, or as `application/octet-stream` starting `%PDF-`) is read
+  with pypdf: at most 15 MB and its first 40 pages; an encrypted or malformed
+  one counts as unreadable, never as a crash;
+- (the retry above only changes how the page is fetched: a page the browser
+  rendered must pass every rule here, unchanged;)
 - neither the cited URL nor the final URL after redirects is on a blocked
   domain (compared by registrable domain);
 - **identity** (`identity.py`): one of the configured names appears as a whole
@@ -76,11 +91,16 @@ date, a bare month counting as the month's last day) is today or later, and
   marker within `near_chars` characters of it, and no exclusion marker within
   `near_chars` of that same occurrence. A marker written in all capitals (an
   acronym) must match case exactly;
-- **support**: the normalized page text (NFKC, ASCII quotes and dashes,
-  casefolded, whitespace collapsed) contains the candidate's normalized title,
-  and the candidate's year appears as a standalone number. For the two talk
-  kinds a supporting page may name the outlet instead of the title; the
-  primary page must always carry the title.
+- **support**: the candidate's year appears in the normalized page text
+  (NFKC, ASCII quotes and dashes, casefolded, whitespace collapsed) as a
+  standalone number, and the page names the item. It names the item when it
+  contains the normalized title, or at least 60% (rounded up) of the title's
+  distinctive words as whole words (stopwords and bare numbers left out), since
+  a page rarely repeats a title the model wrote ("2026 SAU at AUA") word for
+  word. A supporting page may instead name the outlet (the two talk kinds
+  only), or carry one of the model's verbatim evidence quotes for that same
+  URL (20 or more characters) plus at least one distinctive word of the title
+  or outlet. The primary page must always name the item.
 
 **Independence.** Sources are grouped into clusters: two pages are in the same
 cluster when they share a registrable domain (the last two labels, or three
@@ -146,7 +166,8 @@ problem) instead of being ignored.
 | `CMS_AUTOMATION_APP_ID` | variable | live mode (the PR-writing App) | email-only, with a `::notice::` |
 | `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode | email-only, with a `::notice::` |
 
-The SMTP host defaults to `smtp.fastmail.com` on port 465 (implicit TLS); the
+The SMTP host defaults to `smtp.fastmail.com` on port 587, upgraded with
+STARTTLS before the login (the setup Fastmail gives its own mail clients); the
 CLI reads `MEDIA_DISCOVERY_SMTP_HOST` if a different host is ever needed. The
 reusable derives the `/admin` link from `_config.yml` (`cms.admin_origin`, else
 `url`, plus `/admin/`) and the site name from `title` (else the repository
@@ -163,8 +184,8 @@ PYTHONPATH=<platform>/scripts python3 -m media_discovery run \
 ## Modes
 
 - **email-only** (the default): nothing is written to GitHub. The digest lists
-  each confirmed find as "would open a pull request", with the file it would
-  add. Use it to judge the quality of the finds before turning PRs on. It
+  each confirmed find under "Ready to add" and calls the run a preview, with a
+  section on what a normal run does differently. Use it to judge the quality of the finds before turning PRs on. It
   lists earlier discovery PRs with the job's read-only `GITHUB_TOKEN`; if that
   token cannot, the run continues without that duplicate check (a notice, not
   a failure).
@@ -214,10 +235,30 @@ tokens, 5 continuations) bound the worst case.
   check resolves the host and urllib resolves it again to connect, so DNS
   rebinding is not caught; fetched text is never logged, which bounds the
   impact.
+- **Browser retry** (`browser.py`): plain headless Chromium with Playwright's
+  default user agent; it renders JavaScript and sends ordinary browser
+  headers, with no stealth, fingerprint spoofing or bot-check or CAPTCHA
+  workaround. Every request, including redirects and subresources, must pass
+  the same public-address check as `fetch.py` (`route_allowed`); images,
+  media and fonts are aborted, service workers are blocked, downloads are not
+  accepted, and a navigation is capped at 25 seconds plus up to 5 for network
+  idle. When Playwright or Chromium is missing the retry is skipped and the
+  run continues. `python3 -m media_discovery.fetch_probe --findings FILE
+  --site-root DIR` compares both fetchers on a findings.json with no Claude
+  API; it prints per-URL indexes, statuses, lengths and identity reason codes
+  only.
 - **Counts-only logs.** The repository and its Actions logs are public. The
   CLI prints counts and fixed messages only: never a title, name, URL, quote or
   address. API, GitHub and SMTP errors are reported by class and HTTP status,
-  never by message or response body. The workflow passes every input,
+  never by message or response body. The one exception is a refused SMTP
+  login, which no class name explains: the log then shows the host and port,
+  the TLS version, the server's EHLO extensions and advertised AUTH
+  mechanisms, each mechanism tried with the server's reply code and text,
+  and the shape of the user name and password (length, whitespace, line
+  breaks, non-ASCII). The reply text has every address, the user name, its
+  local part and the password replaced, and is one line of at most 300
+  characters. smtplib's debug output is never turned on: it prints the AUTH
+  exchange, which carries the credentials. The workflow passes every input,
   variable and secret through `env:`, and masks the SMTP user and each
   recipient before the CLI runs.
 - **Safe PR bodies** (`render.safe_md`): web text in a PR body is escaped so

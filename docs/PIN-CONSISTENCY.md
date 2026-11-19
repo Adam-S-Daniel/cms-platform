@@ -36,7 +36,7 @@ rewrites `.github/workflows/*` and pushes, so its credential MUST carry
 workflow … without 'workflows' permission`) — the live half of #13. That
 credential is the CMS automation App's per-run installation token when the
 consumer has provisioned it, else the `CMS_PLATFORM_PAT` fine-grained PAT
-(#238; the `consumer-repo-provisioning` skill has the provisioning steps).
+(#238; `docs/CONSUMER-PROVISIONING.md` has the provisioning steps).
 It also seeds any workflow caller the release newly made platform-dictated —
 copying the missing caller from `examples/site/.github/workflows/` at the new
 ref, re-pinned to it — so the workflow-set-parity check (introduced v0.1.20,
@@ -67,10 +67,13 @@ repo's `yaml` lib) makes them all agree:
   silently and then actively lied, and Dependabot rewrote it inconsistently. The
   tag ties a composite to `platform.lock`'s `platform_ref` DIRECTLY and is
   auditable without parsing a comment, so the checker now reads no comments at
-  all and reusables and composites obey one rule. The tag carve-out in AGENTS.md
-  ("a reusable *workflow* from a repo this account owns stays on a tag") extends
-  to these composites for exactly that reason; nothing third-party is ever a
-  tag.
+  all and reusables and composites obey one rule. The fleet guidance's tag
+  carve-out ("Pinning GitHub Actions": `cms-platform` refs stay on its release
+  tag; mirrored in `.claude/hooks/fleet-guidance.md`) extends to these
+  composites for exactly that reason; nothing third-party is ever a tag.
+  Never SHA-pin a platform ref: `platform-bump.yml`'s rewrite matches only a
+  version literal (`v1.2.3`) after a platform `@` or in `platform_ref:`, so a
+  SHA there is skipped SILENTLY and the consumer stays on the old tree.
 - **Checks the `platform_ref:` INPUT each caller passes (#220).** The reusable's
   platform checkout does `ref: ${{ inputs.platform_ref }}`, so this value — not
   the `uses:@` pin — decides WHICH platform tree the job actually runs. It is

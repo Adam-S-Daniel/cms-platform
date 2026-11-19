@@ -1,33 +1,28 @@
----
-name: consumer-repo-provisioning
-description: >-
-  The exact GitHub Actions repository secrets AND variables a cms-platform
-  consumer site must set — the precise fine-grained PAT permissions for each
-  secret, plus the repo variables the reusable workflows read via vars.* and
-  the scripts/set-repo-variables.sh setter that derives them. Use when setting
-  up a new consumer, when a workflow fails with "GH_TOKEN env var is required"
-  / "Input required and not supplied: github-token" / a startup_failure on a
-  required secret, when auto-merge/nudge/sweep/auto-resolve don't run, when a
-  loop probes the wrong URL/bucket, or when platform-bump fails "refusing to
-  allow ... to update workflow ... without 'workflows' permission". Trigger on
-  "CMS_E2E_PAT", "CMS_PLATFORM_PAT", "WORKFLOW_SHA_COMMENT_PAT",
-  "CMS_AUTOMATION_APP_ID", "CMS_AUTOMATION_APP_PRIVATE_KEY",
-  "required secrets", "PAT permissions",
-  "platform-bump workflow scope", "AWS_ROLE_ARN", "repo variables",
-  "CMS_APEX", "CMS_PROD_URL", "PREVIEW_BUCKET", or "PROD_PLAYGROUND_MODE".
----
+# Consumer provisioning: required GitHub secrets and variables
 
-# Required GitHub secrets and variables for a cms-platform consumer
+The secrets and variables a cms-platform consumer site needs, with the exact
+fine-grained PAT permissions and the repo settings the workflows depend on.
 
 Set these as **Actions repository secrets** on the consumer repo
 (Settings → Secrets and variables → Actions → New repository secret). One is a
 Personal Access Token you create by hand, one is a GitHub App's private key
 (with the App's ID as a repository variable), and the three AWS values are
-emitted by the bootstrap stack (see the `aws-bootstrap` skill). This file is the single
-source of truth. It is authored in `cms-platform`'s `skills/` and reaches a
-session through the `cms-platform` bundle in the `adam-agentskills` marketplace
-(`/plugin install cms-platform@adam-agentskills`) — nothing copies it into a consumer
-repo, so a consumer's checkout is never a place to look for or edit it.
+emitted by the bootstrap stack (see the `aws-bootstrap` skill). This file is the
+single source of truth; it lives in `cms-platform`'s `docs/` and is never copied
+into a consumer repo.
+
+## Symptoms
+
+Find the symptom, then read the section that fixes it:
+
+| Symptom | Section |
+|---|---|
+| `GH_TOKEN env var is required` | `CMS_E2E_PAT` (a workflow ran without its PAT secret) |
+| `Input required and not supplied: github-token` | `CMS_E2E_PAT` |
+| a `startup_failure` on a required secret | `CMS_E2E_PAT`, then `AWS deploy secrets` |
+| auto-merge, nudge, sweep or auto-resolve not running | `CMS_E2E_PAT` (the PAT permissions and the `regression-review` reviewer), then `Quick checklist for a new consumer` (the auto-merge repo setting) |
+| a loop probing the wrong URL or bucket | `Repository variables (not secrets)` |
+| platform-bump failing `refusing to allow ... to update workflow ... without 'workflows' permission` | `CMS_AUTOMATION_APP_ID` + `CMS_AUTOMATION_APP_PRIVATE_KEY` |
 
 > **Policy: fine-grained PATs only — never classic PATs.** Every token below is
 > a [fine-grained personal access token](https://github.com/settings/personal-access-tokens)
@@ -101,10 +96,12 @@ If a consumer still holds a `CMS_PLATFORM_PAT` secret, **delete the secret**,
 don't just let the PAT expire: `||` in a GitHub expression falls through on
 *empty*, not on *invalid*, so a dead-but-present value wins a fallback and 401s.
 
-Without the App, `platform-bump` **fails loudly** naming both knobs — its
-credential is load-bearing, since the bump rewrites `.github/workflows/*` and
-`GITHUB_TOKEN` cannot hold `workflows:write` — while `dev-hooks-sync` **warns**
-and opens its PR on `GITHUB_TOKEN`, which fires no CI. (The removal and the
+Without the App, both **fail loudly** naming both knobs. `platform-bump`
+rewrites `.github/workflows/*` and `GITHUB_TOKEN` cannot hold `workflows:write`.
+`dev-hooks-sync` opens a pull request, and `GITHUB_TOKEN` cannot create one
+while "Allow GitHub Actions to create and approve pull requests" is off
+(`can_approve_pull_request_reviews: false`, which `repo-settings.yml` keeps on
+purpose), so its old `GITHUB_TOKEN` fallback was removed (#871). (The removal and the
 consumers' verified cut-over: `docs/VERSION-HISTORY.md` v0.1.103; the deleted
 `dependabot-comment-sync` consumer: `docs/CI-INVARIANTS.md`.)
 
@@ -115,9 +112,9 @@ two reusables that edit `.github/workflows/*`, `platform-bump` and
 `dev-hooks-sync`: when both knobs below are set on the consumer, the reusable
 mints a ~1 h installation token per run (`scripts/mint-app-token.js`, pure node
 + stdlib `crypto`, fetched from the platform at the release the bump targets).
-There is no PAT fallback: without the App, `platform-bump` fails with an
-`::error::` naming both knobs, and `dev-hooks-sync` warns and opens its PR as
-`GITHUB_TOKEN`, which fires no CI.
+There is no PAT fallback and no `GITHUB_TOKEN` fallback: without the App,
+`platform-bump` and `dev-hooks-sync` each fail with an `::error::` naming both
+knobs (#871).
 
 Why an App and not another PAT: a fine-grained PAT cannot span owners, so the
 PAT was one token per consumer, and each expired on its own calendar — taking

@@ -361,8 +361,22 @@ function assertNoUnsupportedActionsCooldownDays(label, doc) {
   }
 }
 
+// Every updates[] entry carries `cooldown.default-days: 7`, the fleet's
+// cooling-off rule for third-party releases (version updates only; security
+// updates bypass cooldown). An entry without it gets GitHub's implicit 3 days.
+function assertEveryEntryHasCooldown(label, doc) {
+  const updates = Array.isArray(doc && doc.updates) ? doc.updates : [];
+  updates.forEach((entry, i) => {
+    const cooldown = entry && typeof entry.cooldown === "object" && entry.cooldown !== null ? entry.cooldown : null;
+    const name = `${label}: updates[${i}] (${entry && entry["package-ecosystem"]} ${entry && entry.directory})`;
+    expect(cooldown, `${name} has no 'cooldown' block; add 'cooldown: default-days: 7'`).not.toBeNull();
+    expect(cooldown["default-days"], `${name}: cooldown.default-days must be 7`).toBe(7);
+  });
+}
+
 module.exports = {
   parseDependabotConfig,
+  assertEveryEntryHasCooldown,
   bundlerEntries,
   themeIgnoreEntry,
   assertUnscopedThemeIgnore,

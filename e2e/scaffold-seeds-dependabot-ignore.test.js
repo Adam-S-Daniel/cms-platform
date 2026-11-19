@@ -31,10 +31,9 @@
 // Both subtests also now assert `assertNoUnsupportedActionsCooldownDays`: the
 // github-actions entry's `cooldown` (if any) must carry no `semver-*-days`
 // key, since GitHub doesn't support per-SemVer-tier cooldown for that
-// ecosystem at all — a schema error, not merely a stricter policy. Neither
-// the template nor the scaffolder output currently sets a `cooldown` block
-// at all, so this passes vacuously today; it exists to catch a future one
-// that copies the wrong shape from a github-actions-with-majors example.
+// ecosystem at all — a schema error, not merely a stricter policy. All three
+// subtests also assert `assertEveryEntryHasCooldown`: every updates[] entry
+// carries `cooldown.default-days: 7`, the fleet's 7-day cooling-off rule.
 //
 // Subtest (c) points the same cooldown assertion at THIS REPO'S OWN
 // .github/dependabot.yml. That is the only one of the three that carries a
@@ -62,6 +61,7 @@ const {
   assertUnscopedThemeIgnore,
   assertPlatformActionsIgnored,
   assertNoUnsupportedActionsCooldownDays,
+  assertEveryEntryHasCooldown,
 } = require("./dependabot-config-utils");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -83,6 +83,7 @@ test.describe(
       assertUnscopedThemeIgnore(TEMPLATE_PATH, doc);
       assertPlatformActionsIgnored(TEMPLATE_PATH, doc, TEMPLATE_WORKFLOWS_DIR);
       assertNoUnsupportedActionsCooldownDays(TEMPLATE_PATH, doc);
+      assertEveryEntryHasCooldown(TEMPLATE_PATH, doc);
     });
 
     test("(b) scaffold/create-site.js seeds a .github/dependabot.yml with both ignores", () => {
@@ -114,6 +115,7 @@ test.describe(
         assertUnscopedThemeIgnore(seededPath, doc);
         assertPlatformActionsIgnored(seededPath, doc, seededWorkflowsDir);
         assertNoUnsupportedActionsCooldownDays(seededPath, doc);
+        assertEveryEntryHasCooldown(seededPath, doc);
       } finally {
         fs.rmSync(target, { recursive: true, force: true });
       }
@@ -123,6 +125,7 @@ test.describe(
       const selfPath = path.join(REPO_ROOT, ".github", "dependabot.yml");
       const doc = parseDependabotConfig(selfPath);
       assertNoUnsupportedActionsCooldownDays(selfPath, doc);
+      assertEveryEntryHasCooldown(selfPath, doc);
     });
   },
 );

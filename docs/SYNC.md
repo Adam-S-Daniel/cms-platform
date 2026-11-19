@@ -353,7 +353,7 @@ skewed with no guard analogous to `platform-pin-consistency`.
   tracking issue (linking the clean run) on any clean scan (#954). **No write credential in CI** —
   reads use per-owner fine-grained `REPO_SETTINGS_READ_*` PATs
   (Administration: **Read-only**; minting/verification in the
-  `consumer-repo-provisioning` skill), writes are operator-only.
+  `docs/CONSUMER-PROVISIONING.md` "Platform-repo secrets"), writes are operator-only.
 - **This repo does not approve label definitions.**
   repo-settings (the fleet settings engine, `Adam-S-Daniel/repo-settings`) is
   set to `manage: ["labels"]` for this repo and both consumers
@@ -402,7 +402,7 @@ silent.
   settings churn too heavy to hand-normalize.
 
 Actions **variables/secrets stay out of scope** here — they are owned by
-`scripts/set-repo-variables.sh` + the `consumer-repo-provisioning` skill (which
+`scripts/set-repo-variables.sh` + `docs/CONSUMER-PROVISIONING.md` (which
 cross-reference back to `repo-settings.yml` for settings). Actions
 **permissions** (SHA pinning, fork-PR approval) are settings, not
 variables/secrets, and ARE managed here (see above).

@@ -183,14 +183,19 @@ jobs:
         id: salience
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
+          # A same-repository `cms/` branch is a Decap save. Only then may a
+          # MODIFIED `_tools/<slug>.md` skip review (cms-platform#1044); the
+          # expression renders "true"/"false", never branch text.
+          VR_FROM_CMS: ${{ github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'cms/') }}
         # `-z` on BOTH ends: git emits NUL-delimited, unquoted paths and the
         # classifier splits on NUL. The newline form quotes a non-ASCII name
         # (`"_layouts/caf\303\251.html"`, leading quote included), which no
         # salient pattern matches (cms-platform#539). `--no-renames` lists a
         # moved file's SOURCE as well as its destination: by default a
         # rename reports only the destination, so moving `_layouts/post.html`
-        # into `uploads/` read as non-salient. The listing above it is for
-        # the log only.
+        # into `uploads/` read as non-salient. `--name-status` adds each
+        # file's A/M/D status, which the `_tools/` edit rule needs. The
+        # listing above it is for the log only.
         run: |
           set -euo pipefail
           # Escape workflow-command data before printing path or Git diagnostics.
@@ -205,7 +210,7 @@ jobs:
           diff_stderr=""
           trap 'rm -f -- "$changed_paths" "$diff_stderr"' EXIT
           diff_stderr=$(mktemp)
-          if git diff --name-only -z --no-renames "origin/${BASE}...HEAD" > "$changed_paths" 2> "$diff_stderr"; then
+          if git diff --name-status -z --no-renames "origin/${BASE}...HEAD" > "$changed_paths" 2> "$diff_stderr"; then
             :
           else
             diff_status=$?
@@ -213,10 +218,25 @@ jobs:
             exit "$diff_status"
           fi
           printf 'Changed files vs origin/%s:\n' "$(escape_workflow_data "$BASE")"
-          while IFS= read -r -d '' f; do
+          has_tool_edit=false
+          while IFS= read -r -d '' status && IFS= read -r -d '' f; do
             printf '  - %q\n' "$(escape_workflow_data "$f")"
+            if [ "$status" = M ] && [[ "$f" == _tools/* ]]; then has_tool_edit=true; fi
           done < "$changed_paths"
-          salient=$(node .cms-platform/e2e/visual-regression-salient.js -z < "$changed_paths")
+          merge_base=""
+          if [ "$VR_FROM_CMS" = true ] && [ "$has_tool_edit" = true ]; then
+            merge_base=$(git merge-base "origin/${BASE}" HEAD)
+            # The classifier reads tool front matter with the `yaml` package
+            # (exact pin, no dependencies). If the install fails it cannot
+            # load it and keeps the review: never a skip it cannot justify.
+            yaml_dir="${RUNNER_TEMP:-$(mktemp -d)}/vr-yaml"
+            if npm install --prefix "$yaml_dir" --no-audit --no-fund --ignore-scripts yaml@2.9.1 > /dev/null 2>&1; then
+              export NODE_PATH="$yaml_dir/node_modules"
+            else
+              echo "::warning::could not install yaml; a CMS edit to a _tools/ entry keeps its review"
+            fi
+          fi
+          salient=$(node .cms-platform/e2e/visual-regression-salient.js --status --base-rev "$merge_base" < "$changed_paths")
           echo "salient=${salient}"
           echo "salient=${salient}" >> "$GITHUB_OUTPUT"
 
@@ -257,7 +277,7 @@ jobs:
           path: .cms-platform
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199
         with:
           ruby-version: '3.2'
           bundler-cache: true
@@ -273,12 +293,20 @@ jobs:
         working-directory: .cms-platform/e2e
         run: npm ci
 
+      # Playwright downloads a separate browser build per OS release, but the
+      # browser directory name carries only the revision, so a build cached on
+      # one runner image looks installed on another and the download is
+      # skipped. The image's OS release (ubuntu24, ubuntu26...) goes in the key.
+      - name: Name the runner image for the browser cache key
+        id: image
+        run: echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Playwright browsers
         id: pw-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('.cms-platform/e2e/package-lock.json') }}
+          key: playwright-chromium-${{ runner.os }}-${{ steps.image.outputs.os }}-${{ hashFiles('.cms-platform/e2e/package-lock.json') }}
 
       - name: Install Playwright browsers
         if: steps.pw-cache.outputs.cache-hit != 'true'

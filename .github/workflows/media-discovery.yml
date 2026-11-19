@@ -104,6 +104,9 @@ jobs:
           sparse-checkout: |
             scripts/media_discovery
             scripts/mint-app-token.js
+            .github/actions/install-playwright-browsers
+            e2e/package.json
+            e2e/package-lock.json
           sparse-checkout-cone-mode: false
 
       # Ubuntu's system pip refuses installs (PEP 668), hence setup-python.
@@ -114,10 +117,48 @@ jobs:
           python-version: '3.12'
 
       # Pins: anthropic 2.3.0 (2026-10-23) and PyYAML 6.0.3 (2025-09-25), each
-      # the newest release at least 7 days old as of 2026-11-04.
+      # the newest release at least 7 days old as of 2026-11-04; pypdf 6.21.4
+      # (2026-10-28), the newest at least 7 days old as of 2026-11-10, reads
+      # PDF sources; playwright 1.64.1 (2026-10-22), the newest at least 7 days
+      # old as of 2026-11-10, retries a source in headless Chromium.
       - name: Install media discovery dependencies
         if: steps.detect.outputs.configured == 'true'
-        run: python3 -m pip install --user 'anthropic==2.3.0' 'pyyaml==6.0.3'
+        run: python3 -m pip install --user 'anthropic==2.3.0' 'pyyaml==6.0.3' 'pypdf==6.21.4' 'playwright==1.64.1'
+
+      # Pinned: the browser install below and mint-app-token.js run under node,
+      # and ubuntu-latest's default Node moves from 22 to 24 with Ubuntu 26.04
+      # (actions/runner-images#14748).
+      - name: Set up Node
+        if: steps.detect.outputs.configured == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+          package-manager-cache: false
+
+      # The bounded composite runs `npx playwright` from the e2e harness's
+      # node_modules. e2e/package-lock.json pins @playwright/test 1.64.1, the
+      # same release as the Python package above, so both resolve the same
+      # Chromium build in ~/.cache/ms-playwright.
+      - name: Install the browser installer
+        if: steps.detect.outputs.configured == 'true'
+        working-directory: .cms-platform/e2e
+        run: npm ci
+
+      # Chromium plus its system libraries, for the headless retry of sources
+      # urllib cannot read (JavaScript-built pages, HTTP 403/406). The
+      # composite bounds and retries the download and retries apt, so a slow
+      # mirror cannot hold the job (e2e/playwright-install-bounded.test.js).
+      # The job's timeout-minutes is 30 and the discovery itself needs most
+      # of it, so the bounded worst case is cut to ~13 minutes:
+      # 2 x 60 s apt-get update + 180 s + 420 s download + 30 s backoff.
+      - name: Install the headless browser
+        if: steps.detect.outputs.configured == 'true'
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
+          attempts: '2'
+          timeout-seconds: '180'
+          final-timeout-seconds: '420'
 
       - name: Read the site's name and admin URL
         id: site
@@ -161,15 +202,6 @@ jobs:
           else
             echo "mode=live" >> "$GITHUB_OUTPUT"
           fi
-
-      # Pinned: mint-app-token.js runs under node, and ubuntu-latest's default
-      # Node moves from 22 to 24 with Ubuntu 26.04 (actions/runner-images#14748).
-      - name: Set up Node
-        if: steps.detect.outputs.configured == 'true' && steps.mode.outputs.mode == 'live'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: "20"
-          package-manager-cache: false
 
       - name: Mint the CMS automation App token
         id: app

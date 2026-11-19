@@ -90,10 +90,19 @@ Accepted Eval forms
 - FIRST_FIXTURE: a skills-evals pull request link (`skills-evals/pull/N`) or
   the path `evals/<skill>/`.
 - EXEMPT: the word `exempt`.
+- WORDING_ONLY (the light entry, cms-platform#946): the Eval text starts with
+  `wording-only`, on an `edit` entry. It needs no run, whatever the census
+  says, because the check measures the claim instead of trusting it: the
+  SKILL.md's frontmatter (its `name` and `description`, which decide when the
+  skill loads) parses to the same value at the merge-base and at head, and
+  `git diff --numstat` counts at most WORDING_MAX_CHANGED_LINES added plus
+  deleted lines. A `wording-only` line on a larger or frontmatter-changing
+  edit is judged by the ordinary forms, and fails if it shows none of them.
 - GREEN (graduation): `with_skill ... X/Y` and `without_skill ... A/B` with
   X > 0 and X/Y >= A/B, plus a run id or a results link.
 
-touch, census `covered`: RAN. `skipped`: RAN or EXEMPT. `gap`: RAN or
+touch: WORDING_ONLY within its bounds, at any census status; otherwise
+census `covered`: RAN. `skipped`: RAN or EXEMPT. `gap`: RAN or
 FIRST_FIXTURE. create: GREEN. remove: a `remove` entry.
 
 skills-evals' retirement pull requests (`retire-skill/<skill>`,
@@ -103,10 +112,10 @@ tests pin that format.
 Warn-only mode
 ---------------
 `--warn-only` reports every failure as a warning and always exits 0, even
-when the check could not run (exit 2 otherwise) or crashed. self-ci.yml runs
-it that way for now; dropping the flag makes it enforcing. When
-`$GITHUB_STEP_SUMMARY` is set, the findings are also written there as
-Markdown, in both modes.
+when the check could not run (exit 2 otherwise) or crashed. self-ci.yml ran
+it that way until cms-platform#946; it now runs enforcing, and the flag stays
+for a local dry run. When `$GITHUB_STEP_SUMMARY` is set, the findings are
+also written there as Markdown, in both modes.
 
 Usage:
   python3 scripts/skill_gates/check_skill_gates.py --base <rev> --head <rev> \\
@@ -127,6 +136,7 @@ import urllib.request
 from fractions import Fraction
 from typing import Dict, List, Optional, Tuple
 
+import yaml
 from markdown_it import MarkdownIt
 
 DEFAULT_CENSUS = ("https://raw.githubusercontent.com/Adam-S-Daniel/skills-evals/"
@@ -137,6 +147,12 @@ REGISTRY_NAME = "cms-platform"
 BUNDLE = "cms-platform"
 IMPACT_FILE = "docs/skill-impact.md"
 KINDS = ("create", "edit", "rename", "remove", "rejected")
+# The most added-plus-deleted lines a `wording-only` edit of one SKILL.md may
+# have. This bundle's skills write a paragraph per line, so a reworded
+# sentence is one line deleted and one added; 20 leaves room for a handful of
+# such fixes or a re-wrapped paragraph, and is far below any edit that adds a
+# section or a procedure.
+WORDING_MAX_CHANGED_LINES = 20
 
 _GIT_VERBATIM = ("-c", "core.autocrlf=false", "-c", "core.eol=lf")
 _SKILL_PATH = re.compile(r"^skills/([^/]+)/SKILL\.md$")
@@ -161,6 +177,7 @@ _NEGATION = re.compile(
     re.IGNORECASE)
 _EVALS_PR = re.compile(r"skills-evals/pull/\d+")
 _EXEMPT = re.compile(r"\bexempt\b", re.IGNORECASE)
+_WORDING_ONLY = re.compile(r"^[\s`*]*wording-only\b", re.IGNORECASE)
 _RESULTS_LINK = re.compile(r"https://\S*eval-results\S*")
 # `with_skill`, optional backticks, up to three short words (`objective`,
 # `scored`), then the count.
@@ -219,6 +236,22 @@ def show(rev: str, path: str) -> Optional[str]:
 def blob_id(rev: str, path: str) -> Optional[str]:
     proc = _git("rev-parse", "--verify", "-q", f"{rev}:{path}")
     return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def changed_lines(base: str, head: str, path: str) -> Optional[int]:
+    """Added plus deleted lines of one file between two revisions, or None
+    when git reports it as binary."""
+    proc = _git("diff", "--numstat", "--no-renames", base, head, "--", path)
+    if proc.returncode != 0:
+        raise GateError(f"git diff --numstat {base} {head} -- {path} failed: "
+                        f"{proc.stderr.strip()}")
+    total = 0
+    for line in proc.stdout.splitlines():
+        added, deleted = line.split("\t")[:2]
+        if not (added.isdigit() and deleted.isdigit()):
+            return None
+        total += int(added) + int(deleted)
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +374,42 @@ def is_exempt(text: str) -> bool:
     return bool(not is_negated(text) and _EXEMPT.search(text))
 
 
+def is_wording_only(text: str) -> bool:
+    return bool(_WORDING_ONLY.match(text))
+
+
+def frontmatter(src: Optional[str]):
+    """The parsed YAML frontmatter of a SKILL.md: the block between a first
+    line `---` and the next `---` line. None when there is none; the raw block
+    text when it is not valid YAML, so two unparseable blocks still compare."""
+    lines = (src or "").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            block = "\n".join(lines[1:i])
+            try:
+                return yaml.safe_load(block)
+            except yaml.YAMLError:
+                return block
+    return None
+
+
+def wording_only_problem(point: str, head: str, skill: str) -> Optional[str]:
+    """None when the edit is within the `wording-only` bounds, else what
+    exceeds them."""
+    path = f"skills/{skill}/SKILL.md"
+    if frontmatter(show(point, path)) != frontmatter(show(head, path)):
+        return ("the edit changes the SKILL.md frontmatter, which decides when the skill "
+                "loads")
+    count = changed_lines(point, head, path)
+    if count is None or count > WORDING_MAX_CHANGED_LINES:
+        size = "a binary change" if count is None else f"{count} added plus deleted lines"
+        return (f"the edit is {size}, more than the {WORDING_MAX_CHANGED_LINES} a "
+                "wording-only edit may have")
+    return None
+
+
 def is_green(text: str) -> bool:
     if is_negated(text):
         return False
@@ -451,19 +520,32 @@ def check_create(rep, added, skill):
              "or results link on the Eval line")
 
 
-def check_touch(rep, added, skill, census, census_why):
+def check_touch(rep, added, skill, census, census_why, point, head):
     who = f"{BUNDLE}/{skill}"
     entries = _entries_for(added, skill, exclude={"rejected"})
     if not entries:
         rep.fail(who, f"SKILL.md changed with no new entry in {IMPACT_FILE} naming this skill",
                  f"{IMPACT_FILE} says every skill-content change appends an entry, in the same PR",
-                 f"Add `## <date> — {who} — edit` with Motivation, Change, Eval and Outcome "
-                 "lines (an entry covering several skills names each: `a, b`)")
+                 f"Add `## <date> — {who} — edit` with Change and Eval lines; for a wording "
+                 "fix the Eval line is `wording-only: <what changed>` and needs no run (an "
+                 "entry covering several skills names each: `a, b`)")
         return
     texts = [e["eval"] for e in entries]
     ran = any(is_ran(t) for t in texts)
     exempt = any(is_exempt(t) for t in texts)
     first = any(is_first_fixture(t, skill) for t in texts)
+    if any(e["kind"] == "edit" and is_wording_only(e["eval"]) for e in entries):
+        problem = wording_only_problem(point, head, skill)
+        if problem is None:
+            return
+        if not (ran or exempt or first):
+            rep.fail(who, f"the Eval line says `wording-only`, but {problem}",
+                     f"{IMPACT_FILE} accepts `wording-only` without a run only for a small "
+                     "edit that leaves the frontmatter alone",
+                     "Run the skill's eval through the skills-evals eval routine and put its "
+                     "counts or run id on the Eval line, or split the wording fix into its "
+                     "own smaller change")
+            return
     status = census_status(census, skill)
     run_fix = ("run the skill's eval through the skills-evals eval routine and put its "
                "counts (e.g. 21/21) or run id on the Eval line")
@@ -544,7 +626,7 @@ def run(base: str, head: str, census_source: str) -> Tuple[int, List[str], Repor
     for skill in created:
         check_create(rep, added, skill)
     for skill in touched:
-        check_touch(rep, added, skill, census, census_why)
+        check_touch(rep, added, skill, census, census_why, point, head)
 
     if not (created or removed or touched):
         out.append("skill-gates: no skill created, edited or removed")

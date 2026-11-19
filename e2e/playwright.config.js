@@ -167,6 +167,10 @@ const PLATFORM_META_SPECS = [
   // #644 — vm-sandboxes theme/admin SOURCE (the poller, the button and the
   // requestAnimationFrame shims) with document.hidden stubbed; same reason.
   "admin-hidden-tab.test.js",
+  // Reads theme/admin/media-search.js SOURCE (the Media search page); platform tree only.
+  "media-search.test.js",
+  // Lints theme/admin SOURCE and platform YAML labels for a bare "media"; platform tree only.
+  "admin-plain-names.test.js",
   "admin-publish-duration-copy.test.js",
   // #649 — AST lint over theme/admin SOURCE (owner-facing copy; platform tree only).
   "admin-owner-copy-banned-words.test.js",
@@ -190,6 +194,9 @@ const PLATFORM_META_SPECS = [
   "editor-component-image.test.js",
   // #732 — platform-only code widget registration and initialization regression.
   "code-block-language.test.js",
+  // #516 row 11 — vm-sandboxes theme/admin/sign-in-renewal.js and the fetch
+  // wrap that calls it, and reads the production shell's script order.
+  "sign-in-renewal.test.js",
   // vm-sandboxes theme/admin's model, poller, bar and button SOURCE to check
   // the run links and the confirmation copy; platform-internal likewise.
   "publish-status-links.test.js",
@@ -372,6 +379,8 @@ const PLATFORM_META_SPECS = [
   // repo-settings.yml, .github/workflows/ and examples/site/ — none of which a
   // consumer has — so it is platform-internal and testIgnored on a CONSUMER lane.
   "ruleset-context-publishable.test.js",
+  // #1022 — runs the platform's OWN secrets-scan.yml scan step in a temp repo.
+  "secrets-scan-stacked-range.test.js",
   // #1815 — the real-prod-loop budget-alignment lint reads the platform's OWN
   // cms-media-roundtrip + cms-publish-loop-prod-mutate spec sources + the media
   // workflow's timeout-minutes; platform-internal, self-CI only.
@@ -681,6 +690,10 @@ const PLATFORM_META_SPECS = [
   // stalled one for 39 min, blocking a canary PR and failing a prod loop).
   // Platform-internal, self-CI only.
   "playwright-install-bounded.test.js",
+  // Reads every platform workflow DEFINITION to assert each Playwright browser
+  // cache key names the runner image (a 24.04 WebKit build restored on 26.04
+  // failed every webkit-iphone16 test). Platform-internal, self-CI only.
+  "playwright-browser-cache-image-key.test.js",
   "select-lane.test.js",
   "select-specs.test.js",
   // Reads scripts/set-repo-variables.sh + scaffold/create-site.js +

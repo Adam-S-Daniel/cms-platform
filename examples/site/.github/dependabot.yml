@@ -63,6 +63,13 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # Cooldown: a release must be 7 days old before Dependabot opens a version
+    # update (security updates bypass it). The fleet's 7-day cooling-off rule;
+    # github-actions supports only default-days. cms-platform refs are ignored
+    # above anyway; the exclude keeps them exempt if that ignore is ever lifted.
+    cooldown:
+      default-days: 7
+      exclude: ["Adam-S-Daniel/cms-platform/*"]
     ignore:
       - dependency-name: "Adam-S-Daniel/cms-platform/*"
   # The site's own gems (jekyll, webrick, any jekyll-* plugins) — NOT the
@@ -71,6 +78,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # Same 7-day cooldown; bundler also supports a longer wait for majors.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
     ignore:
       # why: platform-bump.yml owns this gem's version. It rewrites the Gemfile
       # `tag:`, the Gemfile.lock git `revision:`, platform.lock's platform_ref,

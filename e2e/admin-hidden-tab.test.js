@@ -248,6 +248,7 @@ const RAF_SHIMS = [
   "one-door-publish.js",
   "collection-controls-trim.js",
   "reviews-nav-link.js",
+  "media-search-nav-link.js",
 ];
 
 /**

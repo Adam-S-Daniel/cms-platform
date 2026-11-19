@@ -75,9 +75,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete plan.
 ## Required GitHub secrets (per consumer site)
 
 Each consumer repo needs two hand-made PATs plus three AWS values. The **canonical,
-versioned spec — with the exact fine-grained permissions for each — lives in the
-`consumer-repo-provisioning` skill** (`skills/consumer-repo-provisioning/SKILL.md`), which reaches
-a session through the marketplace bundle above rather than through the consumer repo.
+versioned spec — with the exact fine-grained permissions for each — lives in
+`docs/CONSUMER-PROVISIONING.md`** in this repo.
 At a glance:
 
 - **`CMS_E2E_PAT`** (CMS automation + canary loops) — fine-grained, this repo: **Contents R/W, Pull requests R/W, Actions Read *and write*, Deployments Read *and write***. Deployments *write* is for `regression-review-reaper`: rejecting a superseded review gate (`POST /repos/…/actions/runs/{id}/pending_deployments`) needs it, per GitHub's fine-grained permission table, and Actions write does not cover it (#788). The PAT user must also be a reviewer of the `regression-review` environment. Must be a PAT, not `GITHUB_TOKEN`, so canary-PR events fire downstream workflows.

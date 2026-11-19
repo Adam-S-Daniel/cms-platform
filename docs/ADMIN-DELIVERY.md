@@ -63,7 +63,8 @@ whole design:
   platform `field_library` (see "field_library + `$ref` reuse" below) — the
   base config itself stays TEXT and is spliced byte-for-byte as today.
 - **Inject `window.CMS_*` globals** into the admin shells (`index*.html`) AND the
-  reviews dashboards (`reviews/*.html`) — skipping a file only if it already
+  reviews dashboards (`reviews/*.html`) AND the New mentions page
+  (`media-search.html`, which reads `CMS_REPO`) — skipping a file only if it already
   *defines* the identity, not merely uses it.
   `CMS_REPO` / `CMS_SITE_ORIGIN` / `CMS_ADMIN_ORIGIN` (#517, `""` unless
   `cms.admin_origin` is set) / `CMS_APEX` / `CMS_OAUTH_BASE_URL` /
@@ -93,7 +94,7 @@ whole design:
 (same copy + render + inject + cleanup; resolves the gem via
 `Gem.loaded_specs['cms-platform-theme']`). The two are **parity-locked** by
 `e2e/decap-config-render-parity.test.js` — keep the injected globals and the
-`index*` / `reviews/*` globs **identical** in both, or the lint fails.
+`index*` / `reviews/*` / `media-search.html` globs **identical** in both, or the lint fails.
 
 ### In-editor content previews and Liquid (#726)
 
@@ -117,9 +118,9 @@ targets that feature branch and receives no separate deployment status (see
 [Publishing UX, preview-only edits](PUBLISHING-UX.md#35-on-a-preview-the-website-is-the-wrong-noun)).
 The note supplies no invented URL and promises no deployment for those drafts.
 
-[Issue #726](https://github.com/Adam-S-Daniel/cms-platform/issues/726) still
-requires the owner's decision on whether this content-preview limitation
-satisfies the related Tools concern or a fuller build-backed preview is needed.
+**Owner decision (2026-11-17):** this content preview is enough for Tools and
+other site-owned collections; no build-backed in-editor preview is planned
+([issue #726](https://github.com/Adam-S-Daniel/cms-platform/issues/726), closed).
 The platform mitigation documents the boundary without executing Liquid in
 the browser. [preview-pane.test.js](../e2e/preview-pane.test.js) covers neutral
 Liquid variables and tags, renamed Markdown fields, unchanged widget input,
@@ -606,7 +607,7 @@ serves its editor from its own origin (`AdminDomainName`, see
 `docs/ADMIN-AUTH-SECURITY.md`) answers every miss on that host with, so it
 shares an origin with the editor's tokens: plain HTML, no script, no style, no
 external resource, no layout or include, and no `window.CMS_*` injection (the
-render paths only touch `index*.html` and `reviews/*.html`).
+render paths only touch `index*.html`, `reviews/*.html` and `media-search.html`).
 `theme/spec/admin_not_found_page_test.rb` parses it against an allowlist.
 
 ## Seeded 404 page: self-contained and neutral, not gem-styled (issue #326)
@@ -675,3 +676,44 @@ nothing else in the seeding contract changes, and the render-neutral check in
 here (`404.html` is not under `theme/`, so that specific gate is irrelevant;
 the PR will still go through the ordinary visual-regression lane like any
 other content change).
+
+## Words we use
+
+A site owner meets the word "media" in three places, and it must mean one thing.
+Three terms, each with one meaning:
+
+| Say | It is | Where it comes from |
+| --- | --- | --- |
+| **Images & files** | The library of uploaded pictures and files: Decap's top-nav tab, the library window, the picker buttons. | Decap's built-in "Media", relabeled by `media-library-labels.js` (a locale override: it merges three phrases over `CMS.getLocale('en')` and re-registers it). |
+| The site's own collection name | The site's articles, talks or press: its label in `admin/collections.site.yml` (for example "Press and talks"). | Each site repo. |
+| **New mentions** | The page that finds new items about the owner on the web, to add to the site (`/admin/media-search.html`, kept as a file name and URL). | `media-search.html`, `media-search.js`, `media-search-nav-link.js`. |
+
+The rule: no `label`, `label_singular` or `hint` in `config.base.yml` or
+`collections.site.yml.example`, no visible text or `aria-label`, `title`,
+`placeholder` or `alt` in `theme/admin/*.html`, and no label string in the nav-link and
+relabel scripts, contains "media" as a standalone word ("social media" is the one
+allowed phrase). File names, URLs, collection names and code identifiers keep
+the word. `e2e/admin-plain-names.test.js` enforces it with
+`e2e/plain-names-lint.js`, which a site repo can call on its own collections:
+
+```js
+const { checkCollectionsYaml } = require("./.cms-platform/e2e/plain-names-lint");
+const bad = checkCollectionsYaml(fs.readFileSync("admin/collections.site.yml", "utf8"));
+expect(bad, bad.join("\n")).toEqual([]);
+```
+
+## New mentions page (`/admin/media-search.html`)
+
+The site owner's page for deciding which finds from the weekly search for new mentions go
+on the site. `media-search.html` is the shell; `media-search.js` holds the logic
+(pure functions on `window.MediaSearch`, unit-tested by
+`e2e/media-search.test.js`); `media-search-nav-link.js` adds the header link
+(production shell only). Results are read, and decisions written, through the
+GitHub REST API with the editor's session token (`decap-cms-user`). Where they
+live is the `DATA_SOURCE` block at the top of `media-search.js`: today
+`findings.json` and `decisions.json` on the `persistent/media-search` branch of
+`CMS_REPO`. "Add to site" opens the same draft `scripts/media_discovery/github_api.py`
+`open_entry_pr` does (branch `cms/<collection>/<slug>`, `Create Media “slug”` pull
+request, labels `decap-cms/pending_review` + `media-discovery`, the dedupe marker
+first in the body), so it appears in the editor's Workflow list. Keep
+`normalizeUrl` and `safeMd` in step with `domains.py` and `render.py`.

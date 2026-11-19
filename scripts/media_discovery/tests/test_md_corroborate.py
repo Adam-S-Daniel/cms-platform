@@ -3,7 +3,7 @@ from datetime import date
 from md_fixtures import CFG, PAGE_A, PAGE_B, make_candidate, page
 
 from media_discovery.config import load_config
-from media_discovery.corroborate import classify_timing, effective_kind, verify
+from media_discovery.corroborate import Problem, classify_timing, effective_kind, verify
 
 PRIMARY = "https://events.example.com/talks/open-data"
 SECOND = "https://news.example.org/summit-recap"
@@ -114,3 +114,55 @@ def test_effective_kind_ignores_model_label_for_talks_only():
                           date(2026, 11, 4)) == "upcoming_talk"
     assert effective_kind(make_candidate(kind="press", date="2030-01-01"),
                           date(2026, 11, 4)) == "press"
+
+
+def test_problems_name_each_failure_for_the_digest():
+    v = verify(make_candidate(), {PRIMARY: page(PRIMARY, PAGE_A),
+                                  SECOND: page(SECOND, "Pat Rivera, Northwind Legal. 2026")}, CFG)
+    assert v.problems == [Problem("no-match", SECOND), Problem("no-second-source")]
+    unreadable = page(PRIMARY, "", status=415)
+    unreadable.unreadable_type = True
+    v = verify(make_candidate(), {PRIMARY: unreadable, SECOND: page(SECOND, PAGE_B, status=406)},
+               CFG)
+    assert v.problems == [Problem("unreadable-type", PRIMARY),
+                          Problem("http-status", SECOND, "406")]
+    v = verify(make_candidate(), pages(b=PAGE_B.replace("Northwind Legal", "")), CFG)
+    assert v.problems == [Problem("identity", SECOND, "no-identity-marker"),
+                          Problem("no-second-source")]
+    v = verify(make_candidate(), {PRIMARY: page(PRIMARY, PAGE_A)}, CFG)
+    assert v.problems == [Problem("not-fetched", SECOND), Problem("no-second-source")]
+
+
+def test_most_title_words_name_the_item_when_the_exact_title_is_not_there():
+    c = make_candidate(title="2026 SAU at AUA", outlet="Society of Academic Urologists")
+    agenda = "SAU program at the AUA annual meeting, May 2026. Pat Rivera, Northwind Legal."
+    v = verify(c, {PRIMARY: page(PRIMARY, agenda), SECOND: page(SECOND, PAGE_B)}, CFG)
+    assert v.sources[0].supports_claim
+    # One distinctive word of two is not enough.
+    half = "AUA annual meeting, May 2026. Pat Rivera, Northwind Legal."
+    v = verify(c, {PRIMARY: page(PRIMARY, half)}, CFG)
+    assert not v.sources[0].supports_claim
+    # Words match whole, not inside other words ("sausage" is not "SAU").
+    v = verify(c, {PRIMARY: page(PRIMARY, "Sausage and AUAX 2026. Pat Rivera, Northwind Legal.")},
+               CFG)
+    assert not v.sources[0].supports_claim
+
+
+def test_a_cited_quote_on_a_supporting_page_supports_the_claim():
+    recap = ("Firm news 2026: Pat Rivera of Northwind Legal will speak on data rules at the "
+             "AUA annual meeting.")
+    quote = {"url": SECOND, "quote": "Pat Rivera of Northwind Legal will speak on data rules"}
+    c = make_candidate(kind="press", title="2026 SAU at AUA", outlet="Society of Urologists",
+                       evidence=[quote])
+    agenda = "SAU at the AUA 2026. Pat Rivera, Northwind Legal."
+    v = verify(c, {PRIMARY: page(PRIMARY, agenda), SECOND: page(SECOND, recap)}, CFG)
+    assert v.sources[1].supports_claim and v.confirmed
+    # The quote must be on the page, and come from that page's own evidence.
+    other = make_candidate(kind="press", title="2026 SAU at AUA", outlet="Society of Urologists",
+                           evidence=[dict(quote, url="https://elsewhere.example.net/x")])
+    v = verify(other, {PRIMARY: page(PRIMARY, agenda), SECOND: page(SECOND, recap)}, CFG)
+    assert not v.sources[1].supports_claim
+    # A quote alone, with no word of the title or outlet on the page, is not enough.
+    bare = "Firm news 2026: Pat Rivera of Northwind Legal will speak on data rules soon."
+    v = verify(c, {PRIMARY: page(PRIMARY, agenda), SECOND: page(SECOND, bare)}, CFG)
+    assert not v.sources[1].supports_claim
