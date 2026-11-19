@@ -30,6 +30,36 @@ permissions:
 
 jobs:
   signal:
+    # THE DECISION lives here, in the platform, so a release can correct it (a
+    # thin caller's body is never rewritten by a bump). It fires for:
+    #   * a failed, timed-out, startup-failed or cancelled gating run on a
+    #     same-repository `cms/` pull request;
+    #   * ANY completion of the editorial workflow on one (it runs on every
+    #     label, so its completion is the moment Publish is pressed, including
+    #     on a pull request whose checks already failed);
+    #   * a successful production deploy (so the sweep closes resolved issues).
+    #
+    # WHICH workflow finished is read from `github.event.workflow.path`, the
+    # workflow FILE in the calling repository. Never from
+    # `github.event.workflow_run.name`: that is the run's display title, and
+    # both workflows named here set a dynamic `run-name` ("PR #12 — <title>",
+    # "push — main @<actor>"), so comparing it with a workflow's name never
+    # matched, and for a pull request it is text the author chose. v0.1.182
+    # shipped that comparison (in the caller) and both branches were dead on
+    # arrival: adamdaniel.ai run 44589925006, skipped on the deploy right
+    # after the bump. e2e/publish-watchdog.test.js evaluates this expression
+    # against events shaped like the real ones.
+    #
+    # When this is false the job is skipped before a runner is allocated.
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && ((github.event.workflow_run.event == 'pull_request'
+           && startsWith(github.event.workflow_run.head_branch, 'cms/')
+           && (contains(fromJSON('["failure","timed_out","startup_failure","cancelled"]'), github.event.workflow_run.conclusion)
+               || github.event.workflow.path == '.github/workflows/cms-editorial-workflow.yml'))
+          || (github.event.workflow.path == '.github/workflows/deploy-production.yml'
+              && github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

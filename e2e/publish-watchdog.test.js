@@ -936,7 +936,9 @@ esac`,
 
 test.describe("workflow files", () => {
   const SIGNAL_REUSABLE = path.join(ROOT, ".github/workflows/publish-watchdog-signal.yml");
-  const SIGNAL_CALLER = path.join(CALLER_DIR, "publish-watchdog-signal.yml");
+  // Named `-knock`, not `-signal`: the rename is how the bump retires the
+  // v0.1.182 caller (whose body held a wrong `if`) and seeds this one.
+  const SIGNAL_CALLER = path.join(CALLER_DIR, "publish-watchdog-knock.yml");
   const read = (f) => fs.readFileSync(f, "utf8");
   const sweepReusable = parseYaml(read(REUSABLE));
   const sweepCallerText = read(CALLER);
@@ -1014,14 +1016,23 @@ test.describe("workflow files", () => {
     expect(job.uses).toMatch(/^Adam-S-Daniel\/cms-platform\/\.github\/workflows\/publish-watchdog-signal\.yml@v\d+\.\d+\.\d+$/);
   });
 
-  test("signal caller if: same repository; failed cms/ pull_request run, or a successful production deploy", () => {
-    const cond = signalCaller.jobs.signal.if;
+  test("the decision lives in the reusable, not the caller: a release can correct it only there", () => {
+    // A bump re-pins an existing caller and never rewrites its body.
+    expect(signalCaller.jobs.signal.if, "the thin caller has no `if`").toBeUndefined();
+    expect(fs.existsSync(path.join(CALLER_DIR, "publish-watchdog-signal.yml")), "the v0.1.182 caller name is retired").toBe(false);
+    const cond = String(signalReusable.jobs.signal.if);
+    expect(cond).toContain("github.event_name == 'workflow_run'");
     expect(cond).toContain("head_repository.full_name == github.repository");
     expect(cond).toContain("workflow_run.event == 'pull_request'");
     expect(cond).toContain("startsWith(github.event.workflow_run.head_branch, 'cms/')");
     for (const c of ["failure", "timed_out", "startup_failure", "cancelled"]) expect(cond).toContain(`"${c}"`);
-    expect(cond).toContain("workflow_run.name == 'Deploy to Production'");
+    expect(cond).toContain("github.event.workflow.path == '.github/workflows/deploy-production.yml'");
     expect(cond).toContain("conclusion == 'success'");
+    // `workflow_run.name` is the run's DISPLAY TITLE (the workflow's
+    // `run-name`), not the workflow's name; comparing it shipped two dead
+    // branches in v0.1.182. Nothing here may read it, the run-name included.
+    expect(cond).not.toContain("workflow_run.name");
+    expect(String(signalCaller["run-name"])).not.toContain("workflow_run.name");
   });
 
   test("signal reusable: no issues or pull-requests write, persist-credentials false, sparse list exactly the minting script, contents=write narrowed to the repository", () => {
@@ -1081,15 +1092,36 @@ test.describe("workflow files", () => {
   });
 
   // Evaluate the signal caller's job `if` the way GitHub does, with a fake
-  // `github` context and the three functions it uses.
-  function signalFires({ name, event = "pull_request", branch = "cms/posts/x", conclusion, head = "o/r" }) {
-    const expression = String(signalCaller.jobs.signal.if).trim();
+  // `github` context shaped like a real `workflow_run` event: `workflow` is the
+  // workflow FILE (name and path), and `workflow_run.name` is that run's
+  // display title, which for a workflow with a `run-name` is NOT its name.
+  const WORKFLOWS = {
+    editorial: { name: "CMS Editorial Workflow", path: ".github/workflows/cms-editorial-workflow.yml", title: "PR #7 — Update Post “hello”" },
+    e2e: { name: "E2E Tests", path: ".github/workflows/e2e-tests.yml", title: "PR #7 — Update Post “hello”" },
+    verify: { name: "Site verify", path: ".github/workflows/site-verify.yml", title: "PR #7 — Update Post “hello”" },
+    scan: { name: "Secrets scan", path: ".github/workflows/secrets-scan.yml", title: "Secrets scan" },
+    deploy: { name: "Deploy to Production", path: ".github/workflows/deploy-production.yml", title: "push — main @someone" },
+  };
+  function signalFires({ wf, title, event = "pull_request", branch = "cms/posts/x", conclusion, head = "o/r" }) {
+    const expression = String(signalReusable.jobs.signal.if).trim();
     const ast = acorn.parse(`(${expression})`, { ecmaVersion: "latest" });
     expect(ast.body).toHaveLength(1);
+    const w = WORKFLOWS[wf];
     const context = {
       github: {
         repository: "o/r",
-        event: { workflow_run: { name, event, head_branch: branch, conclusion, head_repository: { full_name: head } } },
+        event_name: "workflow_run",
+        event: {
+          workflow: { name: w.name, path: w.path },
+          workflow_run: {
+            name: title === undefined ? w.title : title,
+            path: w.path,
+            event,
+            head_branch: branch,
+            conclusion,
+            head_repository: { full_name: head },
+          },
+        },
       },
       startsWith: (a, b) => String(a).startsWith(String(b)),
       contains: (a, b) => (Array.isArray(a) ? a.includes(b) : String(a).includes(String(b))),
@@ -1099,36 +1131,45 @@ test.describe("workflow files", () => {
   }
 
   const FIRE = [
-    ["a failure on a cms PR", { name: "E2E Tests", conclusion: "failure" }, true],
-    ["a timeout on a cms PR", { name: "E2E Tests", conclusion: "timed_out" }, true],
-    ["a startup failure on a cms PR", { name: "Site verify", conclusion: "startup_failure" }, true],
-    ["a cancellation on a cms PR", { name: "E2E Tests", conclusion: "cancelled" }, true],
-    ["a success of a non-editorial gating workflow on a cms PR", { name: "E2E Tests", conclusion: "success" }, false],
-    ["a skipped non-editorial gating workflow on a cms PR", { name: "E2E Tests", conclusion: "skipped" }, false],
-    ["a success of the editorial workflow on a cms PR (Publish pressed)", { name: "CMS Editorial Workflow", conclusion: "success" }, true],
-    ["a failure of the editorial workflow on a cms PR", { name: "CMS Editorial Workflow", conclusion: "failure" }, true],
-    ["a skipped editorial workflow on a cms PR", { name: "CMS Editorial Workflow", conclusion: "skipped" }, true],
-    ["a failure on a non-cms branch", { name: "E2E Tests", conclusion: "failure", branch: "feat/x" }, false],
-    ["the editorial workflow on a non-cms branch", { name: "CMS Editorial Workflow", conclusion: "success", branch: "feat/x" }, false],
-    ["a failure from a fork head repository", { name: "E2E Tests", conclusion: "failure", head: "fork/r" }, false],
-    ["the editorial workflow from a fork head repository", { name: "CMS Editorial Workflow", conclusion: "success", head: "fork/r" }, false],
-    ["a failure on a push (not a pull_request run)", { name: "E2E Tests", conclusion: "failure", event: "push" }, false],
-    ["a production deploy success", { name: "Deploy to Production", conclusion: "success", event: "push", branch: "main" }, true],
-    ["a production deploy failure", { name: "Deploy to Production", conclusion: "failure", event: "push", branch: "main" }, false],
+    ["a failure on a cms PR", { wf: "e2e", conclusion: "failure" }, true],
+    ["a timeout on a cms PR", { wf: "e2e", conclusion: "timed_out" }, true],
+    ["a startup failure on a cms PR", { wf: "verify", conclusion: "startup_failure" }, true],
+    ["a cancellation on a cms PR", { wf: "e2e", conclusion: "cancelled" }, true],
+    ["a success of a non-editorial gating workflow on a cms PR", { wf: "e2e", conclusion: "success" }, false],
+    ["a skipped non-editorial gating workflow on a cms PR", { wf: "e2e", conclusion: "skipped" }, false],
+    ["a success of the editorial workflow on a cms PR (Publish pressed)", { wf: "editorial", conclusion: "success" }, true],
+    ["a failure of the editorial workflow on a cms PR", { wf: "editorial", conclusion: "failure" }, true],
+    ["a skipped editorial workflow on a cms PR", { wf: "editorial", conclusion: "skipped" }, true],
+    ["a failure on a non-cms branch", { wf: "e2e", conclusion: "failure", branch: "feat/x" }, false],
+    ["the editorial workflow on a non-cms branch", { wf: "editorial", conclusion: "success", branch: "feat/x" }, false],
+    ["a failure from a fork head repository", { wf: "e2e", conclusion: "failure", head: "fork/r" }, false],
+    ["the editorial workflow from a fork head repository", { wf: "editorial", conclusion: "success", head: "fork/r" }, false],
+    ["a failure on a push (not a pull_request run)", { wf: "e2e", conclusion: "failure", event: "push" }, false],
+    ["a production deploy success", { wf: "deploy", conclusion: "success", event: "push", branch: "main" }, true],
+    ["a production deploy failure", { wf: "deploy", conclusion: "failure", event: "push", branch: "main" }, false],
+    // A display title is author-chosen text: a pull request TITLED like a
+    // workflow must not be taken for that workflow.
+    ["a green gating run whose title spells the editorial workflow's name", { wf: "e2e", title: "CMS Editorial Workflow", conclusion: "success" }, false],
+    ["a green gating run on main whose title spells the deploy workflow's name", { wf: "scan", title: "Deploy to Production", conclusion: "success", event: "push", branch: "main" }, false],
   ];
   for (const [label, ev, expected] of FIRE) {
-    test(`signal caller if: ${label} -> ${expected}`, () => {
+    test(`signal if: ${label} -> ${expected}`, () => {
       expect(signalFires(ev)).toBe(expected);
     });
   }
 
-  test("the literal names the signal's if compares against are real examples/site callers", () => {
-    const names = new Set(fs.readdirSync(CALLER_DIR).map((f) => parseYaml(read(path.join(CALLER_DIR, f))).name));
-    expect(names.has("CMS Editorial Workflow")).toBe(true);
-    expect(names.has("Deploy to Production")).toBe(true);
-    expect(signalCallerText).toContain("'CMS Editorial Workflow'");
-    expect(signalCallerText).toContain("'Deploy to Production'");
+  test("the workflow files the signal's if names exist, and they are the two with a dynamic run-name", () => {
+    const cond = String(signalReusable.jobs.signal.if);
+    const paths = [...cond.matchAll(/'\.github\/workflows\/([^']+)'/g)].map((m) => m[1]);
+    expect(paths.sort()).toEqual(["cms-editorial-workflow.yml", "deploy-production.yml"]);
+    for (const file of paths) {
+      const caller = parseYaml(read(path.join(CALLER_DIR, file)));
+      expect(signalCaller.on.workflow_run.workflows, `${file} is one of the workflows the signal listens to`).toContain(caller.name);
+      // The reason a name comparison cannot work for them.
+      expect(typeof caller["run-name"], `${file} sets a run-name`).toBe("string");
+    }
   });
+
 
   test("the signal's missing-credentials path is a notice and success", () => {
     const gate = signalReusable.jobs.signal.steps.find((st) => st.id === "gate");
