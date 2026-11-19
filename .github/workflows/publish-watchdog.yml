@@ -19,15 +19,16 @@
 # WHEN IT ALERTS (see docs/CI-INVARIANTS.md "Publish watchdog" for the table):
 # a required check failing, or cancelled for the grace window, on an armed pull
 # request: the next sweep, normally a minute or two after the failed run ends
-# (cancelled: at the 16-minute follow-up); Publish pressed on a pull request
-# whose checks already failed: a minute or two; every check green but no merge:
-# about 16 minutes after Publish (the follow-up); a check waiting or running
+# (cancelled: at the next follow-up after the 3-minute grace); Publish pressed
+# on a pull request whose checks already failed: a minute or two; every check
+# green but no merge: at the first follow-up that comes 3 minutes after the
+# last check finished, so about 6 to 17 minutes after Publish; a check waiting or running
 # over an hour: the next sweep after the hour, up to about 6 hours (the cron);
 # a site without the App credential: the scheduled cadence.
 #
 # FOLLOW-UPS: while an armed publish is still in flight after a pass, the sweep
 # looks again at `follow_up_minutes` (default 5 and 16, minutes since the first
-# pass), at most three passes, so "every check finished but it did not merge"
+# pass), three passes by default, so "every check finished but it did not merge"
 # is caught without waiting for the cron. The 60-minute stall rule is NOT
 # covered by the follow-ups.
 #
@@ -47,11 +48,11 @@ on:
     inputs:
       # Strings so a thin caller can pass a workflow_dispatch value straight
       # through with no type coercion.
-      grace_minutes: { type: string, default: "15" }
+      grace_minutes: { type: string, default: "3" }
       stall_minutes: { type: string, default: "60" }
       # Minutes since the first pass at which the sweep looks again while an
-      # armed publish is still in flight ("" disables). Bounded: at most three
-      # passes, about 16 minutes.
+      # armed publish is still in flight ("" disables). Bounded by the script:
+      # at most four values, none above 25, so it cannot outlast the job.
       follow_up_minutes: { type: string, default: "5,16" }
       # Comma-separated GitHub logins to assign the alert to (empty: none).
       assignees:     { type: string, default: "" }

@@ -533,6 +533,71 @@ test.describe("sweepWithFollowUps", () => {
   });
 });
 
+// The reviewer's scenario for the old 15-minute grace: Save and Publish
+// together, so the sweep starts while the checks are still running; they go
+// green a few minutes later and the pull request never merges. Every pass
+// must be judged against the DEFAULT grace, and the follow-up that comes
+// three settled minutes after the last check must alert.
+test.describe("green but never merged, with checks finishing after the first pass", () => {
+  const { sweepWithFollowUps: follow } = require(SCRIPT);
+  const T0 = Date.parse("2026-11-19T12:00:00Z"); // Publish pressed
+  const at = (minutes) => new Date(T0 + minutes * 60000).toISOString();
+
+  async function drive(checksGreenAtMinute) {
+    let clock = T0 + 1.5 * 60000; // the signal's sweep starts 90 seconds after Publish
+    const passes = [];
+    const result = await follow({
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      runOnce: async () => {
+        const minute = (clock - T0) / 60000;
+        const done = minute >= checksGreenAtMinute;
+        const plan = planSweep({
+          prs: [
+            {
+              pr: makePr({ updated_at: at(0) }),
+              checkRuns: [
+                run("build", done ? "completed" : "in_progress", done ? "success" : null, {
+                  started_at: at(0.2),
+                  completed_at: done ? at(checksGreenAtMinute) : null,
+                }),
+              ],
+              requiredContexts: ["build"],
+              files: ["_posts/2026-11-18-real-post.md"],
+            },
+          ],
+          issues: [],
+          nowMs: clock,
+        });
+        passes.push({ minute, opened: plan.open.length, pending: plan.pending });
+        return { pending: plan.pending };
+      },
+    });
+    return { passes, result };
+  }
+
+  test("checks green 3.2 minutes after Publish: alerted at the first follow-up, 6.5 minutes in", async () => {
+    const { passes } = await drive(3.2);
+    expect(passes.map((p) => p.minute)).toEqual([1.5, 6.5]);
+    expect(passes[0]).toMatchObject({ opened: 0, pending: 1 });
+    expect(passes[1]).toMatchObject({ opened: 1, pending: 0 });
+  });
+
+  test("checks green 10 minutes after Publish: alerted at the second follow-up, 17.5 minutes in", async () => {
+    const { passes } = await drive(10);
+    expect(passes.map((p) => p.minute)).toEqual([1.5, 6.5, 17.5]);
+    expect(passes.map((p) => p.opened)).toEqual([0, 0, 1]);
+  });
+
+  test("checks still running at the last follow-up: no alert from this sweep (the stall rule's job)", async () => {
+    const { passes } = await drive(30);
+    expect(passes.map((p) => p.minute)).toEqual([1.5, 6.5, 17.5]);
+    expect(passes.map((p) => p.opened)).toEqual([0, 0, 0]);
+  });
+});
+
 test.describe("CLI with a stub gh", () => {
   const SHA_A = "a".repeat(40);
   const SHA_D = "d".repeat(40);
@@ -649,6 +714,22 @@ esac`,
     expect(w[1]).toContain("-X PATCH");
     expect(w[1]).toContain("issues/51");
     expect(logged(env, "body-1.json")).toContain("no longer waiting to publish");
+    // The close rewrites the marker, so an issue the SWEEP closed does not
+    // suppress a later alert for the same commit; only a person's close does.
+    const patch = JSON.parse(logged(env, "body-2.json"));
+    expect(patch.state).toBe("closed");
+    expect(patch.body).toBe("<!-- publish-watchdog-resolved:pr=3 -->");
+  });
+
+  test("an issue the sweep closed itself does not suppress a new alert for the same commit", () => {
+    // What the close above leaves behind: a closed issue with the resolved marker.
+    const env = setup({
+      pulls: stuckPulls(),
+      openIssues: [{ number: 50, state: "closed", user: { login: "github-actions[bot]" }, body: `<!-- publish-watchdog-resolved:pr=7 sha=${SHA_A} -->` }],
+    });
+    const r = runCli(env);
+    expect(r.status).toBe(0);
+    expect(creates(env)).toHaveLength(1);
   });
 
   test("a 422 on create retries once without the work label", () => {
@@ -744,18 +825,39 @@ esac`,
     expect(r.status).toBe(0);
     const calls = argv(env).filter(Boolean);
     expect(calls.filter((l) => /check-runs|git\/ref|\/files|rules\/branches|api repos\/o\/r$/.test(l))).toEqual([]);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0]).toContain("repos/o/r/pulls?state=open");
-    expect(calls[1]).toContain("repos/o/r/issues?state=all");
+    expect(calls[1]).toContain("repos/o/r/issues?state=open");
+    expect(calls[2]).toContain("repos/o/r/issues?state=closed");
   });
 
-  test("issues are listed in any state, labelled, updated in the last 14 days", () => {
+  test("every open issue is listed however old; closed ones only from the last 14 days", () => {
+    // An alert on a pull request stuck for weeks must still be found, or the
+    // sweep opens a duplicate and never closes the original.
     const env = setup({ pulls: stuckPulls() });
     runCli(env, ["--dry-run"]);
-    const call = argv(env).find((l) => l.includes("repos/o/r/issues?"));
-    expect(call).toContain("state=all");
-    expect(call).toContain("labels=publish-stuck");
-    expect(call).toContain("since=2026-11-05T12%3A00%3A00.000Z");
+    const calls = argv(env).filter((l) => l.includes("repos/o/r/issues?"));
+    expect(calls).toHaveLength(2);
+    const open = calls.find((l) => l.includes("state=open"));
+    const closed = calls.find((l) => l.includes("state=closed"));
+    expect(open).toContain("labels=publish-stuck");
+    expect(open).not.toContain("since=");
+    expect(closed).toContain("labels=publish-stuck");
+    expect(closed).toContain("since=2026-11-05T12%3A00%3A00.000Z");
+  });
+
+  test("--follow-up-minutes is bounded so it cannot outlast the job", () => {
+    const env = setup({ pulls: stuckPulls() });
+    expect(runCli(env, ["--dry-run", "--follow-up-minutes", "1,2,3,4,5"]).status).toBe(2);
+    expect(runCli(env, ["--dry-run", "--follow-up-minutes", "5,26"]).status).toBe(2);
+    expect(runCli(env, ["--dry-run", "--follow-up-minutes", "5,16,25"]).status).toBe(0);
+  });
+
+  test("assignees typed with spaces are accepted", () => {
+    const env = setup({ pulls: stuckPulls() });
+    const r = runCli(env, ["--assignees", "alice, bob"]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(logged(env, "body-1.json")).assignees).toEqual(["alice", "bob"]);
   });
 
   test("a closed issue for the same head sha means no new issue", () => {
@@ -881,7 +983,7 @@ test.describe("workflow files", () => {
     expect(sweepReusable.jobs.sweep["timeout-minutes"]).toBe(30);
     const i = sweepReusable.on.workflow_call.inputs;
     expect(Object.keys(i).sort()).toEqual(["assignees", "dry_run", "follow_up_minutes", "grace_minutes", "issue_label", "stall_minutes", "work_label"]);
-    expect(i.grace_minutes.default).toBe("15");
+    expect(i.grace_minutes.default).toBe("3");
     expect(i.stall_minutes.default).toBe("60");
     expect(i.follow_up_minutes.default).toBe("5,16");
     expect(i.assignees.default).toBe("");

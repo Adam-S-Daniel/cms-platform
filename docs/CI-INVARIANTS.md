@@ -1861,18 +1861,22 @@ with `event_type` `publish-watchdog` (no payload). The sweep `publish-watchdog.y
 (caller `publish-watchdog.yml`) runs on that dispatch and every 6 hours, reads
 every open `cms/` pull request through `scripts/publish-watchdog.js` and opens, or
 closes, issues. While an armed publish is still in flight after a pass it looks
-again at 5 and 16 minutes after the first pass (`follow_up_minutes`; at most three
-passes, never on `--dry-run`), which is how "every check green but no merge" is
-caught without the cron. The 60-minute stall rule is not covered by the follow-ups.
+again at 5 and 16 minutes after the first pass (`follow_up_minutes`: at most
+four values, none above 25, so three passes by default; never on `--dry-run`),
+which is how "every check green but no merge" is caught without the cron. A
+sweep waiting on a follow-up holds the one `publish-watchdog` concurrency
+group, so a later knock runs after it; nothing is lost, because every pass
+re-reads every pull request. The 60-minute stall rule is not covered by the
+follow-ups.
 
 **When it alerts**
 
 | Situation | Alert |
 |---|---|
-| A required check fails (or the required list is unreadable and every check has finished) on an armed pull request | The next sweep: normally a minute or two after the failed run finishes |
-| A required check is cancelled | After the 15-minute grace window (a concurrency group replaces runs), so at the 16-minute follow-up |
+| A required check fails (or the required list is unreadable and every check has finished) on an armed pull request | The next sweep: normally a minute or two after the failed run finishes. If a sweep is already waiting on a follow-up, at its next pass, so up to about 11 minutes |
+| A required check is cancelled | Once it has stayed cancelled for the 3-minute grace window (a concurrency group replaces a run a moment after cancelling it): at the next pass, 5 or 16 minutes after the sweep began |
 | Publish pressed on a pull request whose checks already failed | A minute or two: the editorial workflow's completion signals |
-| Every check green but no merge | About 16 minutes after Publish (the follow-up) |
+| Every check green but no merge | At the first pass that comes 3 minutes after the last check finished: about 6 minutes after Publish when the checks take under 3 (a content pull request's take about 2), about 17 when they take up to 13. Checks slower than that are judged by a later sweep |
 | A check waiting or running for over an hour (including a visual review approval) | The next sweep after the hour: the next signal, or the 6-hourly schedule, so up to about 6 hours plus GitHub's cron lag |
 | GitHub has not caught up with the pull request (branch tip differs from `head.sha`, or the check-run list is partial) for over an hour | Same as the line above |
 | A site without the App credential | Every alert at the scheduled cadence (a `::notice::` names the two knobs) |
@@ -1900,7 +1904,8 @@ running; a `cancelled` run counts only after the grace period); or a check has
 been unfinished for 60 minutes (`--stall-minutes`), aged from the pull request's
 last update when it has no start time, and the issue says per check whether it is
 waiting for someone to approve it, has not started, or has been running too long;
-or every check finished 15 minutes (`--grace-minutes`) ago and it has not merged.
+or every check finished 3 minutes (`--grace-minutes`, the editor's own stall
+grace) ago and it has not merged.
 While the branch tip differs from the PR's `head.sha` (GitHub updates it a moment
 late) or the check-run list could not be read in full, it is in flight, and stuck
 only once the pull request has been untouched for the stall window. An unknown
@@ -1908,8 +1913,11 @@ never alerts, and neither does an unparseable timestamp.
 
 **Lifecycle.** One issue per PR and head commit. Its first line is a hidden
 marker `<!-- publish-watchdog:pr=<n> sha=<head sha> -->`; only issues authored by
-`github-actions[bot]` count, and the sweep reads issues in any state updated in
-the last 14 days, so an alert a human closed is respected until the pull request
+`github-actions[bot]` count. The sweep reads every open issue with the label,
+however old, and the closed ones updated in the last 14 days. When the SWEEP
+closes an issue it rewrites the marker (`publish-watchdog-resolved:`), so only
+an issue a person closed keeps suppressing a new alert for the same commit: an
+alert a human closed is respected until the pull request
 gets a new commit. An open issue stays open while the PR is open and armed, stuck
 or not, and closes with a comment at the next sweep after the pull request merges,
 closes or is no longer armed. That sweep is prompt when the production deploy

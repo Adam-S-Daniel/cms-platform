@@ -37,7 +37,13 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { hasE2eSlugSignature } = require("../e2e/public-content.js");
 
-const DEFAULT_GRACE_MINUTES = 15;
+// How long "every check finished" (or a cancelled run with no replacement)
+// must hold before it counts. Three minutes, the editor's own STALL_GRACE_MIN:
+// native auto-merge fires seconds after the last check, so three settled
+// minutes means the merge is not coming. It was 15 at first, and then the
+// follow-up passes (5 and 16 minutes after the first) usually ran BEFORE the
+// grace had elapsed and the publish waited for an unrelated later sweep.
+const DEFAULT_GRACE_MINUTES = 3;
 const DEFAULT_STALL_MINUTES = 60;
 const DEFAULT_FOLLOW_UPS = [5, 16];
 const GH_TIMEOUT_MS = 30000;
@@ -219,6 +225,14 @@ function issueMarker(prNumber, sha) {
 
 const ISSUE_AUTHOR = "github-actions[bot]";
 const MARKER_RE = /<!-- publish-watchdog:pr=(\d+)(?: sha=([0-9a-f]{40}))? -->/;
+// When the SWEEP closes an issue it rewrites the marker to this form, which
+// MARKER_RE does not match. So only an issue a person closed (marker intact)
+// keeps suppressing a new alert for the same commit; one the watchdog closed
+// itself (the pull request was put on hold, say, then released still stuck)
+// does not.
+function resolveMarker(body) {
+  return String(body || "").replace(/<!-- publish-watchdog:pr=/g, "<!-- publish-watchdog-resolved:pr=");
+}
 
 function stallPhrase(w, stall) {
   if (w.status === "waiting") return "waiting for someone to approve it";
@@ -416,7 +430,16 @@ function listFlag(argv, name, fallback) {
     e.usage = true;
     throw e;
   }
-  return parts.map(Number);
+  const values = parts.map(Number);
+  // Bounded, so a caller's value cannot outlast the job's timeout (which
+  // would end the run `cancelled`): at most four follow-ups, none later than
+  // 25 minutes after the first pass.
+  if (name === "--follow-up-minutes" && (values.length > 4 || values.some((v) => v > 25))) {
+    const e = new Error(`${name} takes at most four values, none above 25.`);
+    e.usage = true;
+    throw e;
+  }
+  return values;
 }
 
 function listPages(what, endpointBase, maxPages = 20) {
@@ -489,7 +512,7 @@ function createIssue(repo, pr, verdict, issueLabel, workLabel, assignees) {
   console.log(`  opened issue #${created && created.number} for pull request #${pr.number}`);
 }
 
-function closeWatchdogIssue(repo, issueNumber, prNumber) {
+function closeWatchdogIssue(repo, issueNumber, prNumber, body) {
   ghApi(`commenting on issue #${issueNumber}`, `repos/${repo}/issues/${issueNumber}/comments`, {
     method: "POST",
     body: {
@@ -500,7 +523,10 @@ function closeWatchdogIssue(repo, issueNumber, prNumber) {
   });
   ghApi(`closing issue #${issueNumber}`, `repos/${repo}/issues/${issueNumber}`, {
     method: "PATCH",
-    body: { state: "closed", state_reason: "completed" },
+    body:
+      typeof body === "string" && body !== ""
+        ? { state: "closed", state_reason: "completed", body: resolveMarker(body) }
+        : { state: "closed", state_reason: "completed" },
   });
 }
 
@@ -571,11 +597,22 @@ function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinute
     }
   }
 
+  // Every OPEN issue, however old (an alert on a pull request stuck for weeks
+  // must still be found, or the sweep opens a duplicate and never closes the
+  // original), and the CLOSED ones of the last SINCE_DAYS days (a person's
+  // close suppresses a new alert for the same commit).
   const since = new Date(nowMs - SINCE_DAYS * 86400000).toISOString();
-  const issues = listPages(
-    "listing issues",
-    `repos/${repo}/issues?state=all&labels=${encodeURIComponent(issueLabel)}&since=${encodeURIComponent(since)}`,
-  ).filter((i) => !i.pull_request);
+  const label = encodeURIComponent(issueLabel);
+  const issues = [
+    ...listPages("listing open issues", `repos/${repo}/issues?state=open&labels=${label}`),
+    ...listPages(
+      "listing closed issues",
+      `repos/${repo}/issues?state=closed&labels=${label}&since=${encodeURIComponent(since)}`,
+    ),
+  ]
+    .filter((i) => !i.pull_request)
+    // One entry per issue, whatever the two listings returned.
+    .filter((i, at, all) => all.findIndex((j) => j.number === i.number) === at);
 
   const plan = planSweep({ prs: entries, issues, nowMs, graceMinutes, stallMinutes, skipped });
   console.log(
@@ -593,7 +630,8 @@ function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinute
     return { pending: plan.pending };
   }
   for (const { pr, verdict } of plan.open) createIssue(repo, pr, verdict, issueLabel, workLabel, assignees);
-  for (const c of plan.close) closeWatchdogIssue(repo, c.issueNumber, c.prNumber);
+  const bodyOf = new Map(issues.map((i) => [i.number, i.body]));
+  for (const c of plan.close) closeWatchdogIssue(repo, c.issueNumber, c.prNumber, bodyOf.get(c.issueNumber));
   if (armed.length > 0 && skipped.length === armed.length) {
     throw new Error("every armed pull request failed to read");
   }
@@ -623,7 +661,10 @@ async function main(argv) {
   let assignees = [];
   const assigneesRaw = flag(argv, "--assignees");
   if (assigneesRaw) {
-    if (ASSIGNEES_RE.test(assigneesRaw)) assignees = assigneesRaw.split(",");
+    // "alice, bob" is how a person types a list: spaces around a login are
+    // dropped before the value is checked.
+    const cleaned = assigneesRaw.split(",").map((a) => a.trim()).join(",");
+    if (ASSIGNEES_RE.test(cleaned)) assignees = cleaned.split(",");
     else console.log("::warning::--assignees is not a comma-separated list of logins; creating issues without assignees.");
   }
   const nowRaw = flag(argv, "--now");

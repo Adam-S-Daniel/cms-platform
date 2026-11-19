@@ -459,7 +459,7 @@ waited over an hour, or every check finished and it has not merged) opens one
 through the CMS automation App, and the sweep `publish-watchdog.yml` +
 `scripts/publish-watchdog.js` opens the issue, looks again at 5 and 16 minutes
 while a publish is in flight, and runs every 6 hours. Timing differs per
-condition (a failed check: a minute or two; green but unmerged: about 16 minutes;
+condition (a failed check: a minute or two; green but unmerged: about 6 to 17 minutes;
 a check stalled over an hour: up to the 6-hourly sweep; no App credential: the
 schedule only), in the table in `docs/CI-INVARIANTS.md` § "Publish watchdog".
 Two hops because no write token may run under `workflow_run` and the App has no
