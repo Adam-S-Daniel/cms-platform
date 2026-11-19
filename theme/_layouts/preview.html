@@ -166,8 +166,39 @@ layout: default
   image once from the entry's cms/ branch. This page is same-origin with the
   admin, so it reads the same /admin/config.yml and the token Decap stored. The
   bridge's `slug` names the branch: see setEntry() below.
+
+  It loads only where this host serves /admin/ itself (#1078). With the editor
+  on its own origin (`cms.admin_origin`), the production hosts (the apex and
+  www) send /admin/* to that origin, Live Preview is hidden there
+  (site-hostname.js), and nothing on the apex can read the editor's token, so
+  the fallback has no work. Loading it anyway costs a script and a config.yml
+  read from the admin host, which the public Content-Security-Policy blocks.
+  Preview hosts (preview-pr<N>.<apex>) still serve their own /admin/ and keep
+  it. The values ride in data attributes so the script body has no Liquid.
 -->
-<script src="{{ "/admin/draft-media-fallback.js" | relative_url }}"></script>
+<script id="draft-media-fallback-loader"
+        data-src="{{ '/admin/draft-media-fallback.js' | relative_url | escape }}"
+        data-site-url="{{ site.url | escape }}"
+        data-admin-origin="{{ site.cms.admin_origin | escape }}">
+  (function () {
+    var me = document.currentScript;
+    var adminOrigin = (me.getAttribute("data-admin-origin") || "").trim();
+    if (adminOrigin && adminOrigin.replace(/\/+$/, "").toLowerCase() !== window.location.origin) {
+      var apex = "";
+      try {
+        apex = new URL(me.getAttribute("data-site-url") || "").hostname.toLowerCase();
+      } catch (_) {
+        apex = "";
+      }
+      var host = window.location.hostname.toLowerCase();
+      if (apex && (host === apex || host === "www." + apex)) return;
+    }
+    var s = document.createElement("script");
+    s.src = me.getAttribute("data-src");
+    s.async = false;
+    me.parentNode.insertBefore(s, me.nextSibling);
+  })();
+</script>
 <!-- marked comes from the theme's own copy, never a CDN: a public page loads
      nothing from another host (scripts/outside-resources.rb, and the public
      Content-Security-Policy in infrastructure/bootstrap/template.yaml). -->

@@ -324,10 +324,80 @@ test.describe("draft-media-fallback.js load order", () => {
   }
 
   test("theme/_layouts/preview.html loads it before its own render script", () => {
-    const html = fs.readFileSync(path.resolve(__dirname, "../theme/_layouts/preview.html"), "utf8");
-    const tag = scriptTag(html, '{{ "/admin/draft-media-fallback.js" | relative_url }}');
-    expect(tag, "preview.html must load /admin/draft-media-fallback.js").not.toBeNull();
-    expect(tag.defer).toBe(false);
-    expect(tag.index).toBeLessThan(html.indexOf("function update(data)"));
+    const html = fs.readFileSync(PREVIEW_LAYOUT, "utf8");
+    const loader = previewLoader();
+    expect(loader, "preview.html must carry the draft-media-fallback loader").not.toBeNull();
+    expect(loader.attrs["data-src"]).toBe("{{ '/admin/draft-media-fallback.js' | relative_url | escape }}");
+    expect(loader.offset).toBeLessThan(html.indexOf("function update(data)"));
   });
+});
+
+// ── Whether /preview/ loads it (#1078) ─────────────────────────────────
+// With the editor on its own origin the production hosts redirect /admin/*
+// there, which the public CSP blocks, and Live Preview is hidden anyway.
+
+const PREVIEW_LAYOUT = path.resolve(__dirname, "../theme/_layouts/preview.html");
+
+function previewLoader() {
+  const parse5 = require("parse5");
+  const html = fs.readFileSync(PREVIEW_LAYOUT, "utf8");
+  const doc = parse5.parse(html, { sourceCodeLocationInfo: true });
+  let found = null;
+  (function walk(node) {
+    if (found) return;
+    if (node.tagName === "script") {
+      const attrs = Object.fromEntries((node.attrs || []).map((a) => [a.name, a.value]));
+      if (attrs.id === "draft-media-fallback-loader") {
+        const body = (node.childNodes || []).map((c) => c.value || "").join("");
+        found = { attrs, body, offset: node.sourceCodeLocation.startOffset };
+        return;
+      }
+    }
+    for (const child of node.childNodes || []) walk(child);
+    if (node.content) walk(node.content);
+  })(doc);
+  return found;
+}
+
+function runLoader({ href, siteUrl, adminOrigin }) {
+  const loader = previewLoader();
+  const inserted = [];
+  const me = {
+    getAttribute: (name) =>
+      ({ "data-src": "/admin/draft-media-fallback.js", "data-site-url": siteUrl, "data-admin-origin": adminOrigin })[name],
+    nextSibling: null,
+    parentNode: { insertBefore: (node) => inserted.push(node) },
+  };
+  const loc = new URL(href);
+  const sandbox = {
+    URL,
+    window: { location: { hostname: loc.hostname, origin: loc.origin } },
+    document: { currentScript: me, createElement: (tag) => ({ tagName: tag }) },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(loader.body, sandbox);
+  return inserted;
+}
+
+test.describe("preview.html loads the fallback only where /admin/ is served", () => {
+  const site = "https://site.example.com";
+  const admin = "https://admin.site.example.com";
+  const cases = [
+    ["no admin origin, production apex", `${site}/preview/`, "", true],
+    ["admin origin set, production apex", `${site}/preview/`, admin, false],
+    ["admin origin set, www host", "https://www.site.example.com/preview/", admin, false],
+    ["admin origin set, preview host", "https://preview-pr7.site.example.com/preview/", admin, true],
+    ["admin origin set, local build", "http://localhost:4000/preview/", admin, true],
+    ["admin origin is the apex itself", `${site}/preview/`, `${site}/`, true],
+  ];
+  for (const [name, href, adminOrigin, loads] of cases) {
+    test(name, () => {
+      const inserted = runLoader({ href, siteUrl: site, adminOrigin });
+      expect(inserted.length).toBe(loads ? 1 : 0);
+      if (loads) {
+        expect(inserted[0].src).toBe("/admin/draft-media-fallback.js");
+        expect(inserted[0].async).toBe(false);
+      }
+    });
+  }
 });

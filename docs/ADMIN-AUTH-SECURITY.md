@@ -983,7 +983,11 @@ What it still allows, and why:
   scripts moved into files first.
 - **`connect-src https://api.github.com` and `img-src blob:`**, for the live
   preview page (`/preview/`), which shows an image the editor has uploaded but
-  not published by reading it from the entry's branch.
+  not published by reading it from the entry's branch. On a site whose editor
+  has its own host, the production hosts' `/preview/` does not load that
+  helper at all (#1078): its `/admin/` files redirect to the admin host, which
+  this policy does not allow, and Live Preview is hidden there anyway. Preview
+  hosts, which serve their own `/admin/`, still load it.
 
 **Tool apps get their own policy because they are applications, not content.**
 adamdaniel.ai's evals explorer fetches its results from
