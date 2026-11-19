@@ -7,10 +7,15 @@ name: Publish watchdog signal
 # read-only token and passes nothing from the triggering run: the one credential
 # is the CMS automation App (variable CMS_AUTOMATION_APP_ID + secret
 # CMS_AUTOMATION_APP_PRIVATE_KEY). Without both it is a green no-op and the
-# 6-hourly sweep still runs. The platform owns the logic; this thin caller needs
-# no site-specific values.
+# 6-hourly sweep still runs. The platform owns the logic, INCLUDING the decision
+# of which completions matter: this caller has no `if`, the reusable's job has
+# it. A release re-pins an existing caller but never rewrites its body, so a
+# condition written here could not be corrected by a release. v0.1.182 shipped
+# one here that was wrong (it compared `workflow_run.name`, which is the run's
+# display title); this file's new name is how that release's copy is retired
+# and this one seeded. The caller needs no site-specific values.
 run-name: >-
-  ${{ format('signal — {0} {1}', github.event.workflow_run.name, github.event.workflow_run.conclusion) }}
+  ${{ format('signal — {0} {1}', github.event.workflow.name, github.event.workflow_run.conclusion) }}
 
 on:
   workflow_run:
@@ -31,20 +36,10 @@ permissions:
   contents: read
 
 jobs:
+  # No `if`: the reusable's own job decides, from the same event (a called
+  # workflow sees the caller's `github.event`). When it decides no, that job is
+  # skipped before a runner is allocated.
   signal:
-    # Fires for: a failed, timed-out, startup-failed or cancelled gating run on a
-    # same-repository `cms/` pull request; ANY run of the editorial workflow on one
-    # (it runs on every label, so its completion is the moment Publish is
-    # pressed, including on a pull request whose checks already failed); and a
-    # successful production deploy (so the sweep closes resolved issues).
-    if: >-
-      github.event.workflow_run.head_repository.full_name == github.repository
-      && ((github.event.workflow_run.event == 'pull_request'
-           && startsWith(github.event.workflow_run.head_branch, 'cms/')
-           && (contains(fromJSON('["failure","timed_out","startup_failure","cancelled"]'), github.event.workflow_run.conclusion)
-               || github.event.workflow_run.name == 'CMS Editorial Workflow'))
-          || (github.event.workflow_run.name == 'Deploy to Production'
-              && github.event.workflow_run.conclusion == 'success'))
     uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog-signal.yml@v0.1.182
     secrets:
       # The CMS automation App's private key, with vars.CMS_AUTOMATION_APP_ID
