@@ -89,6 +89,11 @@ FETCHING_RELS = %w[
   apple-touch-icon-precomposed mask-icon manifest
 ].freeze
 
+# Nokogiri refuses a page nested more than 400 elements deep or an element
+# with more than 400 attributes. Either is a page, not an error, and a refusal
+# here fails the publish.
+PARSE_LIMITS = { max_tree_depth: -1, max_attributes: -1 }.freeze
+
 # Folders of the built site that carry their own policy (see the header).
 SKIPPED = %w[admin/ assets/tools/].freeze
 
@@ -149,14 +154,17 @@ def srcset_addresses(value)
   value.to_s.split(",").map { |candidate| candidate.strip.split(/\s+/).first }.compact
 end
 
-# `5; url=/x`, `5;URL='/x'` and the bare `5; /x` all name a target.
+# `5; url=/x`, `5;URL='/x'`, the bare `5; /x` and `5 url=/x` (the separator
+# may be whitespace alone) all name a target; a bare `30` names none.
 def refresh_target(content)
-  content.to_s[/\A\s*[\d.]*\s*[;,]\s*(?:url\s*=\s*)?['"]?([^'"]+)/i, 1]&.strip
+  content.to_s[/\A\s*[\d.]+\s*(?:[;,]\s*|\s+)(?:url\s*=\s*)?['"]?([^'"]+)/i, 1]&.strip
 end
 
-# attribute local name => value, so `xlink:href` is found as `href`.
+# attribute local name => value, so `xlink:href` is found as `href`. When an
+# element carries both, the plain attribute wins, as it does in a browser.
 def attributes_of(node)
-  node.attribute_nodes.each_with_object({}) { |a, h| h[a.name.downcase] ||= a.value }
+  plain, namespaced = node.attribute_nodes.partition { |a| a.namespace.nil? }
+  (plain + namespaced).each_with_object({}) { |a, h| h[a.name.downcase] ||= a.value }
 end
 
 def findings_in(doc, host)
@@ -200,7 +208,7 @@ def findings_in(doc, host)
     when "iframe"
       # A srcdoc is a whole document the frame renders: read it the same way.
       if attrs.key?("srcdoc")
-        inner = Nokogiri::HTML5.parse(attrs["srcdoc"].to_s, max_tree_depth: -1)
+        inner = Nokogiri::HTML5.parse(attrs["srcdoc"].to_s, **PARSE_LIMITS)
         findings_in(inner, host).each { |what, address, why| found << ["<iframe srcdoc> #{what}", address, why] }
       end
     end
@@ -235,12 +243,17 @@ if $PROGRAM_NAME == __FILE__
     end
 
     host = site_host(config)
-    files = Dir.glob("**/*.html", base: destination).reject { |f| SKIPPED.any? { |dir| f.start_with?(dir) } }.sort
+    # Files only: a page saved with permalink `/resume.html/` is built as the
+    # DIRECTORY `resume.html/`, which the glob also returns.
+    files = Dir.glob("**/*.html", base: destination)
+               .reject { |f| SKIPPED.any? { |dir| f.start_with?(dir) } }
+               .select { |f| File.file?(File.join(destination, f)) }
+               .sort
     total = 0
     files.each do |relative|
       html = File.read(File.join(destination, relative), encoding: "UTF-8").scrub
-      # No depth limit: a deeply nested page is a page, not an error.
-      findings_in(Nokogiri::HTML5.parse(html, max_tree_depth: -1), host).each do |what, address, why|
+      # No limits: a deeply nested page is a page, not an error.
+      findings_in(Nokogiri::HTML5.parse(html, **PARSE_LIMITS), host).each do |what, address, why|
         total += 1
         puts "FAIL #{JSON.generate(page_address(relative))} loads #{what} from #{JSON.generate(address.to_s)}: #{why}"
       end

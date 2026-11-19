@@ -117,6 +117,13 @@ class OutsideResourcesJudgeTest < Minitest::Test
     end
   end
 
+  # A browser reads the plain `href` when an SVG element has both.
+  def test_the_plain_href_wins_over_xlink_href
+    found = findings('<svg><image xlink:href="/x.png" href="https://example.net/x.png"/></svg>')
+    assert_equal [['<image href>', 'https://example.net/x.png']], found
+    assert_empty findings('<svg><image xlink:href="https://example.net/x.png" href="/x.png"/></svg>')
+  end
+
   def test_an_icon_may_be_a_data_address_and_a_stylesheet_may_not
     assert_empty findings('<link rel="icon" href="data:,">')
     assert_empty findings('<video poster="data:image/png;base64,AAAA"></video>')
@@ -152,6 +159,10 @@ class OutsideResourcesJudgeTest < Minitest::Test
                  findings('<meta http-equiv="Refresh" content="0; URL=https://example.net/">')
     assert_empty findings('<meta http-equiv="refresh" content="0; url=/blog/new/">')
     assert_empty findings('<meta http-equiv="refresh" content="30">')
+    assert_empty findings('<meta http-equiv="refresh" content="0;url=/x">')
+    # The separator may be whitespace alone.
+    assert_equal [['<meta http-equiv=refresh>', 'https://example.net/x']],
+                 findings('<meta http-equiv="refresh" content="0 url=https://example.net/x">')
   end
 
   def test_markup_is_judged_as_a_browser_parses_it
@@ -244,6 +255,30 @@ class OutsideResourcesCliTest < Minitest::Test
     out, code = run_check
     assert_equal 0, code, out
     assert_includes out, 'ok   no page loads anything from another site'
+  end
+
+  # The CMS page permalink field requires a trailing slash, so a legacy
+  # `/resume.html` address is typed `/resume.html/` and built as a DIRECTORY
+  # named `resume.html`. Reading it as a file failed every publish.
+  def test_a_page_whose_address_ends_in_dot_html_slash_is_read
+    page('legacy/resume.html/index.html', '<p>fine</p>')
+    page('index.html', '<p>fine</p>')
+    out, code = run_check
+    assert_equal 0, code, out
+    assert_includes out, '(2 pages read'
+    page('legacy/resume.html/index.html', '<script src="https://example.net/a.js"></script>')
+    out, code = run_check
+    assert_equal 1, code, out
+    assert_includes out, 'FAIL "/legacy/resume.html/" loads <script src>'
+  end
+
+  def test_an_element_with_hundreds_of_attributes_is_read_not_refused
+    attributes = (1..450).map { |i| "data-a#{i}=\"x\"" }.join(' ')
+    page('index.html', "<div #{attributes}><img src=\"https://example.net/a.png\" alt=\"\"></div>")
+    out, code = run_check
+    assert_equal 1, code, out
+    assert_includes out, 'FAIL "/" loads <img src>'
+    refute_includes out, 'could not read this site'
   end
 
   def test_a_deeply_nested_page_is_read_not_refused
