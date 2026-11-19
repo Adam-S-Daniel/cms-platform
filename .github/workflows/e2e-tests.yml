@@ -215,9 +215,10 @@ jobs:
 
       # ── CONTENT ROUTE ─────────────────────────────────────────────────
       # A pull request that changes CMS content only (a post, a page, an
-      # upload, a CMS data file) skips this job's work: nothing below can be
-      # broken by content, and a spec that is brittle about content would
-      # otherwise block the publish (adamdaniel.ai PR 5001, where a post with
+      # upload, a CMS data file) skips this job's work: what runs below tests
+      # the theme, the admin and the workflows, which content does not
+      # touch, and a spec that is brittle about content would otherwise
+      # block the publish (adamdaniel.ai PR 5001, where a post with
       # featured-image alt text failed eight projects and never went live).
       # The job still SUCCEEDS, so the matrix and the required `e2e` gate
       # report exactly as before: no ruleset and no caller changes. Every

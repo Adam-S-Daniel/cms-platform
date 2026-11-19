@@ -20,7 +20,8 @@
 # CONVENTION, NOT CONFIGURATION. There are NO inputs. If the caller's tree has
 # `scripts/verify-build-artifacts.rb`, this builds the site and runs it;
 # otherwise it prints a notice and succeeds. It always runs the platform's
-# `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
+# `scripts/destination-conflicts.rb` (no two source files may be written to
+# one address) and `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
 # self-test list (`scripts/test-verify-build-artifacts.rb`) when present, using
 # the site's bundle before building, except on a pull request that changes CMS
 # content only (the `content` route, e2e/content-route.js): content cannot
@@ -130,6 +131,7 @@ jobs:
           sparse-checkout: |
             package.json
             scripts/liquid-escape-lint.rb
+            scripts/destination-conflicts.rb
             scripts/content-pr-guard.js
             e2e/package.json
             e2e/content-route.js
@@ -211,6 +213,20 @@ jobs:
         env:
           SITE_VERIFY_SELF_TESTS_HANDLED: "true"
         run: ruby scripts/verify-build-artifacts.rb
+
+      - name: Check that no two files share an address
+        # Two source files that claim one URL build without error: Jekyll
+        # warns, writes one and carries on, so the other is silently not
+        # published. A page saved from the CMS with permalink `/tags/`
+        # replaced the tags index, and a second post with an older post's
+        # slug took its URL, with every check green (cms-platform issue 1061).
+        # Runs on every site and on BOTH routes: it is a check about the
+        # content, and the content route no longer runs the browser test that
+        # caught the first of those. The script asks Jekyll for each file's
+        # destination through the site's own bundle; nothing is written.
+        env:
+          JEKYLL_ENV: production
+        run: bundle exec ruby .cms-platform/scripts/destination-conflicts.rb .
 
       - name: Lint Liquid output escaping
         # Every `{{ ... }}` in the site's HTML/XML templates must end in a
