@@ -1775,6 +1775,15 @@ cap their children and replaced media at the column width
 (`e2e/theme-body-containment-css.test.js`). What neither stops, by design: a
 post's own `<style>`, script or fixed-position element on its own page.
 
+**A site with its own templates or stylesheet gets neither for free.** The
+filter ships in the gem, so it is available everywhere, but only a template
+that calls it is protected: the escaping lint refuses a raw `{{ post.excerpt }}`
+on any site unless that site allowlists it, which is the moment to use the
+filter instead. The containment CSS lives in the theme's `main.css`; a site
+that serves its own stylesheet (jodidaniel.com) must carry the same three
+rules for any post or page body it renders. jodidaniel.com has no posts
+today (`cms.base_collections: []`); if posts are added there, both apply.
+
 ## JavaScript HTML sinks take escaped values only: `eslint.html-sinks.config.mjs` (#982)
 
 The same rule for JavaScript that writes HTML. `eslint-plugin-no-unsanitized`
