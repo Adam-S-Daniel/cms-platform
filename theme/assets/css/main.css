@@ -639,7 +639,7 @@ main {
    whatever HTML a post or page carries, and the theme's caps above cover only
    img, iframe, table and pre: a fixed-width <div> pasted from another site,
    an inline <svg>, a PDF <embed> or a <canvas> pushed the WHOLE page sideways
-   on a phone (up to 1,600px), and an image floated near the end of a post
+   on a phone (up to 1,634px at 390px wide), and an image floated near the end of a post
    squeezed the share row beside it into a 42px column.
    - A clearing `::after` makes the body contain its own floats, so what
      follows it (the share row, the footer) starts below them. It is the
@@ -660,12 +660,15 @@ main {
   clear: both;
 }
 
+/* `:where()` keeps the two deeper rules from outranking an author's own cap:
+   written plainly, `.post-content .post-embed > *` beat a one-class rule
+   inside an embed (`.card { max-width: 400px }`) and
+   `.post-content :is(svg, …)` beat `.icon { max-width: 1em }`, whatever the
+   order, and widened what the author had deliberately made narrow. */
 .post-content > *,
 .page-content > *,
-.post-content .post-embed > *,
-.page-content .post-embed > *,
-.post-content :is(video, svg, embed, object, canvas),
-.page-content :is(video, svg, embed, object, canvas) {
+:where(.post-content, .page-content) .post-embed > *,
+:where(.post-content, .page-content) :where(video, svg, embed, object, canvas) {
   max-width: 100%;
 }
 
