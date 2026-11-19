@@ -10,9 +10,16 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.180)
+## Version history (v0.1.0 → v0.1.181)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.181 — A site with its own admin host no longer fails the Cross-post run after a good deploy.**
+The first-parent range since v0.1.180 holds one entry on main before this release PR: the merge commit of [#1054](https://github.com/Adam-S-Daniel/cms-platform/pull/1054).
+
+Deploy wait follows redirects ([#1054](https://github.com/Adam-S-Daniel/cms-platform/pull/1054)). The `await-prod-deploy` composite reads prod's `<apex>/admin/commit.json` to confirm CloudFront serves the merge. Once a site moves its editor to `cms.admin_origin`, `<apex>/admin/*` answers 302 to that host and a curl without `-L` read an empty body for the whole 600s window, so the Cross-post run failed after a successful deploy and its Mastodon and LinkedIn legs never ran (adamdaniel.ai [run 44557601632](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/44557601632), 2026-11-19: the post was live, the run red). The probe now follows redirects, locked by `e2e/await-prod-deploy-follows-redirects.test.js`.
+
+Consumer effect. Workflow behavior only: no served page differs. Any site whose editor lives on its own admin host stops failing the deploy wait on push runs of Cross-post and the preview and production deploy callers that use the composite.
 
 **v0.1.180 — A post whose featured image has alt text publishes again.**
 The first-parent range since v0.1.179 holds one entry on main before this release PR: the squash commit of [#1052](https://github.com/Adam-S-Daniel/cms-platform/pull/1052).
