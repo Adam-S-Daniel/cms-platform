@@ -379,6 +379,27 @@ but ENOENT'ing in every consumer run). **Guarded** by
 spec goes into `PLATFORM_META_SPECS` in `playwright.config.js` (the lint parses
 that list out of the config so the two stay in lockstep).
 
+### A spec that reads a consumer's served content asserts only what no author can break
+
+In consumer mode the pages a spec loads are the site's REAL posts, and the spec
+is part of the required `e2e / e2e` check on every publish. An assertion about
+a value an editor field controls therefore turns a legitimate edit into a
+blocked publish, with no error in `/admin`. `public-a11y-polish.spec.js`
+required `alt=""` on every served featured image; the Posts editor has offered
+`featured_image_alt` since #920, and the first real post that filled it in
+failed eight projects and never went live (adamdaniel.ai PR 5001).
+
+- **Assert the theme's contract** (the attribute exists, the markup is there),
+  never the author's value. What the value must be for a given front matter is
+  a build-level test over synthetic posts (`theme/spec/`).
+- **A new editor field lands with a fixture post that uses it.**
+  `e2e/fixture-site/_posts/2026-01-15-hello-world.md` sets `featured_image` and
+  `featured_image_alt` for this reason: a spec that mishandles the field then
+  fails `fixture-e2e` here, before a release, instead of on a consumer.
+- A rule about content itself (every inline image needs alt text,
+  `image-alt-text.spec.js`) is a deliberate gate, and should name the page and
+  the fix in its failure message.
+
 ### PLATFORM_META_SPECS registration is MANDATORY for platform-internal specs (#16)
 
 A **platform-internal** spec validates the platform's OWN machinery, not a
