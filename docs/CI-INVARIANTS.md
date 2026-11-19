@@ -1759,9 +1759,12 @@ is the one way to print it:
   configuration: paragraphs, block quotes, lists, emphasis, inline code, and
   links and images with an http, https, mailto or relative address. Sanitize
   parses with Nokogiri's HTML5 parser, the algorithm a browser uses, so what
-  it judges is what the browser builds. `sanitize` is a runtime dependency of
-  the theme gem (floor 7.0.2), which brings Nokogiri and crass into every
-  consumer's `Gemfile.lock`; `platform-bump`'s conservative relock adds them.
+  it judges is what the browser builds. The theme gemspec declares
+  `sanitize` AND `nokogiri`, each pinned to one exact version, so every
+  consumer gets both from the platform and locks the identical version;
+  `platform-bump`'s conservative relock adds them. A site must not declare
+  either in its own Gemfile, and a version moves only by changing the gemspec
+  (`theme/spec/gemspec_pins_test.rb`).
 
 The filter takes the POST, not `post.excerpt`: both kinds are strings by the
 time Liquid sees them. The wrapper stays `<p class="post-excerpt">` on purpose;
