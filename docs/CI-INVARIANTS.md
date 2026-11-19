@@ -1924,7 +1924,7 @@ issue notification is the alert; `agent-ready` queues it for the fleet worker),
 on the timing in the table below.
 
 **Signal, then sweep.** `publish-watchdog-signal.yml` (thin caller
-`examples/site/.github/workflows/publish-watchdog-signal.yml`) runs on
+`examples/site/.github/workflows/publish-watchdog-knock.yml`) runs on
 `workflow_run` when, on a same-repository `cms/` pull request, a gating workflow
 fails, times out, fails to start or is cancelled, or the editorial workflow
 completes (it runs on every label, so that is the moment Publish is pressed); and
@@ -1941,6 +1941,31 @@ sweep waiting on a follow-up holds the one `publish-watchdog` concurrency
 group, so a later knock runs after it; nothing is lost, because every pass
 re-reads every pull request. The 60-minute stall rule is not covered by the
 follow-ups.
+
+**Which workflow finished is read from its file, never from the run's name.**
+In a `workflow_run` event `github.event.workflow_run.name` is the triggering
+run's display title: for a workflow that sets `run-name` it is that text ("PR
+#12 — <title>", "push — main @<actor>"), not the workflow's name, and for a
+pull request it is text the author chose. v0.1.182 compared it with `'CMS
+Editorial Workflow'` and `'Deploy to Production'`, both of which set a
+`run-name`, so the "Publish pressed" and "deploy succeeded" signals never
+fired (adamdaniel.ai run 44589925006, skipped on the deploy right after the
+bump; only the failure branch, which names no workflow, worked). The condition
+now compares `github.event.workflow.path` with the workflow FILE. The tests
+evaluate the `if` against events shaped like the real ones, display titles
+included, and one row gives a pull request the title "CMS Editorial Workflow".
+
+**The condition lives in the reusable, and the caller has no `if`.** That same
+bug showed why: a bump re-pins an existing thin caller but never rewrites its
+body, and `structuralShape()` does not compare `if:`, so a wrong condition in
+a caller cannot be corrected by a release and no check notices it is stale.
+The decision is therefore the reusable's job-level `if` (a called workflow
+sees the caller's `github.event`; a job whose `if` is false is skipped before
+a runner is allocated). To get the v0.1.182 caller, with its wrong `if`, off
+both sites, the caller was RENAMED (`publish-watchdog-signal.yml` to
+`publish-watchdog-knock.yml`): the bump retires a caller that left the
+canonical set and seeds the new one. **Rule for any thin caller: logic that
+may ever need fixing belongs in the reusable.**
 
 **When it alerts**
 

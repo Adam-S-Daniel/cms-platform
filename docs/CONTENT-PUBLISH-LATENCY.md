@@ -117,9 +117,30 @@ open-to-merge min 452 s, median 608 s, 90th percentile 746 s, up from the
 195 s median recorded below. The critical path was `site-verify` at 8 to 10
 minutes (the verifier's self-tests rebuilt scratch copies of the site twice
 per run, once in the self-test step and once through the verifier's default
-entrypoint) and `e2e / e2e` at about 5.5 minutes. The after numbers belong in
-this section once ten real content pull requests have run on the route; use
-the command under "Re-measuring".
+entrypoint) and `e2e / e2e` at about 5.5 minutes.
+
+**Measured after (2026-11-19, the afternoon v0.1.181 reached both sites).**
+Eleven real content pull requests, every one routed `content`:
+
+| Site | Pull request | What | Open or push to merge | To deployed |
+|---|---|---|---|---|
+| adamdaniel.ai | [5011](https://github.com/Adam-S-Daniel/adamdaniel.ai/pull/5011) | the post that was blocked on 2026-11-18, its featured image alt text restored | 113 s from the push | 149 s; the live page was checked 2 s later |
+| adamdaniel.ai | 5013 to 5020 | eight publishes driven through the real editor by `cms-publish-loop-host` ([run 44576686618](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/44576686618)) | 43, 45, 45, 48, 75, 83, 93 and 102 s (median 62 s) | not timed per pull request |
+| jodidaniel.com | [542](https://github.com/jodidaniel/jodidaniel.com/pull/542) | a folder collection entry (Expertise) | 81 s | 132 s |
+| jodidaniel.com | [543](https://github.com/jodidaniel/jodidaniel.com/pull/543) | a data-file section (`_data/about.yml`); `visual-regression / generate` was skipped and `approve-regression` passed by itself | 71 s | 144 s |
+
+On pull request 5011 the required checks finished in this order after the
+push: `site-verify / site-verify` at 41 s (its work job took 22 s), `e2e / e2e`
+at 35 s, `parity / parity` last at 110 s. The preview's parity probe is now the
+critical path. Against the morning's 608 s median to merge, a publish is
+roughly eight times faster, and against the 195 s median of 2026-10-01 about
+three times.
+
+The two jodidaniel.com pull requests were opened by hand (a blank line at the
+end of each file, with the owner's approval) because that site's publish loops
+run no test: its specs self-skip without the base collections
+([issue 1068](https://github.com/Adam-S-Daniel/cms-platform/issues/1068)). To
+measure again use the command under "Re-measuring".
 
 **Tests.** `e2e/content-route.test.js`: the rule as a table, the composite
 over a real merge commit with `npm` stubbed and the platform as a real

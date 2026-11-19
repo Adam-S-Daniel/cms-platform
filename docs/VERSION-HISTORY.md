@@ -10,9 +10,20 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.182)
+## Version history (v0.1.0 → v0.1.183)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.183 — The stuck-publish alert fires when Publish is pressed and when a deploy succeeds, not only when a check fails.**
+The first-parent range since v0.1.182 holds three entries on main before this release PR: the merge commit of [#1029](https://github.com/Adam-S-Daniel/cms-platform/pull/1029) (this repo's own `skills.lock` re-pin, nothing a consumer receives), and the squash commits of [#1073](https://github.com/Adam-S-Daniel/cms-platform/pull/1073) (docs) and [#1072](https://github.com/Adam-S-Daniel/cms-platform/pull/1072).
+
+Watchdog signal ([#1072](https://github.com/Adam-S-Daniel/cms-platform/pull/1072)). v0.1.182's signal decided which workflow had finished by comparing `github.event.workflow_run.name` with `'CMS Editorial Workflow'` and `'Deploy to Production'`. In a `workflow_run` event that field is the run's display title, and both workflows set a dynamic `run-name`, so neither comparison ever matched: the first production deploy after each site's bump ran the signal and its job was skipped (adamdaniel.ai [run 44589925006](https://github.com/Adam-S-Daniel/adamdaniel.ai/actions/runs/44589925006)). Only the failure branch, which names no workflow, worked; "Publish pressed after the checks already failed", "all green but never merged" and closing an issue after its change went live all fell back to the six-hourly sweep. Four rounds of review had not caught it, because the tests gave the fake event a name equal to the workflow's. The condition now reads the workflow FILE (`github.event.workflow.path`, or `github.event.workflow_run.path`; both were read off the live REST objects), and the tests evaluate it against events shaped like the real ones, display titles included.
+
+Where the condition lives. It moved from the thin caller into the reusable's job-level `if`. A bump re-pins an existing caller but never rewrites its body, and `structuralShape()` does not compare `if:`, so a condition in a caller cannot be corrected by a release and no check notices it is stale. The caller now has no `if` and was renamed, `publish-watchdog-signal.yml` to `publish-watchdog-knock.yml`, which is how v0.1.182's copy leaves both sites. `docs/CI-INVARIANTS.md` states the rule for any thin caller: logic that may ever need fixing belongs in the reusable.
+
+Docs ([#1073](https://github.com/Adam-S-Daniel/cms-platform/pull/1073)). `docs/CONTENT-PUBLISH-LATENCY.md` records the content route's measured timings on both sites (a publish merges in 43 to 113 seconds and is deployed in about two and a half minutes, against a 608 second median to merge that morning). `docs/OPERATIONS.md` gains "One release at a time, and nothing merges to a site while it validates", from v0.1.181's two failed dispatches.
+
+Consumer effect. On each site the bump deletes `.github/workflows/publish-watchdog-signal.yml` and adds `.github/workflows/publish-watchdog-knock.yml` in the same commit; both carry the workflow name "Publish watchdog signal", and neither is a required check. Nothing served changes. After the bump, the knock run for a production deploy and for the editorial workflow on a `cms/` pull request should show its `signal` job run, not skipped, followed by a "Publish watchdog" sweep.
 
 **v0.1.182 — Feeds and pages stop being cacheable for a day, two files can no longer share an address, and a stuck publish raises an issue.**
 The first-parent range since v0.1.181 holds four entries on main before this release PR: the squash commits of [#1060](https://github.com/Adam-S-Daniel/cms-platform/pull/1060), [#1062](https://github.com/Adam-S-Daniel/cms-platform/pull/1062), [#1057](https://github.com/Adam-S-Daniel/cms-platform/pull/1057) and [#1066](https://github.com/Adam-S-Daniel/cms-platform/pull/1066).

@@ -1,0 +1,47 @@
+name: Publish watchdog signal
+# Knocks the `Publish watchdog` sweep (a `repository_dispatch`) when a gating
+# workflow fails or is cancelled on a same-repository `cms/` pull request, when
+# the editorial workflow completes on one (Publish was pressed), and after a
+# production deploy succeeds (so the sweep closes issues for changes that went
+# live). Runs under `workflow_run`, a privileged trigger, so it holds a
+# read-only token and passes nothing from the triggering run: the one credential
+# is the CMS automation App (variable CMS_AUTOMATION_APP_ID + secret
+# CMS_AUTOMATION_APP_PRIVATE_KEY). Without both it is a green no-op and the
+# 6-hourly sweep still runs. The platform owns the logic, INCLUDING the decision
+# of which completions matter: this caller has no `if`, the reusable's job has
+# it. A release re-pins an existing caller but never rewrites its body, so a
+# condition written here could not be corrected by a release. v0.1.182 shipped
+# one here that was wrong (it compared `workflow_run.name`, which is the run's
+# display title); this file's new name is how that release's copy is retired
+# and this one seeded. The caller needs no site-specific values.
+run-name: >-
+  ${{ format('signal — {0} {1}', github.event.workflow.name, github.event.workflow_run.conclusion) }}
+
+on:
+  workflow_run:
+    workflows:
+      - CMS Editorial Workflow
+      - E2E Tests
+      - Site verify
+      - Parity (preview)
+      - Preview Media Gate
+      - Visual Regression
+      - Secrets scan
+      - Platform prerelease guard
+      - agent-checks
+      - Deploy to Production
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  # No `if`: the reusable's own job decides, from the same event (a called
+  # workflow sees the caller's `github.event`). When it decides no, that job is
+  # skipped before a runner is allocated.
+  signal:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/publish-watchdog-signal.yml@v0.1.183
+    secrets:
+      # The CMS automation App's private key, with vars.CMS_AUTOMATION_APP_ID
+      # set on this repo. Named explicitly, never a blanket secrets pass-through.
+      app_private_key: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
