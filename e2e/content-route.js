@@ -29,7 +29,8 @@
 // `permalink:` or `layout:` to anything its collection's CMS fields allow.
 // So "content cannot change the machinery" is a statement about FILES, not
 // about every URL a page can claim; the site's post-build verifier, which
-// always runs, is the guard for what the built site ends up serving. Base
+// runs on every pull request of a site that has one, is the guard for what
+// the built site ends up serving. Base
 // collections a site has switched off (`cms.base_collections`) still count
 // as content here, as they do in content-pr-guard.js.
 //
@@ -116,12 +117,38 @@ function siteGatePath(configYamlText, YAML) {
 // that is a data file in normal form, except the publish gate. Empty when the
 // gate cannot be told, so a caller that cannot read the config exempts
 // nothing.
+//
+// content-pr-guard's line regex also matches a `file:` inside a hint or a
+// block scalar, so each candidate must ALSO be a real
+// `collections[].files[].file` of the parsed seam. The parser is always
+// there when this list can be non-empty: the gate check needs it too.
 function cmsDataFiles({ seamYamlText = null, configYamlText = null, YAML = null } = {}) {
-  const files = seamContentFiles(seamYamlText).filter((f) => DATA_FILE.test(f));
-  if (files.length === 0) return [];
+  const candidates = seamContentFiles(seamYamlText).filter((f) => DATA_FILE.test(f));
+  if (candidates.length === 0) return [];
   const gate = siteGatePath(configYamlText, YAML);
   if (!gate.known) return [];
-  return files.filter((f) => f !== gate.path);
+  const declared = seamFileCollections(seamYamlText, YAML);
+  return candidates.filter((f) => declared.has(f) && f !== gate.path);
+}
+
+// Every `collections[].files[].file` of the parsed seam, as written. Empty
+// when the seam does not parse or is not that shape.
+function seamFileCollections(seamYamlText, YAML) {
+  const out = new Set();
+  if (!YAML || typeof seamYamlText !== "string") return out;
+  let doc;
+  try {
+    doc = YAML.parse(seamYamlText);
+  } catch {
+    return out;
+  }
+  const collections = Array.isArray(doc) ? doc : doc && Array.isArray(doc.collections) ? doc.collections : [];
+  for (const c of collections) {
+    for (const f of (c && Array.isArray(c.files) ? c.files : [])) {
+      if (f && typeof f.file === "string") out.add(f.file);
+    }
+  }
+  return out;
 }
 
 // A path as it may be printed in a job log: JSON-quoted, so a newline in a

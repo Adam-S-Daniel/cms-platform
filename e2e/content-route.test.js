@@ -248,6 +248,25 @@ test.describe("content-route: the rule", () => {
     expect(route([M("_data/about.yml")], opts)).toBe("content");
   });
 
+  test("a `file:` line inside a hint or block scalar is not a file collection", () => {
+    // content-pr-guard's line regex matches it; the parsed seam does not.
+    const seam = `collections:
+  - name: site_about
+    hint: |
+      file: _data/navigation.yml
+    files:
+      - name: about
+        file: "_data/about.yml"
+`;
+    const opts = { ...CMS, seamYamlText: seam, configYamlText: CONFIG_NO_GATE };
+    expect(cmsDataFiles(opts)).toEqual(["_data/about.yml"]);
+    expect(route([M("_data/about.yml")], opts)).toBe("content");
+    expect(route([M("_data/navigation.yml")], opts)).toBe("full");
+    expect(isSalientChange([M("_data/navigation.yml")], { fromCms: true, YAML, cmsFiles: cmsDataFiles(opts) })).toBe(true);
+    // A seam that does not parse declares nothing.
+    expect(cmsDataFiles({ ...opts, seamYamlText: 'x: [unclosed\n  file: "_data/about.yml"\n' })).toEqual([]);
+  });
+
   test("a gate path not written in normal form is 'cannot tell', so nothing is exempt", () => {
     for (const written of ["./_data/settings.yml", "/_data/settings.yml", "_data//settings.yml", "_data/./settings.yml", "_data/x/../settings.yml", "settings.yml", " _data/settings.yml"]) {
       const config = `cms:\n  site_gate:\n    path: "${written}"\n`;

@@ -270,6 +270,10 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     const sparse = String(fetch.with["sparse-checkout"]).split("\n").map((l) => l.trim()).filter(Boolean);
     for (const needed of [
       ESCAPE_LINT_PATH,
+      // So Node takes the module type from the platform, not from a site
+      // package.json that may say `"type": "module"`.
+      "package.json",
+      "e2e/package.json",
       "scripts/content-pr-guard.js",
       "e2e/content-route.js",
       "e2e/trusted-yaml.js",

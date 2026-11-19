@@ -69,8 +69,9 @@ nothing by name.
 **What the route does not check.** An entry's front matter. A page may set
 `permalink:` or `layout:` to whatever its collection's CMS fields allow, so
 "content cannot change the machinery" is a statement about files, not about
-every URL a page can claim. The site's post-build verifier, which always runs,
-is the guard for what the built site serves. Base collections a site has
+every URL a page can claim. The site's post-build verifier, which runs on
+every pull request of a site that has one (both consumers do), is the guard
+for what the built site serves. Base collections a site has
 switched off (`cms.base_collections`) still count as content here, as they do
 in `content-pr-guard.js`.
 

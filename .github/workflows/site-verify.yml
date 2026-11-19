@@ -122,10 +122,16 @@ jobs:
           path: .cms-platform
           persist-credentials: false
           # The route rule is content-route.js plus the modules it requires,
-          # and the composite that gathers its inputs.
+          # and the composite that gathers its inputs. The two package.json
+          # files are there so Node reads the PLATFORM's module type for
+          # those scripts: without them it walks up to the site's own
+          # package.json, and a site that sets `"type": "module"` would make
+          # the rule fail to load (safely, as `full`, but always).
           sparse-checkout: |
+            package.json
             scripts/liquid-escape-lint.rb
             scripts/content-pr-guard.js
+            e2e/package.json
             e2e/content-route.js
             e2e/trusted-yaml.js
             e2e/visual-regression-salient.js
