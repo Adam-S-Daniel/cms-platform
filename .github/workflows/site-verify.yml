@@ -191,6 +191,16 @@ jobs:
         if: steps.detect.outputs.verifier == 'true'
         # The script's own contract: `ok`/`FAIL` per assertion, exit 1 on any
         # FAIL. Its output is the finding; nothing here re-summarises it.
+        #
+        # SITE_VERIFY_SELF_TESTS_HANDLED tells a verifier whose default
+        # entrypoint ALSO runs its self-tests (adamdaniel.ai's does, so a bare
+        # local run proves both) that this job has already dealt with them:
+        # the step above ran them, or the content route decided they are not
+        # needed. Without it that site ran its regression matrix twice per
+        # pull request, and once on a post that skips it. A verifier that
+        # does not know the variable ignores it.
+        env:
+          SITE_VERIFY_SELF_TESTS_HANDLED: "true"
         run: ruby scripts/verify-build-artifacts.rb
 
       - name: Lint Liquid output escaping

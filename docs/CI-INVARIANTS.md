@@ -1652,7 +1652,9 @@ Five decisions in it that are not obvious from the YAML:
   the browser matrix (`CONTENT-PUBLISH-LATENCY.md` § What shipped). The job
   fetches `e2e/content-route.js`, the two modules it reads and the composite
   in its sparse checkout; `e2e/site-verify.test.js` holds that list and the
-  one `if:`.
+  one `if:`. The verifier step sets `SITE_VERIFY_SELF_TESTS_HANDLED=true`, so
+  a verifier whose default entrypoint also runs its self-tests
+  (adamdaniel.ai's, for a bare local run) does not run them a second time.
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through

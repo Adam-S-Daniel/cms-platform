@@ -261,6 +261,10 @@ test.describe("#377 site-verify — the reusable's contract", () => {
       "the self-tests are the one step a content-only pull request skips",
     ).toBe("steps.route.outputs.route != 'content'");
     expect(selfTests["continue-on-error"], "self-test failures must fail the work job").toBeUndefined();
+    // The verifier step tells the site's script the self-tests are dealt with
+    // (run above, or not needed on the content route), so a verifier whose
+    // default entrypoint runs them too does not run them a second time.
+    expect(verifier.env, "the verifier step's whole env").toEqual({ SITE_VERIFY_SELF_TESTS_HANDLED: "true" });
     // The route rule and everything it requires must be in the sparse fetch,
     // or the composite fails to load and every pull request takes `full`.
     const sparse = String(fetch.with["sparse-checkout"]).split("\n").map((l) => l.trim()).filter(Boolean);
