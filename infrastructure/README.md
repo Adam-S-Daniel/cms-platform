@@ -33,13 +33,20 @@ is a stack parameter — nothing is hardcoded to a specific domain.
   `<prefix>-baseline-headers` (HSTS, `nosniff`, `Referrer-Policy`,
   `frame-ancestors 'self'`), and an `/admin/*` behavior attaches
   `<prefix>-admin-headers`, which adds a Content-Security-Policy.
+  The baseline also carries the public pages' policy (#1067: a page loads
+  nothing from another host), and `/assets/tools/*` attaches
+  `<prefix>-tool-apps-headers` for a site's embedded tool apps:
+  `PublicCspMode` (`PUBLIC_CSP_MODE`, kept like `AdminCspMode`),
+  `PublicCspConnectSrc` (`PUBLIC_CSP_CONNECT_SRC`) and `ToolAppsCsp`
+  (`TOOL_APPS_CSP`), both kept from the deployed stack when unset.
   `AdminCspMode` (`ADMIN_CSP_MODE`; unset keeps the deployed stack's value,
   and only a new stack or one without the parameter gets `report-only`; an
   explicit `enforce` or `report-only` always wins), `HstsMaxAgeSeconds`
   (`HSTS_MAX_AGE_SECONDS`, default one year) and `HstsScope` (`HSTS_SCOPE`,
   default `this-host-only`) tune them; the rollout runbook is in
   `docs/ADMIN-AUTH-SECURITY.md`. An account holds at most 20 custom response
-  headers policies, two per site.
+  headers policies, four per site (baseline, admin, tool apps, and the
+  preview's `regression.json` CORS policy).
 
 ## Deploying
 

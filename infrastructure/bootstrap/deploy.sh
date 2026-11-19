@@ -51,6 +51,13 @@
 # gets report-only. Back out of enforcement with
 #   ADMIN_CSP_MODE=report-only bash infrastructure/bootstrap/deploy.sh
 #
+# Public CSP (cms-platform#1067): PUBLIC_CSP_MODE works the same way for the
+# public pages' policy. PUBLIC_CSP_CONNECT_SRC (extra connect-src sources, e.g.
+# a site's CloudWatch RUM endpoints) and TOOL_APPS_CSP (the whole policy for
+# /assets/tools/*) are free text: SET, even to the empty string, the value is
+# sent; UNSET, the deployed stack's value is kept, so a redeploy that forgets
+# one never strips a site's analytics endpoints or its tool apps' policy.
+#
 # This script is idempotent — safe to re-run at any time.
 # =============================================================================
 
@@ -85,6 +92,8 @@ HSTS_MAX_AGE_SECONDS="${HSTS_MAX_AGE_SECONDS:-31536000}"
 HSTS_SCOPE="${HSTS_SCOPE:-this-host-only}"
 # Unset (or empty) = keep the deployed stack's AdminCspMode, resolved below.
 ADMIN_CSP_MODE="${ADMIN_CSP_MODE:-}"
+# Same for the public pages' policy (cms-platform#1067).
+PUBLIC_CSP_MODE="${PUBLIC_CSP_MODE:-}"
 # The AWS CLI's (and CloudFormation's) limit on a template sent inline.
 INLINE_LIMIT_BYTES=51200
 
@@ -112,6 +121,24 @@ case "$ADMIN_CSP_MODE" in
   "" | enforce | report-only) ;;
   *) error "ADMIN_CSP_MODE=${ADMIN_CSP_MODE} is not enforce or report-only; nothing was deployed. Unset it to keep the deployed stack's mode." ;;
 esac
+case "$PUBLIC_CSP_MODE" in
+  "" | enforce | report-only) ;;
+  *) error "PUBLIC_CSP_MODE=${PUBLIC_CSP_MODE} is not enforce or report-only; nothing was deployed. Unset it to keep the deployed stack's mode." ;;
+esac
+# The template's AllowedPattern refuses these too, but only after a change set
+# is created; say it here, before any AWS call.
+if [[ "${PUBLIC_CSP_CONNECT_SRC-}" == *[\;,\"$'\r\n']* ]]; then
+  error "PUBLIC_CSP_CONNECT_SRC may not contain ';', ',', '\"' or a line break (it is a list of connect-src sources, not a policy); nothing was deployed."
+fi
+# frame-ancestors is always added for the tool apps. The first one in a
+# policy wins and a comma starts a second policy, so a value naming either
+# could switch it off.
+if [[ "${TOOL_APPS_CSP-}" == *[,\"$'\r\n']* ]]; then
+  error "TOOL_APPS_CSP may not contain ',', '\"' or a line break; nothing was deployed."
+fi
+if [[ "${TOOL_APPS_CSP-}" == *frame-ancestors* ]]; then
+  error "TOOL_APPS_CSP may not name frame-ancestors (it is always added as 'self'); nothing was deployed."
+fi
 
 # ── Resolve the bootstrap stack name (before any aws call) ─────────────────
 # The name never comes from a STACK_NAME that site-params.env set: that is the
@@ -203,6 +230,63 @@ else
   fi
 fi
 
+# ── Resolve the public CSP parameters (cms-platform#1067) ──────────────────
+# deployed_parameter <ParameterKey>: prints the deployed stack's value on one
+# line; prints nothing when the stack does not exist or has no such parameter.
+# Any other failure stops the deploy: guessing could downgrade an enforced
+# policy or drop a site's analytics endpoints.
+deployed_parameter() {
+  local key="$1" value stderr_file="${WORK_DIR}/parameter-stderr.txt"
+  if value="$(aws cloudformation describe-stacks \
+    --stack-name "$BOOTSTRAP_STACK_NAME" \
+    --region "$AWS_REGION" \
+    --query "Stacks[0].Parameters[?ParameterKey=='${key}'].ParameterValue" \
+    --output text 2>"$stderr_file")"; then
+    # Trim the ends only: a list of sources has spaces inside it.
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    [[ "$value" == "None" ]] && value=""
+    printf '%s' "$value"
+  elif [[ "$(<"$stderr_file")" == *"Stack with id "*" does not exist"* ]]; then
+    printf ''
+  else
+    # Never echo the CLI's message: it can carry an ARN (account id).
+    return 1
+  fi
+}
+
+if [[ -n "$PUBLIC_CSP_MODE" ]]; then
+  info "Public CSP mode: ${PUBLIC_CSP_MODE} (set by PUBLIC_CSP_MODE)"
+else
+  DEPLOYED_PUBLIC_CSP_MODE="$(deployed_parameter PublicCspMode)" \
+    || error "Could not read the deployed PublicCspMode of stack ${BOOTSTRAP_STACK_NAME}, and guessing could downgrade an enforced CSP; nothing was deployed. Check the AWS session, or set PUBLIC_CSP_MODE to enforce or report-only explicitly."
+  case "$DEPLOYED_PUBLIC_CSP_MODE" in
+    enforce | report-only)
+      PUBLIC_CSP_MODE="$DEPLOYED_PUBLIC_CSP_MODE"
+      info "Public CSP mode: ${PUBLIC_CSP_MODE} (kept from deployed stack)" ;;
+    "")
+      PUBLIC_CSP_MODE="report-only"
+      info "Public CSP mode: report-only (default: no deployed PublicCspMode)" ;;
+    *) error "Stack ${BOOTSTRAP_STACK_NAME} has a PublicCspMode that is not enforce or report-only; nothing was deployed. Set PUBLIC_CSP_MODE to enforce or report-only explicitly." ;;
+  esac
+fi
+
+if [[ -n "${PUBLIC_CSP_CONNECT_SRC+set}" ]]; then
+  info "Public CSP extra connect-src: set by PUBLIC_CSP_CONNECT_SRC"
+else
+  PUBLIC_CSP_CONNECT_SRC="$(deployed_parameter PublicCspConnectSrc)" \
+    || error "Could not read the deployed PublicCspConnectSrc of stack ${BOOTSTRAP_STACK_NAME}, and guessing could drop a site's reporting endpoints; nothing was deployed. Check the AWS session, or set PUBLIC_CSP_CONNECT_SRC explicitly (empty for none)."
+  info "Public CSP extra connect-src: PUBLIC_CSP_CONNECT_SRC is unset, so the deployed stack's value is kept (none when there is no stack)"
+fi
+
+if [[ -n "${TOOL_APPS_CSP+set}" ]]; then
+  info "Tool apps CSP: set by TOOL_APPS_CSP"
+else
+  TOOL_APPS_CSP="$(deployed_parameter ToolAppsCsp)" \
+    || error "Could not read the deployed ToolAppsCsp of stack ${BOOTSTRAP_STACK_NAME}, and guessing could replace a site's tool apps policy; nothing was deployed. Check the AWS session, or set TOOL_APPS_CSP explicitly (empty for the public policy)."
+  info "Tool apps CSP: TOOL_APPS_CSP is unset, so the deployed stack's value is kept (the public policy when there is no stack)"
+fi
+
 # ── Auto-detect Route53 hosted zone if not specified ───────────────────────
 if [[ -z "$HOSTED_ZONE_ID" ]]; then
   info "Looking up Route53 hosted zone for ${APEX_DOMAIN}…"
@@ -244,7 +328,10 @@ if ! CHANGESET_OUTPUT="$(aws cloudformation deploy \
   "AdminDomainName=${ADMIN_DOMAIN}" \
   "HstsMaxAgeSeconds=${HSTS_MAX_AGE_SECONDS}" \
   "HstsScope=${HSTS_SCOPE}" \
-  "AdminCspMode=${ADMIN_CSP_MODE}" 2>"$DEPLOY_STDERR")"; then
+  "AdminCspMode=${ADMIN_CSP_MODE}" \
+  "PublicCspMode=${PUBLIC_CSP_MODE}" \
+  "PublicCspConnectSrc=${PUBLIC_CSP_CONNECT_SRC}" \
+  "ToolAppsCsp=${TOOL_APPS_CSP}" 2>"$DEPLOY_STDERR")"; then
   DEPLOY_ERROR="$(<"$DEPLOY_STDERR")"
   # A stack in a failed state cannot take a change set; say what to do rather
   # than echo the CLI's message (it carries the stack ARN, account id included).

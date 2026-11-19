@@ -7,6 +7,11 @@
 // repeats the baseline and adds the admin Content-Security-Policy, sent as
 // Report-Only until AdminCspMode is flipped to `enforce`.
 //
+// cms-platform#1067 — the baseline carries the PUBLIC Content-Security-Policy
+// (a page loads nothing from another host), Report-Only until PublicCspMode is
+// `enforce`, and /assets/tools/* (a site's embedded tool apps) gets its own
+// policy, which is the public one unless the site sets ToolAppsCsp.
+//
 // cms-platform#789 — the preview distribution also routes /regression.json
 // to its own behavior, whose policy repeats the baseline and adds a CorsConfig
 // so /admin/reviews can fetch it cross-origin (see the last describe block).
@@ -137,6 +142,21 @@ function csp(value) {
 const DISTRIBUTIONS = ["PreviewDistribution", "ProductionDistribution"];
 const BASELINE = { Ref: "BaselineResponseHeadersPolicy" };
 const ADMIN = { Ref: "AdminResponseHeadersPolicy" };
+const TOOL_APPS = { Ref: "ToolAppsResponseHeadersPolicy" };
+const PUBLIC_DIRECTIVES = [
+  "default-src",
+  "script-src",
+  "style-src",
+  "img-src",
+  "font-src",
+  "connect-src",
+  "media-src",
+  "frame-src",
+  "object-src",
+  "base-uri",
+  "form-action",
+];
+const CSP_HEADERS = ["content-security-policy", "content-security-policy-report-only"];
 const FULL_ADMIN_DIRECTIVES = [
   "default-src",
   "script-src",
@@ -188,14 +208,18 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
 
   test("policy names derive from ResourcePrefix and differ", () => {
     const params = parameters(template);
-    const names = ["BaselineResponseHeadersPolicy", "AdminResponseHeadersPolicy"].map((id) => {
+    const names = [
+      "BaselineResponseHeadersPolicy",
+      "AdminResponseHeadersPolicy",
+      "ToolAppsResponseHeadersPolicy",
+    ].map((id) => {
       const raw = template.Resources[id].Properties.ResponseHeadersPolicyConfig.Name;
       expect(raw["Fn::Sub"], `${id}.Name must be a !Sub over ResourcePrefix`).toContain(
         "${ResourcePrefix}",
       );
       return render(template, raw, params);
     });
-    expect(new Set(names).size).toBe(2);
+    expect(new Set(names).size).toBe(3);
   });
 
   test("defaults: one-year host-only HSTS, admin CSP in report-only", () => {
@@ -214,6 +238,7 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
       "referrer-policy": "strict-origin-when-cross-origin",
       "x-frame-options": "SAMEORIGIN",
       "content-security-policy": "frame-ancestors 'self'",
+      "content-security-policy-report-only": expect.stringMatching(/^default-src 'self'; /),
     });
   });
 
@@ -227,7 +252,11 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
   });
 
   test("every policy overrides an origin header of the same name", () => {
-    for (const id of ["BaselineResponseHeadersPolicy", "AdminResponseHeadersPolicy"]) {
+    for (const id of [
+      "BaselineResponseHeadersPolicy",
+      "AdminResponseHeadersPolicy",
+      "ToolAppsResponseHeadersPolicy",
+    ]) {
       const config = renderedPolicy(template, id, parameters(template));
       for (const [name, value] of Object.entries(config.SecurityHeadersConfig)) {
         expect(value.Override, `${id} ${name}.Override`).toBe(true);
@@ -243,7 +272,7 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
       const params = parameters(template, { AdminCspMode: mode });
       const base = headersOf(renderedPolicy(template, "BaselineResponseHeadersPolicy", params));
       const admin = headersOf(renderedPolicy(template, "AdminResponseHeadersPolicy", params));
-      for (const name of Object.keys(base).filter((n) => n !== "content-security-policy")) {
+      for (const name of Object.keys(base).filter((n) => !CSP_HEADERS.includes(n))) {
         expect(admin[name], name).toBe(base[name]);
       }
     });
@@ -311,6 +340,175 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
           expect(src, `${name}: only https:// hosts`).toMatch(/^https:\/\//);
         }
       }
+    }
+  });
+});
+
+// cms-platform#1067: one post could put an outside script, frame or stylesheet
+// on a page, and a <base> pasted into a post body sent every menu link on that
+// page to another site. The public policy is "nothing from another host".
+test.describe("the public Content-Security-Policy (cms-platform#1067)", () => {
+  const template = loadTemplate();
+  const RUM = "https://dataplane.rum.us-east-1.amazonaws.com https://cognito-identity.us-east-1.amazonaws.com";
+  const baseline = (overrides) =>
+    headersOf(renderedPolicy(template, "BaselineResponseHeadersPolicy", parameters(template, overrides)));
+  const toolApps = (overrides) =>
+    headersOf(renderedPolicy(template, "ToolAppsResponseHeadersPolicy", parameters(template, overrides)));
+
+  test("defaults: report-only, no extra connect sources, tool apps on the public policy", () => {
+    const p = template.Parameters;
+    expect(p.PublicCspMode.Default).toBe("report-only");
+    expect(p.PublicCspMode.AllowedValues).toEqual(["report-only", "enforce"]);
+    expect(p.PublicCspConnectSrc.Default).toBe("");
+    expect(p.ToolAppsCsp.Default).toBe("");
+  });
+
+  test("a parameter cannot smuggle in another directive", () => {
+    // `;` ends a directive and `,` ends a policy in a combined header: a
+    // connect-src value carrying either would add one.
+    const connect = new RegExp(template.Parameters.PublicCspConnectSrc.AllowedPattern);
+    expect(connect.test(RUM)).toBe(true);
+    expect(connect.test("")).toBe(true);
+    expect(connect.test("https://example.net; script-src *")).toBe(false);
+    expect(connect.test("https://example.net, default-src *")).toBe(false);
+  });
+
+  test("ToolAppsCsp cannot switch off the framing rule", () => {
+    const tools = new RegExp(template.Parameters.ToolAppsCsp.AllowedPattern);
+    expect(tools.test("default-src 'self'; connect-src 'self' https://raw.githubusercontent.com")).toBe(true);
+    expect(tools.test("")).toBe(true);
+    // The first frame-ancestors in a policy wins; a comma starts a second
+    // policy; a line break would end the header.
+    expect(tools.test("default-src 'self'; frame-ancestors *")).toBe(false);
+    expect(tools.test("default-src 'self', frame-src *")).toBe(false);
+    expect(tools.test("default-src 'self'\nX-Injected: 1")).toBe(false);
+    expect(tools.test('default-src "self"')).toBe(false);
+    expect(new RegExp(template.Parameters.PublicCspConnectSrc.AllowedPattern).test("https://a.example\r\nX: 1")).toBe(
+      false,
+    );
+  });
+
+  test("the policy fits CloudFront's limit with a site's real parameters too", () => {
+    const overrides = {
+      PublicCspMode: "enforce",
+      PublicCspConnectSrc: RUM,
+      ToolAppsCsp:
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://raw.githubusercontent.com; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'",
+    };
+    for (const h of [baseline(overrides), toolApps(overrides)]) {
+      expect(h["content-security-policy"].length).toBeLessThanOrEqual(1783);
+    }
+  });
+
+  test("report-only: frame-ancestors enforced, the full policy only reported", () => {
+    const h = baseline();
+    expect(h["content-security-policy"]).toBe("frame-ancestors 'self'");
+    expect([...csp(h["content-security-policy-report-only"]).keys()]).toEqual(PUBLIC_DIRECTIVES);
+  });
+
+  test("enforce: the full policy is enforced and nothing is report-only", () => {
+    const h = baseline({ PublicCspMode: "enforce" });
+    expect(h["content-security-policy-report-only"]).toBeUndefined();
+    const enforced = csp(h["content-security-policy"]);
+    expect([...enforced.keys()]).toEqual([...PUBLIC_DIRECTIVES, "frame-ancestors"]);
+    expect(enforced.get("frame-ancestors")).toEqual(["'self'"]);
+  });
+
+  test("both modes send the same directives", () => {
+    expect(baseline({ PublicCspMode: "enforce" })["content-security-policy"]).toBe(
+      `${baseline()["content-security-policy-report-only"]}; frame-ancestors 'self'`,
+    );
+  });
+
+  test("nothing loads from another host", () => {
+    const value = baseline({ PublicCspMode: "enforce" })["content-security-policy"];
+    // CloudFront's documented limit on a Content-Security-Policy value.
+    expect(value.length).toBeLessThanOrEqual(1783);
+    const d = csp(value);
+    expect(d.get("default-src")).toEqual(["'self'"]);
+    expect(d.get("object-src")).toEqual(["'none'"]);
+    expect(d.get("base-uri"), "a <base> in a post body must not redirect the page's links").toEqual(["'none'"]);
+    expect(d.get("form-action")).toEqual(["'self'"]);
+    expect(d.get("frame-src"), "no outside embed").toEqual(["'self'"]);
+    expect(d.get("media-src")).toEqual(["'self'"]);
+    for (const name of ["script-src", "style-src"]) {
+      expect(d.get(name), `${name} names no host`).toEqual(["'self'", "'unsafe-inline'"]);
+    }
+    expect(d.get("script-src"), "no eval on a public page").not.toContain("'unsafe-eval'");
+    expect(d.get("img-src")).toEqual(["'self'", "data:", "blob:"]);
+    expect(d.get("font-src")).toEqual(["'self'", "data:"]);
+    // The live preview page reads a draft image from the entry's branch.
+    expect(d.get("connect-src")).toEqual(["'self'", "https://api.github.com"]);
+    for (const [name, sources] of d) {
+      for (const src of sources) {
+        expect(src, `${name}: no wildcard`).not.toContain("*");
+        expect(src, `${name}: a scheme-only source allows every host`).not.toMatch(/^(https?|wss?):$/);
+      }
+    }
+  });
+
+  test("PublicCspConnectSrc adds a site's reporting endpoints to connect-src and nowhere else", () => {
+    const plain = csp(baseline({ PublicCspMode: "enforce" })["content-security-policy"]);
+    const withRum = csp(
+      baseline({ PublicCspMode: "enforce", PublicCspConnectSrc: RUM })["content-security-policy"],
+    );
+    expect(withRum.get("connect-src")).toEqual(["'self'", "https://api.github.com", ...RUM.split(" ")]);
+    for (const name of PUBLIC_DIRECTIVES.filter((n) => n !== "connect-src")) {
+      expect(withRum.get(name), name).toEqual(plain.get(name));
+    }
+  });
+
+  for (const id of DISTRIBUTIONS) {
+    test(`${id}: /assets/tools/* attaches the tool-apps policy and otherwise equals the default behavior`, () => {
+      const config = template.Resources[id].Properties.DistributionConfig;
+      const matches = (config.CacheBehaviors || []).filter((b) => b.PathPattern === "/assets/tools/*");
+      expect(matches.length, `${id} needs exactly one /assets/tools/* cache behavior`).toBe(1);
+      const { PathPattern, ResponseHeadersPolicyId, ...rest } = matches[0];
+      expect(ResponseHeadersPolicyId).toEqual(TOOL_APPS);
+      const { ResponseHeadersPolicyId: _baseline, ...defaults } = config.DefaultCacheBehavior;
+      // The preview router must be on it, or a preview host would fetch
+      // /assets/tools/… from the bucket root instead of /pr-<N>/assets/tools/….
+      expect(rest.FunctionAssociations, `${id} /assets/tools/* function associations`).toEqual(
+        defaults.FunctionAssociations,
+      );
+      expect(rest).toEqual(defaults);
+    });
+  }
+
+  for (const mode of ["report-only", "enforce"]) {
+    test(`tool apps: with no ToolAppsCsp they get exactly the public headers (PublicCspMode=${mode})`, () => {
+      const overrides = { PublicCspMode: mode, PublicCspConnectSrc: RUM };
+      expect(toolApps(overrides)).toEqual(baseline(overrides));
+    });
+
+    test(`tool apps: ToolAppsCsp replaces the policy and keeps every other header (PublicCspMode=${mode})`, () => {
+      const own = "default-src 'self'; connect-src 'self' https://raw.githubusercontent.com";
+      const overrides = { PublicCspMode: mode, ToolAppsCsp: own };
+      const tools = toolApps(overrides);
+      const base = baseline(overrides);
+      for (const name of Object.keys(base).filter((n) => !CSP_HEADERS.includes(n))) {
+        expect(tools[name], name).toBe(base[name]);
+      }
+      if (mode === "enforce") {
+        // frame-ancestors comes FIRST: the first one in a policy wins, so a
+        // site's own value after it could not switch the framing rule off.
+        expect(tools["content-security-policy"]).toBe(`frame-ancestors 'self'; ${own}`);
+        expect(tools["content-security-policy-report-only"]).toBeUndefined();
+      } else {
+        expect(tools["content-security-policy"]).toBe("frame-ancestors 'self'");
+        expect(tools["content-security-policy-report-only"]).toBe(own);
+      }
+      // The site's choice for its apps never reaches a post or a page.
+      expect(JSON.stringify(base)).not.toContain("raw.githubusercontent.com");
+    });
+  }
+
+  test("the admin and regression.json policies are untouched by the public parameters", () => {
+    const overrides = { PublicCspMode: "enforce", PublicCspConnectSrc: RUM, ToolAppsCsp: "default-src 'self'" };
+    for (const id of ["AdminResponseHeadersPolicy", "PreviewRegressionCorsResponseHeadersPolicy"]) {
+      expect(renderedPolicy(template, id, parameters(template, overrides)), id).toEqual(
+        renderedPolicy(template, id, parameters(template)),
+      );
     }
   });
 });
@@ -401,8 +599,19 @@ test.describe("preview regression.json CORS (cms-platform#789)", () => {
       const params = parameters(template, { AdminCspMode: mode });
       const policy = renderedPolicy(template, POLICY_ID, params);
       const base = renderedPolicy(template, "BaselineResponseHeadersPolicy", params);
-      expect(headersOf(policy)).toEqual(headersOf(base));
-      expect(policy.SecurityHeadersConfig).toEqual(base.SecurityHeadersConfig);
+      // Every baseline header but the public page policy (#1067): this
+      // behavior serves one JSON file, which loads nothing, so it keeps the
+      // framing rule alone in both PublicCspMode values.
+      const { ContentSecurityPolicy: policyCsp, ...policyRest } = policy.SecurityHeadersConfig;
+      const { ContentSecurityPolicy: _baseCsp, ...baseRest } = base.SecurityHeadersConfig;
+      expect(policyRest).toEqual(baseRest);
+      expect(policyCsp).toEqual({ ContentSecurityPolicy: "frame-ancestors 'self'", Override: true });
+      const headers = headersOf(policy);
+      const baseHeaders = headersOf(base);
+      for (const name of Object.keys(baseHeaders).filter((n) => !CSP_HEADERS.includes(n))) {
+        expect(headers[name], name).toBe(baseHeaders[name]);
+      }
+      expect(headers["content-security-policy-report-only"]).toBeUndefined();
       for (const [name, value] of Object.entries(policy.SecurityHeadersConfig)) {
         expect(value.Override, `${name}.Override`).toBe(true);
       }
