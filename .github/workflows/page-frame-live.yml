@@ -155,8 +155,11 @@ jobs:
             --reporter=list,html,json > /tmp/page-frame-live.log 2>&1 || status=$?
           node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
           exit "$status"
+      # continue-on-error: a mint failure must not stop the alert; the issue
+      # then says the token could not be minted.
       - name: Mint a CMS automation App token (for the unpublish pull request)
         id: app
+        continue-on-error: true
         if: ${{ !cancelled() && !inputs.dry_run && steps.check.outcome == 'failure' }}
         env:
           APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
@@ -177,6 +180,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PAGE_FRAME_APP_TOKEN: ${{ steps.app.outputs.token }}
+          PAGE_FRAME_APP_MINT: ${{ steps.app.outcome }}
+          CHECK_ALL: ${{ steps.scope.outputs.all }}
           ASSIGNEES: ${{ inputs.assignees }}
           DRY_RUN: ${{ inputs.dry_run }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -186,6 +191,9 @@ jobs:
           args=(--report /tmp/page-frame-live.log.json --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
                 --run-url "$RUN_URL" --prod-url "$CMS_PROD_URL" --base "${BASE_BRANCH:-main}"
                 --label page-broken --assignees "$ASSIGNEES")
+          if [ "$CHECK_ALL" = "1" ]; then
+            args+=(--all)
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           else

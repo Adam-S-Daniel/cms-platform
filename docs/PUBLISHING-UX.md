@@ -1362,16 +1362,21 @@ them without rejecting real posts; `e2e/page-frame.spec.js` looks at the result
 instead. On each page it opens, at 390 and 1280 pixels wide, it checks that the
 site header and footer render, the header's first link is the element at its
 own center (not covered), the header links stay on this site, the page does not
-scroll sideways, nothing logs a console error, and on a post the share row sits
-inside the article with its first control uncovered. A listing must show at
-least as many post rows as production, less the posts the change removes. It
-may fail only on a broken page, never on what a post says or looks like.
+scroll sideways, and on a post the share row sits inside the article with its
+first control uncovered. On a listing every post row the server sent is still
+on the page and rendered (a row's unclosed tag can swallow the rest). Console
+errors fail it before publish only: on production they are reported, not
+failed, because there they are usually a post's own hot-linked image or embed
+going away, which is no reason for an unpublish pull request. It may fail only
+on a broken page, never on what a post says or looks like.
 
 Which pages: `e2e/page-frame-targets.js`. The posts a change touched, the tag
 archives each one links to, `/` when the theme layout renders it, and `/blog/`
 when the site keeps posts. A change that touched no post (a layout) opens the
 newest post instead. A single-page site with its own home layout and no posts
-(jodidaniel.com today) has nothing to open, and the spec skips.
+(jodidaniel.com today) has nothing to open, and the spec skips. A post dated in
+the future is skipped unless the site sets `future: true`, since Jekyll does
+not build it yet.
 
 Where it runs:
 
@@ -1384,7 +1389,8 @@ Where it runs:
 
 `scripts/page-frame-alert.js` files the alerts from the Playwright JSON report.
 A page with an open issue gets nothing new; a page that passes again has its
-issue and unpublish pull request closed. The unpublish pull request is opened
+issue and unpublish pull request closed, and the daily sweep closes the issue
+of a post that is no longer published (the prepared pull request was merged). The unpublish pull request is opened
 with the CMS automation App's token, because one opened with `GITHUB_TOKEN`
 starts no checks and could never merge; without the App the issue says how to
 turn off Published in `/admin` instead.

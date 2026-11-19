@@ -38,7 +38,24 @@ function isPublishedFm(fm) {
 
 // A post the frame check should open: published, not an e2e fixture, with an
 // address this module can work out. null otherwise.
-function postTarget(siteRoot, rel) {
+// Jekyll does not build a post dated in the future unless the site sets
+// `future: true`; such a post is scheduled, not broken.
+function siteBuildsFuture(siteRoot) {
+  try {
+    const cfg = YAML.parse(fs.readFileSync(path.join(siteRoot, "_config.yml"), "utf8"));
+    return !!(cfg && cfg.future === true);
+  } catch {
+    return false;
+  }
+}
+
+function isFutureDated(rel, nowMs) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})-/.exec(path.basename(rel));
+  return !!m && Date.UTC(+m[1], +m[2] - 1, +m[3]) > nowMs;
+}
+
+function postTarget(siteRoot, rel, { future = false, nowMs = Date.now() } = {}) {
+  if (!future && isFutureDated(rel, nowMs)) return null;
   const file = path.join(siteRoot, rel);
   if (!fs.existsSync(file)) return null;
   const fm = readFrontMatter(file);
@@ -56,8 +73,10 @@ function isPostSource(rel) {
 
 function parseChanged(value) {
   if (value == null) return null;
+  // One path per line, as `git diff --name-only` prints them: a post's
+  // file name may contain a space.
   return String(value)
-    .split(/\s+/)
+    .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -76,9 +95,9 @@ function listPostSources(siteRoot) {
 //   listings      `/` (when the theme layout renders it) and `/blog/` (when the
 //                 site keeps the posts collection)
 //   posts         post pages to open
-//   removedPosts  posts the diff deleted or unpublished, which a listing may
-//                 legitimately have lost compared with production
-function pageFrameTargets({ siteRoot, changedFiles = null, all = false } = {}) {
+//   removedPosts  posts the diff deleted, unpublished or scheduled
+function pageFrameTargets({ siteRoot, changedFiles = null, all = false, nowMs = Date.now() } = {}) {
+  const opts = { future: siteBuildsFuture(siteRoot), nowMs };
   const listings = [];
   if (cap.homeUsesThemeLayout(siteRoot)) listings.push("/");
   const keepsPosts = cap.keepsBaseCollection(siteRoot, "posts");
@@ -90,19 +109,19 @@ function pageFrameTargets({ siteRoot, changedFiles = null, all = false } = {}) {
     const sources = listPostSources(siteRoot);
     if (all) {
       for (const rel of sources) {
-        const t = postTarget(siteRoot, rel);
+        const t = postTarget(siteRoot, rel, opts);
         if (t) posts.push(t);
       }
     } else {
       for (const rel of (changedFiles || []).filter(isPostSource)) {
         if (hasE2eSlugSignature({ filename: path.basename(rel) })) continue;
-        const t = postTarget(siteRoot, rel);
+        const t = postTarget(siteRoot, rel, opts);
         if (t) posts.push(t);
         else removedPosts += 1;
       }
       if (posts.length === 0) {
         for (const rel of sources.slice().reverse()) {
-          const t = postTarget(siteRoot, rel);
+          const t = postTarget(siteRoot, rel, opts);
           if (t) {
             posts.push(t);
             break;
@@ -124,4 +143,4 @@ function targetsFromEnv(env = process.env, siteRoot = cap.defaultSiteRoot()) {
   });
 }
 
-module.exports = { pageFrameTargets, targetsFromEnv, parseChanged, isPostSource };
+module.exports = { pageFrameTargets, isFutureDated, targetsFromEnv, parseChanged, isPostSource };

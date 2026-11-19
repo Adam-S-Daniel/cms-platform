@@ -282,9 +282,8 @@ jobs:
           # opt-out (cap.keepsBaseCollection) reads the right config.
           SITE_ROOT: ${{ github.workspace }}
           PW_SPECS: ${{ steps.select.outputs.specs }}
-          # e2e/page-frame.spec.js (#1070): compare each listing's row count with
-          # production's. The changed-file list below names the posts to open.
-          PAGE_FRAME_REFERENCE_URL: https://${{ inputs.apex }}
+          # e2e/page-frame.spec.js (#1070) opens the posts this PR changed,
+          # listed below.
           BASE_REF: ${{ inputs.base_ref }}
         run: |
           set -o pipefail

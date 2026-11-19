@@ -34,8 +34,12 @@ const VIEWPORTS = [
 ];
 
 const TARGETS = targetsFromEnv();
-// The production origin to compare listings against (preview lane only).
-const REFERENCE_URL = (process.env.PAGE_FRAME_REFERENCE_URL || "").replace(/\/+$/, "");
+// On production, console errors are reported but do not fail the frame: after
+// publish they are most often a post's own hot-linked image or embed going
+// away, which is an authoring matter, and the daily sweep must not answer it
+// with an unpublish pull request. Before publish console-clean.spec.js blocks
+// them anyway.
+const CONSOLE_FAILS = process.env.TARGET !== "prod";
 
 // Runs in the page. Returns a list of plain-language problems; empty is intact.
 function inspectFrame({ isPost }) {
@@ -118,11 +122,6 @@ function inspectFrame({ isPost }) {
   return problems;
 }
 
-function countRows(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  return doc.querySelectorAll(".post-list .post-item").length;
-}
-
 function hiddenRows() {
   return Array.from(document.querySelectorAll(".post-list .post-item")).filter((li) => {
     const r = li.getBoundingClientRect();
@@ -132,7 +131,7 @@ function hiddenRows() {
 
 // Open one page at both widths and collect every problem, so a failure names
 // all of them at once instead of the first.
-async function checkPage(page, urlPath, { isPost = false, listing = false } = {}) {
+async function checkPage(page, urlPath, { isPost = false, listing = false } = {}, testInfo = null) {
   const problems = [];
   const errors = [];
   const onConsole = (msg) => {
@@ -160,6 +159,14 @@ async function checkPage(page, urlPath, { isPost = false, listing = false } = {}
       if (listing) {
         const hidden = await page.evaluate(hiddenRows);
         if (hidden > 0) problems.push(`${urlPath} at ${vp.width}px: ${hidden} post row(s) are not rendered`);
+        // Rows the server sent but the browser's parse lost (an unclosed
+        // comment or tag in one row swallowing the rest). Counting the
+        // class token in the served bytes is a lexical count, not a parse.
+        const served = ((await response.text()).match(/class="[^"]*\bpost-item\b[^"]*"/g) || []).length;
+        const parsed = await page.evaluate(() => document.querySelectorAll(".post-item").length);
+        if (parsed < served) {
+          problems.push(`${urlPath} at ${vp.width}px: the server sent ${served} post row(s) but the page shows ${parsed}`);
+        }
       }
       if (isPost && tagLinks.length === 0) {
         tagLinks = await page.evaluate(() =>
@@ -174,26 +181,11 @@ async function checkPage(page, urlPath, { isPost = false, listing = false } = {}
     page.off("console", onConsole);
     page.off("pageerror", onPageError);
   }
-  for (const e of new Set(errors)) problems.push(`${urlPath}: ${e}`);
+  for (const e of new Set(errors)) {
+    if (CONSOLE_FAILS) problems.push(`${urlPath}: ${e}`);
+    else if (testInfo) testInfo.annotations.push({ type: "console", description: `${urlPath}: ${e}` });
+  }
   return { problems, tagLinks: Array.from(new Set(tagLinks)) };
-}
-
-// A listing shows at least as many rows as production does, less the posts
-// this change removes. Preview lane only: after publish, production IS the
-// page being checked.
-async function listingRowProblems(page, urlPath) {
-  if (!REFERENCE_URL) return [];
-  const here = await page.request.get(urlPath);
-  const there = await page.request.get(`${REFERENCE_URL}${urlPath}`);
-  if (!here.ok() || !there.ok()) return [];
-  const [mine, theirs] = await Promise.all([
-    page.evaluate(countRows, await here.text()),
-    page.evaluate(countRows, await there.text()),
-  ]);
-  const floor = theirs - TARGETS.removedPosts;
-  return mine < floor
-    ? [`${urlPath} lists ${mine} post(s); production lists ${theirs}, and this change removes ${TARGETS.removedPosts}`]
-    : [];
 }
 
 test.describe("Page frame intact @parity", () => {
@@ -210,8 +202,7 @@ test.describe("Page frame intact @parity", () => {
   for (const urlPath of TARGETS.listings) {
     test(`@parity frame intact on ${urlPath}`, async ({ page }, testInfo) => {
       testInfo.annotations.push({ type: "page", description: urlPath });
-      const { problems } = await checkPage(page, urlPath, { listing: true });
-      problems.push(...(await listingRowProblems(page, urlPath)));
+      const { problems } = await checkPage(page, urlPath, { listing: true }, testInfo);
       expect(problems, `The page frame is broken:\n  ${problems.join("\n  ")}`).toEqual([]);
     });
   }
@@ -220,9 +211,9 @@ test.describe("Page frame intact @parity", () => {
     test(`@parity frame intact on ${post.path} and its tag pages`, async ({ page }, testInfo) => {
       testInfo.annotations.push({ type: "page", description: post.path });
       testInfo.annotations.push({ type: "source", description: post.source });
-      const { problems, tagLinks } = await checkPage(page, post.path, { isPost: true });
+      const { problems, tagLinks } = await checkPage(page, post.path, { isPost: true }, testInfo);
       for (const tagPath of tagLinks) {
-        const tag = await checkPage(page, tagPath, { listing: true });
+        const tag = await checkPage(page, tagPath, { listing: true }, testInfo);
         problems.push(...tag.problems);
       }
       expect(problems, `The page frame is broken:\n  ${problems.join("\n  ")}`).toEqual([]);

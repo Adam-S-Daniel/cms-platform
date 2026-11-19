@@ -86,8 +86,11 @@ function pageFromIssue(issue) {
   return m ? m[1] : null;
 }
 
-// What to do, given the parsed results and the open alert issues.
-function plan(results, openIssues) {
+// What to do, given the parsed results and the open alert issues. With
+// `all` (the daily sweep checked every published post), an open issue for a
+// page the run did not check is closed too: its post was unpublished (often by
+// merging the prepared pull request) or removed, so nothing will check it again.
+function plan(results, openIssues, { all = false } = {}) {
   const byPage = new Map();
   for (const issue of openIssues) {
     const page = pageFromIssue(issue);
@@ -101,7 +104,9 @@ function plan(results, openIssues) {
     if (r.outcome === "failed") (issue ? still : open).push(issue ? { ...r, issue } : r);
     else if (r.outcome === "passed" && issue) close.push({ ...r, issue });
   }
-  return { open, close, still };
+  const checked = new Set(results.map((r) => r.page));
+  const gone = all ? [...byPage].filter(([page]) => !checked.has(page)).map(([page, issue]) => ({ page, issue })) : [];
+  return { open, close, still, gone };
 }
 
 function issueBody({ result, sha, runUrl, prodUrl, pr, prError }) {
@@ -233,6 +238,7 @@ function main(argv) {
   const label = flag(argv, "--label") || "page-broken";
   const assignees = (flag(argv, "--assignees") || "").split(",").map((s) => s.trim()).filter(Boolean);
   const dryRun = argv.includes("--dry-run");
+  const all = argv.includes("--all");
   if (!reportPath || !repo) {
     console.error("usage: page-frame-alert.js --report <json> --repo <owner/name> --sha <commit>");
     return 2;
@@ -245,8 +251,8 @@ function main(argv) {
   const openIssues = dryRun
     ? []
     : ghApi("listing open alert issues", `repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`) || [];
-  const p = plan(results, openIssues.filter((i) => !i.pull_request));
-  console.log(`Checked ${results.length} page(s): ${p.open.length} newly broken, ${p.still.length} still broken, ${p.close.length} fixed.`);
+  const p = plan(results, openIssues.filter((i) => !i.pull_request), { all });
+  console.log(`Checked ${results.length} page(s): ${p.open.length} newly broken, ${p.still.length} still broken, ${p.close.length} fixed, ${p.gone.length} no longer published.`);
   if (dryRun) {
     for (const r of p.open) console.log(`  would open an issue for ${r.page}`);
     return p.open.length + p.still.length ? 1 : 0;
@@ -258,7 +264,9 @@ function main(argv) {
     let prError = "";
     if (result.source) {
       if (!appToken) {
-        prError = "the CMS automation App is not set up on this repository";
+        prError = process.env.PAGE_FRAME_APP_MINT === "failure"
+          ? "the CMS automation App's token could not be minted (read the run log)"
+          : "the CMS automation App is not set up on this repository";
       } else {
         try {
           pr = prepareUnpublishPr({ repo, base, result, token: appToken });
@@ -280,8 +288,14 @@ function main(argv) {
     }
   }
   for (const { page, issue } of p.still) console.log(`Issue #${issue.number} already tracks ${page}.`);
-  for (const { page, issue } of p.close) {
-    const note = `The page frame check passed on ${page} after commit ${sha}${runUrl ? ` (${runUrl})` : ""}, so this is resolved.`;
+  const closing = [
+    ...p.close.map((c) => ({ ...c, why: "passed" })),
+    ...p.gone.map((c) => ({ ...c, why: "gone" })),
+  ];
+  for (const { page, issue, why } of closing) {
+    const note = why === "passed"
+      ? `The page frame check passed on ${page} after commit ${sha}${runUrl ? ` (${runUrl})` : ""}, so this is resolved.`
+      : `${page} is no longer a published post as of commit ${sha}, so the page frame check no longer opens it. Closing.`;
     try {
       const prNum = (prMarkerRe.exec(issue.body || "") || [])[1];
       if (prNum) {
@@ -290,7 +304,7 @@ function main(argv) {
       }
       ghApi("commenting on the issue", `repos/${repo}/issues/${issue.number}/comments`, { method: "POST", body: { body: note } });
       ghApi("closing the issue", `repos/${repo}/issues/${issue.number}`, { method: "PATCH", body: { state: "closed", state_reason: "completed" } });
-      console.log(`Closed issue #${issue.number}: ${page} passes now.`);
+      console.log(`Closed issue #${issue.number}: ${page} ${why === "passed" ? "passes now" : "is no longer published"}.`);
     } catch (err) {
       failures += 1;
       console.log(`::error::${page}: ${err.message}`);

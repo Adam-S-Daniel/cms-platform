@@ -58,6 +58,13 @@ test.describe("page-frame alert", () => {
     expect(p.close.map((r) => r.issue.number)).toEqual([8]);
   });
 
+  test("the daily sweep closes the issue of a post no longer published; a push run does not", () => {
+    const results = [{ page: "/blog/a/", outcome: "passed" }];
+    const issues = [{ number: 5, body: "<!-- page-frame: /blog/gone/ -->\n" }];
+    expect(alert.plan(results, issues, { all: true }).gone.map((g) => g.issue.number)).toEqual([5]);
+    expect(alert.plan(results, issues).gone).toEqual([]);
+  });
+
   test("unpublishing changes only the published line", () => {
     const src = "---\ntitle: A\npublished: true\ntags: [x]\n---\n\nBody with published: true\n";
     expect(alert.unpublishFrontMatter(src)).toBe(

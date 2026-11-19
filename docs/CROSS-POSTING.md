@@ -115,9 +115,11 @@ for a detect-and-skip.
 On a push, after the deploy wait, the job waits up to 25 minutes for this
 commit's `page-frame-live.yml` run and posts nothing unless it succeeded: a
 post whose page frame is broken on the live site is never announced. A failed
-check, a missing `page-frame-live.yml` or no verdict in time fails this run;
-re-run it (or dispatch it with `post_path`) once the page is fixed. A
-`workflow_dispatch` backfill does not wait. → `docs/PUBLISHING-UX.md`, "The
+check, a missing `page-frame-live.yml` or no verdict in time fails this run.
+A fix pushed to the post runs both workflows again; if the page was fine (a
+deploy or cache fault), re-run that `page-frame-live` run and then this one. A
+`workflow_dispatch` with `post_path` does not wait, on purpose: dispatching is a
+person deciding to post. → `docs/PUBLISHING-UX.md`, "The
 page frame is checked before and after publish".
 
 ## Dedupe / idempotency
