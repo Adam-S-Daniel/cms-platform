@@ -176,28 +176,41 @@ only: never a title, a branch name, a check name or an address
 (`renderSelfAlert` in `scripts/publish-watchdog.js`). Do not add anything to it
 that is not already public.
 
-**What the App can reach, and the fence it needs.** GitHub has no permission
+**What the App can reach, and the fences it needs.** GitHub has no permission
 for "start this one workflow". `actions: write` on a repository can:
 
-- start every `workflow_dispatch` workflow in it, with any inputs;
-- RE-RUN any past run, including one the owner or the schedule started;
+- start every `workflow_dispatch` workflow in it, with any inputs, ON ANY
+  BRANCH (the run uses that branch's copy of the workflow file, so an older
+  copy without a guard is fair game);
+- RE-RUN any past run, including one the owner or the schedule started (with
+  the original run's inputs and its copy of the workflow file);
 - cancel runs, delete runs and their logs, and disable or enable workflows
   (the email workflow included).
 
 It cannot change code, read secrets or change settings: the App holds no
 `contents`, `workflows`, `secrets` or `administration` permission.
 
-So the alert repository itself must refuse the App on every workflow that does
-more than send the alert. An App acts under its own name (`<slug>[bot]`), which
-is what makes that possible and is one reason this is not a personal access
-token (a token would act as its owner). The guard has to be written against a
-re-run, where `github.actor` and `github.event_name` are still those of the
-ORIGINAL run and only `github.triggering_actor` and `github.run_attempt`
-change. Each sensitive job there begins with a step that fails unless
-`github.triggering_actor` is the repository owner, or the event is `schedule`
-AND it is the first attempt. A test in that repository fails for any job that
-reads a secret and has neither that guard nor an entry in an explicit open
-list. Check the fence exists before installing the App on a repository.
+So the alert repository itself must keep the App to sending the alert, with
+two fences. Check both exist before installing the App on a repository:
+
+1. **The mail credential is an environment secret, and the environment allows
+   only the default branch.** No repository-level copy. A guard in a workflow
+   file cannot do this job, because the dispatcher chooses which copy of the
+   file runs; an environment secret is handed only to a job that names the
+   environment, on a branch the environment allows.
+2. **Every job that does more than send the alert refuses anyone but the
+   owner.** An App acts under its own name (`<slug>[bot]`), which is what
+   makes that possible and is one reason this is not a personal access token
+   (a token would act as its owner). The guard has to be written against a
+   re-run, where `github.actor`, `github.event_name` and the inputs are still
+   those of the ORIGINAL run and only `github.triggering_actor` and
+   `github.run_attempt` change: a manual run passes only when the owner is
+   both `github.actor` and `github.triggering_actor`; a scheduled run passes
+   on its first attempt, or when the owner re-runs it.
+
+`fastmail-actions` has both, and a test there fails for any job that reads a
+secret without naming the environment and carrying the guard (or an entry in
+an explicit open list).
 
 Why not the CMS automation App: that App can push to `.github/workflows/*`.
 Installing it on the alert repository would let every site's key rewrite the
