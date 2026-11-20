@@ -1,0 +1,241 @@
+# Reusable: check the live page frame after a publish (cms-platform#1070).
+#
+# Runs e2e/page-frame.spec.js with TARGET=prod:
+#   - on a push to the default branch that changed a post, once that commit is
+#     live (await-prod-deploy), for the posts the push changed;
+#   - daily, for every post, because a page can break later on its own (an
+#     embed, a cache fault);
+#   - by hand, for every post.
+# A broken page gets one issue (assigned, so the owner is emailed) and, for a
+# post, a prepared pull request that unpublishes it: scripts/page-frame-alert.js.
+# Nothing is retracted automatically.
+#
+# Cross-posting waits for this: cross-post.yml's "Await the live page-frame
+# check" step reads this workflow's run for the same commit and posts nothing
+# unless it succeeded. So a push run whose page is broken ends RED, while a
+# scheduled run that filed its alerts ends green (its alert is the issue, and
+# the scheduled-run health audit must not file a second one for a broken post).
+#
+# The thin caller lives at examples/site/.github/workflows/page-frame-live.yml.
+# The platform scripts are checked out at the commit this reusable was called
+# at (job.workflow_sha), so the caller names the version once (#424).
+name: Page frame live (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      assignees:
+        description: "Comma-separated GitHub logins assigned to an alert issue (they get the email). Empty: unassigned."
+        type: string
+        default: ""
+      check_all:
+        description: "Check every post, not just the ones the push changed (schedule and manual runs do)."
+        type: boolean
+        default: false
+      dry_run:
+        description: "Run the check and report; open, close and prepare nothing."
+        type: boolean
+        default: false
+    secrets:
+      CMS_AUTOMATION_APP_PRIVATE_KEY:
+        description: "The CMS automation App's key (with vars.CMS_AUTOMATION_APP_ID). Without it an alert says how to unpublish in /admin instead of linking a prepared pull request."
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CMS_PROD_URL: ${{ vars.CMS_PROD_URL }}
+    steps:
+      - name: Resolve the platform commit this reusable was called at
+        id: self
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          repo=$(jq -r '.workflow_repository // ""' <<<"$JOB_CONTEXT")
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB_CONTEXT")
+          if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::the job context carries no usable workflow_repository/workflow_sha; refusing to guess which platform commit to run."
+            exit 1
+          fi
+          { echo "repository=$repo"; echo "sha=$sha"; } >>"$GITHUB_OUTPUT"
+          echo "Platform commit: ${repo}@${sha}"
+      - name: Require the production URL
+        run: |
+          if [ -z "${CMS_PROD_URL}" ]; then
+            echo "::error::The repository variable CMS_PROD_URL is not set, so there is no live site to check. Set it to https://<apex> (cms-platform docs/CONSUMER-PROVISIONING.md, scripts/set-repo-variables.sh)."
+            exit 1
+          fi
+      - name: Checkout site
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Checkout platform (e2e harness, scripts, composite actions)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ steps.self.outputs.repository }}
+          ref: ${{ steps.self.outputs.sha }}
+          path: .cms-platform
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "20"
+      - name: Install harness deps
+        working-directory: .cms-platform/e2e
+        run: npm ci
+      - name: Install Playwright browser + system deps
+        uses: ./.cms-platform/.github/actions/install-playwright-browsers
+        with:
+          browser: chromium
+          final-timeout-seconds: '660'
+      # Only a push has a merge to wait for; schedule and manual runs check the
+      # site as it is now.
+      - name: Await production deploy
+        if: github.event_name == 'push'
+        uses: ./.cms-platform/.github/actions/await-prod-deploy
+        with:
+          prod-url: ${{ vars.CMS_PROD_URL }}
+      - name: Choose the pages to check
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_ALL: ${{ inputs.check_all }}
+        run: |
+          set -euo pipefail
+          before=$(jq -r '.before // ""' "$GITHUB_EVENT_PATH")
+          if [ "$GITHUB_EVENT_NAME" != "push" ] || [ "$CHECK_ALL" = "true" ] \
+             || ! [[ "$before" =~ ^[0-9a-f]{40}$ ]] || [[ "$before" =~ ^0+$ ]]; then
+            echo "Checking every post."
+            echo "all=1" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${before}...${GITHUB_SHA}" \
+            --jq '.files[].filename' 2>/dev/null) || changed=""
+          if [ -z "$changed" ]; then
+            echo "::warning::Could not list the files this push changed; checking every post instead."
+            echo "all=1" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$changed" >/tmp/page-frame-changed.txt
+          echo "Checking the posts this push changed, plus the home page and blog index."
+          echo "all=0" >>"$GITHUB_OUTPUT"
+      # continue-on-error: a broken page must still reach the alert step. The
+      # step's OUTCOME stays `failure`, which the steps below read.
+      - name: Run the page-frame check against production
+        id: check
+        continue-on-error: true
+        working-directory: .cms-platform/e2e
+        env:
+          PW_PROJECT: "chromium-desktop-1080"
+          TARGET: prod
+          SITE_ROOT: ${{ github.workspace }}
+          PAGE_FRAME_ALL: ${{ steps.scope.outputs.all }}
+        run: |
+          set -o pipefail
+          if [ -f /tmp/page-frame-changed.txt ]; then
+            PAGE_FRAME_CHANGED="$(cat /tmp/page-frame-changed.txt)"
+            export PAGE_FRAME_CHANGED
+          fi
+          export PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/page-frame-live.log.json
+          status=0
+          npx playwright test page-frame.spec.js --project=chromium-desktop-1080 \
+            --reporter=list,html,json > /tmp/page-frame-live.log 2>&1 || status=$?
+          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          exit "$status"
+      # continue-on-error: a mint failure must not stop the alert; the issue
+      # then says the token could not be minted.
+      - name: Mint a CMS automation App token (for the unpublish pull request)
+        id: app
+        continue-on-error: true
+        if: ${{ !cancelled() && !inputs.dry_run && steps.check.outcome == 'failure' }}
+        env:
+          APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "::notice::No CMS automation App on this repo (CMS_AUTOMATION_APP_ID + CMS_AUTOMATION_APP_PRIVATE_KEY), so no unpublish pull request is prepared; the alert says how to unpublish in /admin."
+            exit 0
+          fi
+          node .cms-platform/scripts/mint-app-token.js \
+            --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
+            --repositories "${GITHUB_REPOSITORY#*/}" \
+            --permissions contents=write,pull_requests=write
+      - name: Open, update or close alerts
+        id: alert
+        if: ${{ !cancelled() && (steps.check.outcome == 'success' || steps.check.outcome == 'failure') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGE_FRAME_APP_TOKEN: ${{ steps.app.outputs.token }}
+          PAGE_FRAME_APP_MINT: ${{ steps.app.outcome }}
+          CHECK_ALL: ${{ steps.scope.outputs.all }}
+          ASSIGNEES: ${{ inputs.assignees }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          args=(--report /tmp/page-frame-live.log.json --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+                --run-url "$RUN_URL" --prod-url "$CMS_PROD_URL" --base "${BASE_BRANCH:-main}"
+                --label page-broken --assignees "$ASSIGNEES")
+          if [ "$CHECK_ALL" = "1" ]; then
+            args+=(--all)
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          else
+            gh label create page-broken --repo "$GITHUB_REPOSITORY" --color B60205 \
+              --description "A live page's frame is broken (page-frame check)" >/dev/null 2>&1 || true
+          fi
+          node .cms-platform/scripts/page-frame-alert.js "${args[@]}" || {
+            code=$?
+            # The script exits 1 in a dry run that found a broken page; that is
+            # the report, not a failure to report.
+            [ "$DRY_RUN" = "true" ] || exit "$code"
+          }
+      - name: Upload artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: page-frame-live
+          path: |
+            /tmp/page-frame-live.log
+            /tmp/page-frame-live.log.json
+            .cms-platform/e2e/test-results/
+            .cms-platform/e2e/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+      # A push run ends red on a broken page, so cross-posting holds. A scheduled
+      # or manual run ends green once its alerts are filed.
+      - name: Verdict
+        if: ${{ !cancelled() }}
+        env:
+          CHECK: ${{ steps.check.outcome }}
+          ALERT: ${{ steps.alert.outcome }}
+        run: |
+          if [ "$CHECK" = "success" ]; then
+            echo "Every checked page has an intact frame."
+            exit 0
+          fi
+          if [ "$ALERT" != "success" ]; then
+            echo "::error::The page-frame check ended ${CHECK:-without running} and its alerts could not be filed. Read the run log and the page-frame-live artifact."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "::error::A page this push published is broken on the live site; an issue is open for it, and cross-posting is held."
+            exit 1
+          fi
+          echo "::warning::A live page is broken; an issue is open for it."

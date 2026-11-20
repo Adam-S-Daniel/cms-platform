@@ -712,8 +712,27 @@ const SPEC_RULES = {
     /^assets\/css\//,
     /^assets\/js\//,
     /^e2e\/public-content\.js$/,
+    /^e2e\/console-allowlist\.js$/,
     // #33 — `/blog/` & `/tags/` crawl URLs are gated on the base_collections
     // keep-list via this capability helper.
+    /^e2e\/site-capabilities\.js$/,
+  ],
+  // cms-platform#1070: the page frame around a post (header, footer, share
+  // row, no sideways scroll). Same render inputs as console-clean, plus the
+  // tag archives it follows from a post.
+  "e2e/page-frame.spec.js": [
+    /^_posts\//,
+    /^_tags\//,
+    /^pages\//,
+    /^_config\.yml$/,
+    /^_layouts\//,
+    /^_includes\//,
+    /^_plugins\//,
+    /^assets\/css\//,
+    /^assets\/js\//,
+    /^e2e\/page-frame-targets\.js$/,
+    /^e2e\/console-allowlist\.js$/,
+    /^e2e\/public-content\.js$/,
     /^e2e\/site-capabilities\.js$/,
   ],
   "e2e/draft-isolation.spec.js": [
@@ -1258,6 +1277,7 @@ const PARITY_PREVIEW_SPECS = [
   "e2e/console-clean.spec.js",
   "e2e/draft-isolation.spec.js",
   "e2e/image-alt-text.spec.js",
+  "e2e/page-frame.spec.js",
   "e2e/sitemap.spec.js",
 ];
 

@@ -1351,6 +1351,55 @@ platform reload guard remains a separate decision: it must account for dirty
 drafts and navigation cancellation before a hash change has already moved the
 address. This diagnostic does not add one.
 
+### The page frame is checked before and after publish (#1070)
+
+A post's own HTML, CSS or script can break the page around it: a `<style>`
+hiding the header and footer, a pasted `position: fixed` banner covering the
+menu, a `<base href>` sending every menu link to another site, an over-wide
+element making the page scroll sideways. Issue 1067 measured all four
+publishing green. HTML embeds are a feature, so no rule about tags can stop
+them without rejecting real posts; `e2e/page-frame.spec.js` looks at the result
+instead. On each page it opens, at 390 and 1280 pixels wide, it checks that the
+site header and footer render, the header's first link is the element at its
+own center (not covered), the header links stay on this site, the page does not
+scroll sideways, and on a post the share row sits inside the article with its
+first control uncovered. On a listing every post row the server sent is still
+on the page and rendered (a row's unclosed tag can swallow the rest). Console
+errors fail it before publish only: on production they are reported, not
+failed, because there they are usually a post's own hot-linked image or embed
+going away, which is no reason for an unpublish pull request. It may fail only
+on a broken page, never on what a post says or looks like.
+
+Which pages: `e2e/page-frame-targets.js`. The posts a change touched, the tag
+archives each one links to, `/` when the theme layout renders it, and `/blog/`
+when the site keeps posts. A change that touched no post (a layout) opens the
+newest post instead. A single-page site with its own home layout and no posts
+(jodidaniel.com today) has nothing to open, and the spec skips. A post dated in
+the future is skipped unless the site sets `future: true`, since Jekyll does
+not build it yet.
+
+Where it runs:
+
+| When | Workflow | On failure |
+|---|---|---|
+| Before publish, blocking | `parity-preview.yml` (`parity / parity`), on the preview, selected for the same paths as `console-clean` | the publish waits; the pull request gets the failure comment |
+| After publish | `page-frame-live.yml`, `TARGET=prod`, once `await-prod-deploy` sees the commit live, for the posts the push changed | one `page-broken` issue per page, assigned to `vars.PUBLISH_ALERT_ASSIGNEES` (that is the email), with a prepared pull request setting `published: false`; the run ends red |
+| Daily and by hand | `page-frame-live.yml`, every post | the same issue and pull request; the run stays green once they are filed, so the scheduled-run health audit does not file a second one |
+| Cross-posting | `cross-post.yml`, "Await the live page-frame check" | nothing is posted unless that commit's `page-frame-live` run succeeded |
+
+`scripts/page-frame-alert.js` files the alerts from the Playwright JSON report.
+A page with an open issue gets nothing new; a page that passes again has its
+issue and unpublish pull request closed, and the daily sweep closes the issue
+of a post that is no longer published (the prepared pull request was merged). The unpublish pull request is opened
+with the CMS automation App's token, because one opened with `GITHUB_TOKEN`
+starts no checks and could never merge; without the App the issue says how to
+turn off Published in `/admin` instead.
+
+Nothing is retracted automatically. When the preview check passed minutes
+earlier, a live failure is more likely a deploy or cache fault than the post,
+and an automatic unpublish would turn that into a dead link behind a cross-post
+already sent. Revisit with a month of false-positive counts.
+
 ## 5. Options considered and rejected
 
 - **`publish_mode: simple`** (Save commits straight to `main`). It really

@@ -249,11 +249,11 @@ bash <cms-platform>/scripts/set-repo-variables.sh        # add --dry-run to prev
 | Variable | Derived from | Read by (reusable) |
 |---|---|---|
 | `CMS_APEX` | `APEX_DOMAIN` | `cms-publish-loop-prod` / `-host`, `cms-media-roundtrip`, `visual-regression` |
-| `CMS_PROD_URL` | `https://$APEX_DOMAIN` | `cms-publish-loop-prod` / `-host`, `cms-media-roundtrip` |
+| `CMS_PROD_URL` | `https://$APEX_DOMAIN` | `cms-publish-loop-prod` / `-host`, `cms-media-roundtrip`, `page-frame-live` (required: it fails naming the variable when unset) |
 | `PREVIEW_BUCKET` | `<prefix>-previews` (apex, dots→hyphens) | `visual-regression` (S3 steps no-op if unset) |
 | `AWS_REGION` | `${AWS_REGION:-us-east-1}` | `visual-regression` |
 | `PROD_PLAYGROUND_MODE` | **opt-in** (`site-params.env`) | `cms-publish-loop-prod`, `cms-media-roundtrip` |
-| `CMS_AUTOMATION_APP_ID` | **opt-in** (`site-params.env`) | `platform-bump`, `dev-hooks-sync` — the App's Client ID; with the `CMS_AUTOMATION_APP_PRIVATE_KEY` secret it retires `CMS_PLATFORM_PAT` (see its section above) |
+| `CMS_AUTOMATION_APP_ID` | **opt-in** (`site-params.env`) | `platform-bump`, `dev-hooks-sync` — the App's Client ID; with the `CMS_AUTOMATION_APP_PRIVATE_KEY` secret it retires `CMS_PLATFORM_PAT` (see its section above); `page-frame-live` uses it, when set, to open the unpublish pull request |
 
 The last two are the only **non-derived** entries — everything else comes from
 `APEX_DOMAIN`, so the setter pushes these two only when `site-params.env`

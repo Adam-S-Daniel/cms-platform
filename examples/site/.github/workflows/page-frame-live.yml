@@ -1,0 +1,48 @@
+# Thin caller: check the live page frame after a publish, and daily
+# (cms-platform#1070). A broken page opens an issue (assigned to
+# vars.PUBLISH_ALERT_ASSIGNEES, who get the email) with a prepared unpublish
+# pull request. Cross-posting waits for this workflow's run on the same commit.
+#
+# The push `paths:` match cross-post.yml's exactly, so every push that can
+# cross-post has a run here to wait for.
+name: Page frame (live)
+run-name: >-
+  ${{ github.event_name == 'push'
+        && format('push — {0} @{1}', github.ref_name, github.actor)
+   || (github.event_name == 'schedule'
+        && format('scheduled — {0}', github.event.schedule)
+   || format('manual — @{0}', github.actor)) }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '_posts/**'
+      - '!_posts/2099-*'
+      - '!_posts/*-e2e-*'
+  schedule:
+    - cron: '41 11 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run the check and report; open, close and prepare nothing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  check:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/page-frame-live.yml@v0.1.186
+    with:
+      # A repository variable (comma-separated logins), shared with the publish
+      # watchdog, so this caller carries no site-specific value.
+      assignees: ${{ vars.PUBLISH_ALERT_ASSIGNEES }}
+      check_all: ${{ github.event_name != 'push' }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets:
+      CMS_AUTOMATION_APP_PRIVATE_KEY: ${{ secrets.CMS_AUTOMATION_APP_PRIVATE_KEY }}
