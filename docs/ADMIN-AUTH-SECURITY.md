@@ -781,9 +781,11 @@ wait out the wildcard's TTL, rerun step 3, and delete the placeholder after.
 **Rollback**: put the apex back in `AllowedOrigins` and deploy the proxy, then
 remove `ADMIN_DOMAIN` and rerun step 3 (the admin distribution, certificate,
 record and both functions go; the production certificate is untouched). The
-redirects are 302s, so no browser keeps them. `cms.admin_origin` can stay: it
-is inert while the editor is served from the apex. Editors sign in again on the
-apex.
+redirects are 302s, so no browser keeps them. Also remove `cms.admin_origin`
+from `_config.yml`: the editor ignores it while served from the apex, but the
+public `/preview/` page reads it at build time and skips its draft-image helper
+on the apex while it is set (#1078), so Live Preview on the apex would show a
+broken image for an unpublished upload. Editors sign in again on the apex.
 
 ## Security headers
 
@@ -983,7 +985,11 @@ What it still allows, and why:
   scripts moved into files first.
 - **`connect-src https://api.github.com` and `img-src blob:`**, for the live
   preview page (`/preview/`), which shows an image the editor has uploaded but
-  not published by reading it from the entry's branch.
+  not published by reading it from the entry's branch. On a site whose editor
+  has its own host, the production hosts' `/preview/` does not load that
+  helper at all (#1078): its `/admin/` files redirect to the admin host, which
+  this policy does not allow, and Live Preview is hidden there anyway. Preview
+  hosts, which serve their own `/admin/`, still load it.
 
 **Tool apps get their own policy because they are applications, not content.**
 adamdaniel.ai's evals explorer fetches its results from
