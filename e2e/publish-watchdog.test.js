@@ -9,6 +9,7 @@
  * classification, the issue text (no title, no branch name), the sweep plan,
  * the CLI's write behavior and the shape of the two workflows.
  */
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -24,7 +25,15 @@ const SCRIPT = path.join(ROOT, "scripts/publish-watchdog.js");
 const REUSABLE = path.join(ROOT, ".github/workflows/publish-watchdog.yml");
 const CALLER_DIR = path.join(ROOT, "examples/site/.github/workflows");
 const CALLER = path.join(CALLER_DIR, "publish-watchdog.yml");
-const { classifyPublish, issueMarker, renderIssue, planSweep, sweepWithFollowUps } = require(SCRIPT);
+const {
+  classifyPublish,
+  issueMarker,
+  renderIssue,
+  planSweep,
+  sweepWithFollowUps,
+  renderSelfAlert,
+  readSelfAlertConfig,
+} = require(SCRIPT);
 
 const NOW = Date.parse("2026-11-19T12:00:00Z");
 const iso = (minutesAgo) => new Date(NOW - minutesAgo * 60000).toISOString();
@@ -604,8 +613,14 @@ test.describe("CLI with a stub gh", () => {
   const pr9 = () => makePr({ number: 9, head: { ref: "cms/posts/other", sha: SHA_D, repo: { full_name: "o/r" } } });
 
   // `fixtures` maps a file name under fix/ to JSON (or a string for a raw file).
+  const made = [];
+  test.afterAll(() => {
+    for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   function setup({ pulls, openIssues = [], fixtures = {}, flags = [] } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-"));
+    made.push(dir);
     const fix = path.join(dir, "fix");
     const log = path.join(dir, "log");
     fs.mkdirSync(fix);
@@ -623,6 +638,7 @@ test.describe("CLI with a stub gh", () => {
       gh: `
 echo "$*" >> "${log}/argv.log"
 ep="$2"
+echo "\${GH_TOKEN:-none}|key=\${SELF_ALERT_APP_PRIVATE_KEY:+present}\${APP_PRIVATE_KEY:+present}|$ep" >> "${log}/tokens.log"
 n=$(ls "${log}" | grep -c '^body-' || true)
 body=""
 case "$*" in *--input*) body=$(cat) ;; esac
@@ -645,7 +661,9 @@ case "$ep" in
     if [ -f "${fix}/ref.json" ]; then cat "${fix}/ref.json"; else echo '{"object": {"sha": "${SHA_A}"}}'; fi ;;
   repos/o/r/rules/branches/*) cat "${fix}/rules.json" ;;
   repos/o/r/issues\\?*) cat "${fix}/issues.json" ;;
-  repos/o/r/issues/*/comments) echo '{}' ;;
+  repos/o/r/issues/*/comments)
+    if [ -f "${fix}/comment-fail" ]; then fail 403; fi
+    echo '{}' ;;
   repos/o/r/issues/*) echo '{}' ;;
   repos/o/r/issues)
     if [ -f "${fix}/issue-fail" ]; then fail "$(cat "${fix}/issue-fail")"; fi
@@ -657,17 +675,22 @@ case "$ep" in
     fi
     echo '{"number": 99}' ;;
   repos/o/r) cat "${fix}/repo.json" ;;
+  repos/a/alerts)
+    if [ -f "${fix}/alert-repo-fail" ]; then fail 404; fi
+    if [ -f "${fix}/alert-repo.json" ]; then cat "${fix}/alert-repo.json"; else echo '{"default_branch": "trunk"}'; fi ;;
+  repos/a/alerts/actions/workflows/send-self-alert.yml/dispatches)
+    if [ -f "${fix}/dispatch-fail" ]; then fail 401; fi ;;
   *) echo "unexpected endpoint" >&2; exit 1 ;;
 esac`,
     });
     return { dir, bin, log, flags };
   }
 
-  function runCli(env, extra = []) {
+  function runCli(env, extra = [], extraEnv = {}) {
     return spawnSync(
       process.execPath,
       [SCRIPT, "--repo", "o/r", "--now", "2026-11-19T12:00:00Z", ...extra, "--follow-up-minutes", ""],
-      { encoding: "utf8", timeout: 20000, env: { PATH: `${env.bin}:${process.env.PATH}`, HOME: env.dir } },
+      { encoding: "utf8", timeout: 20000, env: { PATH: `${env.bin}:${process.env.PATH}`, HOME: env.dir, ...extraEnv } },
     );
   }
   const logged = (env, file) => (fs.existsSync(path.join(env.log, file)) ? fs.readFileSync(path.join(env.log, file), "utf8") : "");
@@ -932,6 +955,338 @@ esac`,
     expect(r.stdout + r.stderr).not.toContain("SECRET-RESPONSE-BODY");
     expect(writes(env)).toEqual([]);
   });
+
+  test.describe("CLI self-alert email with a stub gh and a stub GitHub App mint", () => {
+    const MINTED = "minted-token-for-tests";
+    const KEY = crypto
+      .generateKeyPairSync("rsa", { modulusLength: 2048 })
+      .privateKey.export({ type: "pkcs8", format: "pem" });
+    const KEY_LINE = KEY.split("\n")[1];
+    const DISPATCH = "repos/a/alerts/actions/workflows/send-self-alert.yml/dispatches";
+
+    // The mint (scripts/mint-app-token.js, run as a child) calls `fetch`; a
+    // preload replaces it, logs each request, and answers like GitHub. A
+    // `mint-fail` fixture holds the status to refuse with.
+    function on(env, over = {}) {
+      const preload = path.join(env.dir, "stub-fetch.js");
+      const tmp = path.join(env.dir, "tmp");
+      fs.mkdirSync(tmp, { recursive: true });
+      fs.writeFileSync(
+        preload,
+        `const fs = require("node:fs");
+globalThis.fetch = async (url, init = {}) => {
+  const auth = String((init.headers || {}).authorization || "");
+  const jwt = /^Bearer ([\\w-]+)\\.([\\w-]+)\\.([\\w-]+)$/.exec(auth);
+  fs.appendFileSync(${JSON.stringify(path.join(env.log, "fetch.log"))}, JSON.stringify({
+    url: String(url),
+    method: init.method || "GET",
+    body: init.body ? JSON.parse(init.body) : null,
+    iss: jwt ? JSON.parse(Buffer.from(jwt[2], "base64url").toString()).iss : null,
+  }) + "\\n");
+  const fail = ${JSON.stringify(path.join(env.dir, "fix", "mint-fail"))};
+  if (fs.existsSync(fail)) return new Response("SECRET-RESPONSE-BODY", { status: Number(fs.readFileSync(fail, "utf8")) });
+  return /access_tokens/.test(String(url))
+    ? new Response(JSON.stringify({ token: ${JSON.stringify(MINTED)} }), { status: 201 })
+    : new Response('{"id":42}', { status: 200 });
+};\n`,
+      );
+      return {
+        GH_TOKEN: "job-token",
+        SELF_ALERT_APP_ID: "Iv1.test",
+        SELF_ALERT_APP_PRIVATE_KEY: KEY,
+        SELF_ALERT_REPO: "a/alerts",
+        GITHUB_API_URL: "https://api.example.com",
+        NODE_OPTIONS: `--require ${preload}`,
+        TMPDIR: tmp,
+        ...over,
+      };
+    }
+    const lines = (env, file) => logged(env, file).split("\n").filter(Boolean);
+    const calls = (env) => lines(env, "tokens.log").map((l) => l.split("|"));
+    const alertCalls = (env) => calls(env).filter(([, , ep]) => ep.startsWith("repos/a/"));
+    const mints = (env) => lines(env, "fetch.log").map((l) => JSON.parse(l));
+    const bodies = (env) =>
+      fs
+        .readdirSync(env.log)
+        .filter((f) => f.startsWith("body-"))
+        .sort((a, b) => Number(a.slice(5, -5)) - Number(b.slice(5, -5)))
+        .map((f) => JSON.parse(fs.readFileSync(path.join(env.log, f), "utf8")));
+    const noSecrets = (r) => {
+      const out = r.stdout + r.stderr;
+      expect(out).not.toContain(KEY_LINE);
+      expect(out).not.toContain("SECRET-RESPONSE-BODY");
+      expect(out.split(MINTED).length - 1).toBeLessThanOrEqual(1);
+    };
+
+    test("a new issue mints one narrowed token, reads the default branch, then dispatches the workflow with the fixed text", () => {
+      const env = setup({ pulls: stuckPulls() });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(1);
+      expect(mints(env)).toEqual([
+        { url: "https://api.example.com/repos/a/alerts/installation", method: "GET", body: null, iss: "Iv1.test" },
+        {
+          url: "https://api.example.com/app/installations/42/access_tokens",
+          method: "POST",
+          body: { permissions: { actions: "write" }, repositories: ["alerts"] },
+          iss: "Iv1.test",
+        },
+      ]);
+      expect(alertCalls(env).map(([, , ep]) => ep)).toEqual(["repos/a/alerts", DISPATCH]);
+      expect(argv(env).filter((l) => l.includes(DISPATCH))).toEqual([`api ${DISPATCH} -X POST --input -`]);
+      const sent = bodies(env).find((b) => b.inputs);
+      expect(sent).toEqual({ ref: "trunk", inputs: renderSelfAlert({ repo: "o/r", prNumber: 7, issueNumber: 99 }) });
+      expect(r.stdout).toContain("self-alert email requested for pull request #7");
+      // The issue comes first: the email links to it.
+      const order = calls(env).map(([, , ep]) => ep);
+      expect(order.indexOf("repos/o/r/issues")).toBeLessThan(order.indexOf("repos/a/alerts"));
+      // The private file the mint wrote the token to is gone.
+      expect(fs.readdirSync(path.join(env.dir, "tmp"))).toEqual([]);
+    });
+
+    test("the minted token is used for the two alert calls only, masked once, and the key reaches no gh call", () => {
+      const env = setup({ pulls: stuckPulls() });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      const all = calls(env);
+      expect(all.length).toBeGreaterThan(4);
+      for (const [token, key, ep] of all) {
+        expect(token, ep).toBe(ep.startsWith("repos/a/") ? MINTED : "job-token");
+        expect(key, ep).toBe("key=");
+      }
+      // Once, and only as the runner's mask command, before the dispatch line.
+      expect(r.stdout.split(MINTED)).toHaveLength(2);
+      expect(r.stdout).toContain(`::add-mask::${MINTED}\n`);
+      expect(r.stdout.indexOf("::add-mask::")).toBeLessThan(r.stdout.indexOf("self-alert email requested"));
+      expect(r.stderr).not.toContain(MINTED);
+      expect(logged(env, "argv.log")).not.toContain(MINTED);
+      expect(logged(env, "argv.log")).not.toContain(KEY_LINE);
+      noSecrets(r);
+    });
+
+    test("the email text carries nothing the pull request author chose", () => {
+      const hostile = makePr({
+        title: "TITLE-FROM-AUTHOR",
+        head: { ref: "cms/posts/BRANCH-FROM-AUTHOR", sha: "a".repeat(40), repo: { full_name: "o/r" } },
+      });
+      const env = setup({ pulls: [hostile] });
+      expect(runCli(env, [], on(env)).status).toBe(0);
+      const sent = JSON.stringify(bodies(env).find((b) => b.inputs));
+      expect(sent).toContain("pull request #7");
+      expect(sent).not.toContain("TITLE-FROM-AUTHOR");
+      expect(sent).not.toContain("BRANCH-FROM-AUTHOR");
+      expect(sent).not.toContain("build");
+    });
+
+    test("--dry-run, an issue that already exists, and a failed issue create mint nothing and send no email", () => {
+      const dry = setup({ pulls: stuckPulls() });
+      expect(runCli(dry, ["--dry-run"], on(dry)).status).toBe(0);
+
+      const existing = setup({
+        pulls: stuckPulls(),
+        openIssues: [{ number: 50, state: "open", user: { login: "github-actions[bot]" }, body: `<!-- publish-watchdog:pr=7 sha=${SHA_A} -->` }],
+      });
+      expect(runCli(existing, [], on(existing)).status).toBe(0);
+      expect(creates(existing)).toEqual([]);
+
+      const failed = setup({ pulls: stuckPulls(), fixtures: { "issue-fail": "502" } });
+      expect(runCli(failed, [], on(failed)).status).toBe(1);
+
+      for (const env of [dry, existing, failed]) {
+        expect(mints(env)).toEqual([]);
+        expect(alertCalls(env)).toEqual([]);
+      }
+    });
+
+    test("with any of the three values missing the issue still opens, nothing is minted, and one notice says why", () => {
+      for (const missing of ["SELF_ALERT_APP_ID", "SELF_ALERT_APP_PRIVATE_KEY", "SELF_ALERT_REPO"]) {
+        const env = setup({ pulls: stuckPulls() });
+        const r = runCli(env, [], on(env, { [missing]: "" }));
+        expect(r.status, missing).toBe(0);
+        expect(creates(env)).toHaveLength(1);
+        expect(mints(env)).toEqual([]);
+        expect(alertCalls(env)).toEqual([]);
+        expect(r.stdout.match(/::notice::Self-alert email is off/g), missing).toHaveLength(1);
+        noSecrets(r);
+      }
+    });
+
+    test("with no configuration at all the run says nothing about email", () => {
+      const env = setup({ pulls: stuckPulls() });
+      const r = runCli(env);
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(1);
+      expect(alertCalls(env)).toEqual([]);
+      expect(r.stdout + r.stderr).not.toMatch(/self-alert/i);
+    });
+
+    test("a malformed repository value is a warning, no mint and no alert call", () => {
+      const env = setup({ pulls: stuckPulls() });
+      const r = runCli(env, [], on(env, { SELF_ALERT_REPO: "a/alerts/../../o/r" }));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(1);
+      expect(mints(env)).toEqual([]);
+      expect(calls(env).every(([token]) => token === "job-token")).toBe(true);
+      expect(r.stdout).toContain("::warning::SELF_ALERT_REPO is not an <owner>/<name> repository");
+    });
+
+    test("a refused mint (the App is not installed there) never fails the sweep: a status-only warning and a comment on the issue", () => {
+      const env = setup({ pulls: stuckPulls(), fixtures: { "mint-fail": "404" } });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(1);
+      expect(mints(env)).toHaveLength(1);
+      expect(alertCalls(env)).toEqual([]);
+      expect(r.stdout).toContain("::warning::The self-alert email for pull request #7 was not sent: minting the email token failed (status 404).");
+      expect(r.stdout).not.toContain("::error::");
+      const note = bodies(env).find((b) => typeof b.body === "string" && b.body.includes("was not sent"));
+      expect(note.body).toContain("minting the email token failed (status 404)");
+      expect(calls(env).filter(([, , ep]) => ep === "repos/o/r/issues/99/comments")).toEqual([
+        ["job-token", "key=", "repos/o/r/issues/99/comments"],
+      ]);
+      expect(fs.readdirSync(path.join(env.dir, "tmp"))).toEqual([]);
+      noSecrets(r);
+    });
+
+    test("a key that is not a key is the same soft failure, and its text is never printed", () => {
+      const env = setup({ pulls: stuckPulls() });
+      const r = runCli(env, [], on(env, { SELF_ALERT_APP_PRIVATE_KEY: "NOT-A-PEM-BUT-PRIVATE" }));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(1);
+      expect(mints(env)).toEqual([]);
+      expect(r.stdout).toContain("minting the email token failed (status unknown)");
+      expect(r.stdout + r.stderr).not.toContain("NOT-A-PEM-BUT-PRIVATE");
+      expect(JSON.stringify(bodies(env))).not.toContain("NOT-A-PEM-BUT-PRIVATE");
+    });
+
+    test("a rejected dispatch never fails the sweep: a status-only warning, and a comment on the issue with the job's own token", () => {
+      const env = setup({ pulls: stuckPulls(), fixtures: { "dispatch-fail": "" } });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(1);
+      expect(r.stdout).toContain("::warning::The self-alert email for pull request #7 was not sent: requesting the self-alert email failed (status 401");
+      const comment = calls(env).filter(([, , ep]) => ep === "repos/o/r/issues/99/comments");
+      expect(comment).toEqual([["job-token", "key=", "repos/o/r/issues/99/comments"]]);
+      const note = bodies(env).find((b) => typeof b.body === "string" && b.body.includes("was not sent"));
+      expect(note.body).toContain("status 401");
+      expect(note.body).not.toContain("SECRET-RESPONSE-BODY");
+      expect(note.body).not.toContain(MINTED);
+      noSecrets(r);
+    });
+
+    test("an unreadable alert repository, or one with no default branch, sends nothing and still exits 0", () => {
+      const unreadable = setup({ pulls: stuckPulls(), fixtures: { "alert-repo-fail": "" } });
+      const r1 = runCli(unreadable, [], on(unreadable));
+      expect(r1.status).toBe(0);
+      expect(alertCalls(unreadable).map(([, , ep]) => ep)).toEqual(["repos/a/alerts"]);
+      expect(r1.stdout).toContain("status 404");
+
+      const branchless = setup({ pulls: stuckPulls(), fixtures: { "alert-repo.json": {} } });
+      const r2 = runCli(branchless, [], on(branchless));
+      expect(r2.status).toBe(0);
+      expect(alertCalls(branchless).map(([, , ep]) => ep)).toEqual(["repos/a/alerts"]);
+      expect(r2.stdout).toContain("has no default branch");
+    });
+
+    test("when the comment about an unsent email also fails, the sweep still exits 0", () => {
+      const env = setup({ pulls: stuckPulls(), fixtures: { "dispatch-fail": "", "comment-fail": "" } });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      expect(r.stdout.match(/::warning::/g)).toHaveLength(2);
+      noSecrets(r);
+    });
+
+    test("a refused mint is not tried again for the next issue in the same run: one attempt, two warnings, two comments", () => {
+      const env = setup({ pulls: [makePr(), pr9()], fixtures: { "mint-fail": "503" } });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(2);
+      expect(mints(env)).toHaveLength(1);
+      expect(alertCalls(env)).toEqual([]);
+      expect(r.stdout.match(/was not sent: minting the email token failed \(status 503\)\./g)).toHaveLength(2);
+      const notes = bodies(env).filter((b) => typeof b.body === "string" && b.body.includes("was not sent"));
+      expect(notes).toHaveLength(2);
+      noSecrets(r);
+    });
+
+    test("two new issues in one run: one mint, two emails", () => {
+      const env = setup({ pulls: [makePr(), pr9()] });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(2);
+      expect(mints(env)).toHaveLength(2);
+      expect(alertCalls(env).filter(([, , ep]) => ep === DISPATCH)).toHaveLength(2);
+      const numbers = bodies(env).filter((b) => b.inputs).map((b) => /pull request #(\d+)/.exec(b.inputs.subject)[1]);
+      expect(numbers.sort()).toEqual(["7", "9"]);
+      noSecrets(r);
+    });
+  });
+});
+
+test.describe("renderSelfAlert and readSelfAlertConfig", () => {
+  test("the subject names the site and pull request and ends with the routine and the issue link", () => {
+    const { subject, body } = renderSelfAlert({ repo: "o/r", prNumber: 7, issueNumber: 99 });
+    expect(subject).toBe(
+      'Publish stuck on o/r: pull request #7 has not gone live, via "Publish watchdog" https://github.com/o/r/issues/99',
+    );
+    expect(subject).not.toContain("\n");
+    expect(body).toContain("https://github.com/o/r/issues/99");
+    expect(body).toContain("https://github.com/o/r/pull/7");
+    expect(body.length).toBeLessThan(4000);
+  });
+
+  test("a repository name too long for the 200-character cap falls back to a subject that still fits and still links", () => {
+    const repo = `${"o".repeat(39)}/${"r".repeat(60)}`;
+    const { subject } = renderSelfAlert({ repo, prNumber: 123456, issueNumber: 123457 });
+    expect(subject.length).toBeLessThanOrEqual(200);
+    expect(subject).toBe(`Publish stuck: pull request #123456, via "Publish watchdog" https://github.com/${repo}/issues/123457`);
+  });
+
+  test("the longest repository name GitHub allows still gets a subject that fits; the links stay in the body", () => {
+    const repo = `${"o".repeat(39)}/${"r".repeat(100)}`;
+    const { subject, body } = renderSelfAlert({ repo, prNumber: 123456, issueNumber: 123457 });
+    expect(subject).toBe('Publish stuck: pull request #123456, via "Publish watchdog"');
+    expect(body).toContain(`https://github.com/${repo}/issues/123457`);
+    expect(body).toContain(`https://github.com/${repo}/pull/123456`);
+    expect(body.length).toBeLessThan(4000);
+  });
+
+  test("the script's --repo still accepts what it accepted before the email step (an owner with a dot or underscore)", () => {
+    const r = spawnSync(process.execPath, [SCRIPT, "--repo", "a_b.c/r", "--grace-minutes", "x"], { encoding: "utf8" });
+    // Past the --repo check (exit 1) and on to the next usage error (exit 2).
+    expect(r.status).toBe(2);
+  });
+
+  test("the email is on only with all three values, and the key leaves the environment either way", () => {
+    const all = { SELF_ALERT_APP_ID: " Iv1.x ", SELF_ALERT_APP_PRIVATE_KEY: "KEY-TEXT", SELF_ALERT_REPO: " a/alerts " };
+    expect(readSelfAlertConfig({ ...all })).toEqual({
+      selfAlert: { appId: "Iv1.x", privateKey: "KEY-TEXT", repo: "a/alerts" },
+      note: null,
+    });
+    const env = { ...all };
+    readSelfAlertConfig(env);
+    expect(env.SELF_ALERT_APP_PRIVATE_KEY).toBeUndefined();
+
+    expect(readSelfAlertConfig({})).toEqual({ selfAlert: null, note: null });
+    for (const missing of Object.keys(all)) {
+      for (const partial of [{ ...all, [missing]: "" }, { [missing]: all[missing] }]) {
+        const got = readSelfAlertConfig(partial);
+        expect(got.selfAlert, missing).toBeNull();
+        expect(got.note, missing).toMatch(/^::notice::Self-alert email is off/);
+        expect(got.note).not.toContain("KEY-TEXT");
+        expect(partial.SELF_ALERT_APP_PRIVATE_KEY).toBeUndefined();
+      }
+    }
+    // A managed user's login carries an underscore; dots are fine in a name.
+    for (const repo of ["a_b/alerts", "a-b/al.er_ts", "A/.github"]) {
+      expect(readSelfAlertConfig({ ...all, SELF_ALERT_REPO: repo }).selfAlert.repo, repo).toBe(repo);
+    }
+    for (const repo of ["alerts", "a/alerts/x", "a/al erts", "https://github.com/a/alerts", "a/alerts?x=1", "../a", "a/..", "a/.", "-a/alerts", "_a/alerts"]) {
+      const got = readSelfAlertConfig({ ...all, SELF_ALERT_REPO: repo });
+      expect(got.selfAlert, repo).toBeNull();
+      expect(got.note, repo).toMatch(/^::warning::/);
+    }
+  });
 });
 
 test.describe("workflow files", () => {
@@ -966,6 +1321,37 @@ test.describe("workflow files", () => {
 
   test("sweep caller passes the assignees variable and no site-specific literal", () => {
     expect(sweepCaller.jobs.sweep.with.assignees).toBe("${{ vars.PUBLISH_ALERT_ASSIGNEES }}");
+  });
+
+  test("the email App key is optional, passed by name, and reaches only the sweep step's environment", () => {
+    expect(sweepReusable.on.workflow_call.secrets).toEqual({ self_alert_app_private_key: { required: false } });
+    // By name, never `secrets: inherit` (a string), and from one site secret.
+    expect(sweepCaller.jobs.sweep.secrets).toEqual({
+      self_alert_app_private_key: "${{ secrets.SELF_ALERT_APP_PRIVATE_KEY }}",
+    });
+    const steps = sweepReusable.jobs.sweep.steps;
+    const holders = steps.filter((st) => JSON.stringify(st).includes("secrets."));
+    expect(holders.map((st) => st.name)).toEqual(["Look for stuck publishes"]);
+    const sweep = holders[0];
+    expect(sweep.env.SELF_ALERT_APP_PRIVATE_KEY).toBe("${{ secrets.self_alert_app_private_key }}");
+    expect(sweep.env.SELF_ALERT_APP_ID).toBe("${{ vars.SELF_ALERT_APP_ID }}");
+    expect(sweep.env.SELF_ALERT_REPO).toBe("${{ vars.SELF_ALERT_REPO }}");
+    // The job's own token stays the default credential; the script mints and
+    // uses the App token itself. No value is ever an argument.
+    expect(sweep.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(sweep.run).not.toContain("SELF_ALERT");
+    // Exactly one reference in the whole job, and none at job or workflow level.
+    expect(JSON.stringify(sweepReusable.jobs).match(/secrets\./g)).toHaveLength(1);
+    expect(sweepReusable.jobs.sweep.env).toBeUndefined();
+    expect(sweepReusable.env).toBeUndefined();
+    // The script runs the platform's minter as a child, so both are fetched.
+    const checkout = steps.find((st) => String(st.uses || "").startsWith("actions/checkout"));
+    expect(checkout.with["sparse-checkout"].trim().split("\n").sort()).toEqual([
+      "e2e/public-content.js",
+      "scripts/mint-app-token.js",
+      "scripts/publish-watchdog.js",
+    ]);
+    expect(fs.existsSync(path.join(ROOT, "scripts/mint-app-token.js"))).toBe(true);
   });
 
   test("sweep caller serializes sweeps and never cancels one mid-write", () => {

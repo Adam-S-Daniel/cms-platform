@@ -130,6 +130,99 @@ so the alert reaches someone who does not watch the repository. Unset or empty:
 no assignee. An invalid value is a `::warning::` and no assignee, never a failed
 alert.
 
+### Stuck-publish email — a second GitHub App (optional)
+
+An issue only reaches a person whose GitHub account sends them issue
+notifications. With the three values below, each NEWLY OPENED publish-watchdog
+issue also sends an email: the sweep dispatches the `send-self-alert.yml`
+workflow in another repository (for the two current sites, the owner's
+`fastmail-actions`), and that workflow mails its owner from its own stored
+credentials. The site repository never holds a mail credential or an address.
+
+The credential is a GitHub App of its own, NOT the CMS automation App:
+
+1. Create a GitHub App owned by the owner of the alert repository
+   (Settings → Developer settings → GitHub Apps → New). Webhook: off.
+   Repository permissions: **Actions: Read and write**, nothing else. "Only on
+   this account".
+2. Generate a private key, and install the App on **only** the alert
+   repository.
+3. On each site that should send the email:
+   - `gh variable set SELF_ALERT_REPO --body <owner>/<name> -R <site>`: the
+     alert repository, which has `send-self-alert.yml` taking `subject` and
+     `body` `workflow_dispatch` inputs.
+   - `gh variable set SELF_ALERT_APP_ID --body <Client ID> -R <site>`.
+   - `gh secret set SELF_ALERT_APP_PRIVATE_KEY -R <site> < <the .pem file>`.
+
+One App serves every site that alerts the same person: the installation is
+found through the alert repository, whoever owns the site. The script mints a
+token only when an email is due (most sweeps open no issue and mint nothing),
+narrowed to that repository and `actions: write`, and uses it for two calls:
+reading the repository's default branch and dispatching the workflow. Nothing
+expires and nothing needs rotating.
+
+All three values, or none. With some missing the sweep prints a `::notice::`
+and opens issues as before; a malformed `SELF_ALERT_REPO` is a `::warning::`. A
+mint or dispatch that GitHub refuses (the App is not installed there, the
+permission was not granted) never fails the sweep: it is a `::warning::` on the
+run and a comment on the issue saying the email was not sent, with the HTTP
+status. No email is sent on a dry run, for an issue that already exists, or
+when an issue closes.
+
+**The email text is public.** Workflow inputs show in the run metadata of the
+alert repository, and that repository is public. The script builds the text
+from the site repository's name, the pull request number and the issue number
+only: never a title, a branch name, a check name or an address
+(`renderSelfAlert` in `scripts/publish-watchdog.js`). Do not add anything to it
+that is not already public.
+
+**What the App can reach, and the fences it needs.** GitHub has no permission
+for "start this one workflow". `actions: write` on a repository can:
+
+- start every `workflow_dispatch` workflow in it, with any inputs, ON ANY
+  BRANCH (the run uses that branch's copy of the workflow file, so an older
+  copy without a guard is fair game);
+- RE-RUN any past run, including one the owner or the schedule started (with
+  the original run's inputs and its copy of the workflow file);
+- cancel runs, delete runs and their logs, and disable or enable workflows
+  (the email workflow included).
+
+It cannot change code, read secrets or change settings: the App holds no
+`contents`, `workflows`, `secrets` or `administration` permission.
+
+So the alert repository itself must keep the App to sending the alert, with
+two fences. Check both exist before installing the App on a repository:
+
+1. **The mail credential is an environment secret, and the environment allows
+   only the default branch.** No repository-level copy. A guard in a workflow
+   file cannot do this job, because the dispatcher chooses which copy of the
+   file runs; an environment secret is handed only to a job that names the
+   environment, on a branch the environment allows.
+2. **Every job that can reach the mail credential and does more than send the
+   alert refuses anyone but the owner.** An App acts under its own name (`<slug>[bot]`), which is what
+   makes that possible and is one reason this is not a personal access token
+   (a token would act as its owner). The guard has to be written against a
+   re-run, where `github.actor`, `github.event_name` and the inputs are still
+   those of the ORIGINAL run and only `github.triggering_actor` and
+   `github.run_attempt` change: a manual run passes only when the owner is
+   both `github.actor` and `github.triggering_actor`; a scheduled run passes
+   on its first attempt, or when the owner re-runs it.
+
+And one piece of housekeeping: **no stale branches.** A dispatcher can run any
+workflow's copy from any branch, with that copy's `GITHUB_TOKEN` scopes, so an
+old branch that carries an older, laxer copy of a workflow with a write token
+is reachable too. Delete a branch once its pull request merges.
+
+`fastmail-actions` gets all of this in
+https://github.com/Adam-S-Daniel/fastmail-actions/pull/70 and the repository
+settings that pull request lists (not in place until both are done); a test
+there fails for any job that reads a secret without naming the environment
+and carrying the guard (or an entry in an explicit open list).
+
+Why not the CMS automation App: that App can push to `.github/workflows/*`.
+Installing it on the alert repository would let every site's key rewrite the
+workflows that hold the mail credential.
+
 Why an App and not another PAT: a fine-grained PAT cannot span owners, so the
 PAT was one token per consumer, and each expired on its own calendar — taking
 the ONLY platform down-sync path with it, on a schedule, silently
@@ -350,4 +443,5 @@ that consumer gets no bump until someone dispatches it by hand
 - [ ] ~~`CMS_PLATFORM_PAT`~~ — **retired.** Do not create it. The App above is the only push credential; a caller still passing `gh_token` fails at startup
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` when `site-params.env` sets them)
+- [ ] Optional: `SELF_ALERT_REPO` + `SELF_ALERT_APP_ID` (variables) + `SELF_ALERT_APP_PRIVATE_KEY` (secret) — a stuck publish also sends an email ("Stuck-publish email" above)
 - [ ] Settings → General → **Allow auto-merge** = ON

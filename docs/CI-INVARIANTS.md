@@ -2059,6 +2059,39 @@ label (and without assignees) only on HTTP 422. The repository variable
 `PUBLISH_ALERT_ASSIGNEES` optionally assigns the alert
 (`docs/CONSUMER-PROVISIONING.md`).
 
+**Email (optional).** With the `SELF_ALERT_APP_PRIVATE_KEY` secret and the
+`SELF_ALERT_APP_ID` and `SELF_ALERT_REPO` variables, each newly opened issue
+also dispatches `send-self-alert.yml` in that repository, which emails its
+owner (`docs/CONSUMER-PROVISIONING.md` § "Stuck-publish email"). The rules the
+tests lock:
+
+- **One email per new issue**, sent after the issue exists (the email links to
+  it). None on a dry run, for an existing issue, on a failed create, or on a
+  close.
+- **A GitHub App of its own, not the job's token and not a PAT.** The reusable
+  declares the key as an optional named secret; the caller maps it by name
+  (never `secrets: inherit`); it reaches only the sweep step's environment,
+  never an argument. The script reads it once and removes it from its
+  environment, so no `gh` call inherits it.
+- **Minted late and narrow.** `scripts/mint-app-token.js` runs as a child only
+  when an email is due, at most once per run whether it succeeds or fails (a
+  failed mint is not retried for the next issue: each try can wait out a
+  30-second timeout inside a 30-minute job), for that one repository and
+  `actions: write`. The token goes to exactly two calls (the read of that
+  repository's default branch, and the dispatch); every other call keeps the
+  job's token. It is masked before any later line is printed, and the private
+  file the minter writes it to is removed.
+- **No pull-request-controlled code near it.** The sweep runs on
+  `repository_dispatch`, `schedule` and `workflow_dispatch`, checks out no site
+  content, and runs the script at the platform commit the caller pinned.
+- **The email text is public and fixed**: site repository name, pull request
+  number, issue number, two links. Nothing a pull request author chooses.
+- **Fail-open.** A value missing is a `::notice::`; a malformed repository
+  value (it becomes an API path, so `.`/`..` segments are refused) is a
+  `::warning::`; a refused mint or dispatch is a status-only `::warning::` plus
+  a comment on the issue. None of them fails the sweep, and the minter's own
+  log is never forwarded.
+
 **Test fixtures are ignored** (every changed file under `_e2e/`, named `e2e-*`,
 or an e2e-slug post under `_posts/`; an unreadable or empty file list is not
 "all fixtures"), as are `on-hold` and `automated-test` PRs, drafts and unarmed

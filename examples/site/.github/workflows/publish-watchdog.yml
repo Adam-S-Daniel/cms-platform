@@ -51,3 +51,7 @@ jobs:
       # site-specific value. Empty means issues are not assigned.
       assignees: ${{ vars.PUBLISH_ALERT_ASSIGNEES }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run) || false }}
+    secrets:
+      # Optional: the key of the GitHub App that may start the email workflow.
+      # Unset means issues are opened without an email.
+      self_alert_app_private_key: ${{ secrets.SELF_ALERT_APP_PRIVATE_KEY }}
