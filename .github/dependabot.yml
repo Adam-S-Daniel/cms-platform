@@ -46,6 +46,8 @@ updates:
     # it is eligible, and the group PR only collects those that have.
     cooldown:
       default-days: 7
+      # Own actions are gated by their own required checks, so they skip the wait.
+      exclude: ["Adam-S-Daniel/*", "jodidaniel/*"]
     # GROUPING — minor+patch version updates collapse into ONE PR, majors do
     # not. Measured 2026-09-28: in 8 of the 11 weekly runs that opened any
     # github-actions PR since 2026-06-03, Dependabot opened 2-4 at once (2026-06-30: 4;
@@ -62,6 +64,9 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: "/e2e"
     schedule:
@@ -130,3 +135,16 @@ updates:
         applies-to: security-updates
         patterns: ["*"]
         exclude-patterns: ["@playwright/test"]
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: npm
+    directory: "/.githooks/dated-phrasing"
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
