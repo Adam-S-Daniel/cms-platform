@@ -648,7 +648,11 @@ Resources:
   #               because both render paths inject per-site window.CMS_*
   #               into inline scripts, so a hash would differ per site and
   #               per render and would have to be redeployed on every bump.
-  #   style-src   Decap injects inline styles.
+  #   style-src   Decap injects inline styles. The apex, because Decap's
+  #               preview pane links the site's own /assets/css/main.css
+  #               (preview-pane.js); on admin.<apex> that path redirects to
+  #               the apex, and a policy is checked against the redirect
+  #               target, so without it the pane renders unstyled.
   #   connect-src the GitHub API, githubstatus.com (Decap's status probe),
   #               and the apex + its subdomains (commit.json, config.yml, the
   #               dashboards' preview-pr<N> regression.json). The OAuth proxy
@@ -692,7 +696,7 @@ Resources:
           ContentSecurityPolicy:
             ContentSecurityPolicy: !If
               - AdminCspEnforced
-              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+              - !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline' https://${ProductionDomainName}; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
               - "frame-ancestors 'self'"
             Override: true
         CustomHeadersConfig: !If
@@ -700,7 +704,7 @@ Resources:
           - !Ref AWS::NoValue
           - Items:
               - Header: Content-Security-Policy-Report-Only
-                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName}; object-src 'none'; base-uri 'none'"
+                Value: !Sub "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; style-src 'self' 'unsafe-inline' https://${ProductionDomainName}; img-src 'self' data: blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://avatars.githubusercontent.com; media-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName}; connect-src 'self' blob: https://${ProductionDomainName} https://*.${ProductionDomainName} https://api.github.com https://www.githubstatus.com; font-src 'self' data:; frame-src 'self' https://${ProductionDomainName} https://*.${ProductionDomainName}; object-src 'none'; base-uri 'none'"
                 Override: true
 
   # CORS for the visual-regression stats (cms-platform#789). The /admin/reviews

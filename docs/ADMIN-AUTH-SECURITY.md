@@ -834,7 +834,7 @@ The full `/admin` policy, and why each part is there:
 - `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com` — Decap
   (SRI-pinned) calls `new Function`; the shells' inline scripts carry
   per-site `window.CMS_*`, so a hash would differ per site and render path.
-- `style-src 'self' 'unsafe-inline'` — Decap injects inline styles.
+- `style-src 'self' 'unsafe-inline' https://<apex>` — Decap injects inline styles, and its preview pane links the site's own `/assets/css/main.css`, which on `admin.<apex>` redirects to the apex. A policy is checked against the redirect target, so without the apex the pane renders unstyled.
 - `connect-src 'self' blob: https://<apex> https://*.<apex> https://api.github.com
   https://www.githubstatus.com` — no bare `https:`. The subdomains cover the
   dashboards' `preview-pr<N>` `regression.json`; githubstatus.com is Decap's
