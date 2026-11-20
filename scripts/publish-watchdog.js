@@ -538,15 +538,21 @@ function createIssue(repo, pr, verdict, issueLabel, workLabel, assignees) {
 // what starting a workflow needs.
 const SELF_ALERT_WORKFLOW = "send-self-alert.yml";
 const SELF_ALERT_SUBJECT_MAX = 200;
-// An owner login and a repository name, as GitHub allows them. The value is
-// placed in an API path, so `.` and `..` segments are refused.
-const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/;
+// An owner login and a repository name, as GitHub allows them (a managed
+// user's login may carry `_`). The value is placed in an API path, so `.` and
+// `..` segments are refused.
+const SELF_ALERT_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/;
 
 function renderSelfAlert({ repo, prNumber, issueNumber }) {
   const issueUrl = `https://github.com/${repo}/issues/${issueNumber}`;
   const tail = `, via "Publish watchdog" ${issueUrl}`;
-  let subject = `Publish stuck on ${repo}: pull request #${prNumber} has not gone live${tail}`;
-  if (subject.length > SELF_ALERT_SUBJECT_MAX) subject = `Publish stuck: pull request #${prNumber}${tail}`;
+  // The longest form that fits the workflow's 200-character cap. The last one
+  // always does; the body carries both links either way.
+  const subject = [
+    `Publish stuck on ${repo}: pull request #${prNumber} has not gone live${tail}`,
+    `Publish stuck: pull request #${prNumber}${tail}`,
+    `Publish stuck: pull request #${prNumber}, via "Publish watchdog"`,
+  ].find((candidate, at, all) => candidate.length <= SELF_ALERT_SUBJECT_MAX || at === all.length - 1);
   const body = [
     `A change published from the editor on ${repo} has not gone live.`,
     "",
@@ -563,10 +569,24 @@ function renderSelfAlert({ repo, prNumber, issueNumber }) {
 // Runs scripts/mint-app-token.js (the platform's one App-token minter) as a
 // child and returns the token. The child writes the token to the file named by
 // GITHUB_OUTPUT, so it gets a private file of its own here, removed afterwards;
-// its log is not forwarded (a failure reports the HTTP status only). Cached on
-// `selfAlert` for the rest of the run: a token lasts an hour, a job 30 minutes.
+// its log is not forwarded (a failure reports the HTTP status only). The
+// outcome is kept on `selfAlert` for the rest of the run, success or failure:
+// a token lasts an hour and a job 30 minutes, and a mint that failed once is
+// not tried again for the next issue (each try can wait out a 30-second
+// timeout, inside a job with a fixed budget).
 function mintSelfAlertToken(selfAlert) {
   if (selfAlert.token) return selfAlert.token;
+  if (selfAlert.mintError) throw new Error(selfAlert.mintError);
+  try {
+    selfAlert.token = runSelfAlertMint(selfAlert);
+  } catch (err) {
+    selfAlert.mintError = err.message;
+    throw err;
+  }
+  return selfAlert.token;
+}
+
+function runSelfAlertMint(selfAlert) {
   const [owner, name] = selfAlert.repo.split("/");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "publish-watchdog-"));
   const out = path.join(dir, "output");
@@ -603,7 +623,6 @@ function mintSelfAlertToken(selfAlert) {
     if (!m) throw new Error("minting the email token returned no token");
     // The runner hides this value in every later log line.
     console.log(`::add-mask::${m[1]}`);
-    selfAlert.token = m[1];
     return m[1];
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -617,7 +636,6 @@ function sendSelfAlert(selfAlert, { repo, prNumber, issueNumber }) {
   if (!selfAlert || !Number.isInteger(issueNumber)) return;
   try {
     const { subject, body } = renderSelfAlert({ repo, prNumber, issueNumber });
-    if (subject.length > SELF_ALERT_SUBJECT_MAX) throw new Error("the subject is too long");
     const token = mintSelfAlertToken(selfAlert);
     const target = ghApi("reading the self-alert repository", `repos/${selfAlert.repo}`, { token });
     const ref = target && target.default_branch;
@@ -663,7 +681,7 @@ function readSelfAlertConfig(env) {
         "SELF_ALERT_APP_ID and SELF_ALERT_REPO variables, all three. Issues are still opened.",
     };
   }
-  if (!REPO_RE.test(repo)) {
+  if (!SELF_ALERT_REPO_RE.test(repo)) {
     return {
       selfAlert: null,
       note: "::warning::SELF_ALERT_REPO is not an <owner>/<name> repository; self-alert email is off.",
@@ -805,7 +823,7 @@ async function main(argv) {
   // Read (and drop from the environment) before anything else runs.
   const { selfAlert, note: selfAlertNote } = readSelfAlertConfig(process.env);
   const repo = flag(argv, "--repo");
-  if (!repo || !REPO_RE.test(repo)) {
+  if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
     console.error("::error::publish-watchdog needs --repo <owner>/<name>.");
     return 1;
   }

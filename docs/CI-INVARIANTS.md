@@ -2074,7 +2074,9 @@ tests lock:
   never an argument. The script reads it once and removes it from its
   environment, so no `gh` call inherits it.
 - **Minted late and narrow.** `scripts/mint-app-token.js` runs as a child only
-  when an email is due, once per run, for that one repository and
+  when an email is due, at most once per run whether it succeeds or fails (a
+  failed mint is not retried for the next issue: each try can wait out a
+  30-second timeout inside a 30-minute job), for that one repository and
   `actions: write`. The token goes to exactly two calls (the read of that
   repository's default branch, and the dispatch); every other call keeps the
   job's token. It is masked before any later line is printed, and the private

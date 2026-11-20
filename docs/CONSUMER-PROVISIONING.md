@@ -177,15 +177,27 @@ only: never a title, a branch name, a check name or an address
 that is not already public.
 
 **What the App can reach, and the fence it needs.** GitHub has no permission
-for "start this one workflow": `actions: write` on a repository can start
-every `workflow_dispatch` workflow in it. So the alert repository itself must
-refuse the App on its other workflows. An App acts under its own name
-(`<slug>[bot]`), which is what makes that possible and is one reason this is
-not a personal access token (a token would act as its owner): each sensitive
-workflow there carries a job-level `if` that lets only a scheduled run or the
-repository owner through. Check that fence exists before installing the App on
-a repository. The App holds no `contents` or `workflows` permission, so it
-cannot change code or read secrets there.
+for "start this one workflow". `actions: write` on a repository can:
+
+- start every `workflow_dispatch` workflow in it, with any inputs;
+- RE-RUN any past run, including one the owner or the schedule started;
+- cancel runs, delete runs and their logs, and disable or enable workflows
+  (the email workflow included).
+
+It cannot change code, read secrets or change settings: the App holds no
+`contents`, `workflows`, `secrets` or `administration` permission.
+
+So the alert repository itself must refuse the App on every workflow that does
+more than send the alert. An App acts under its own name (`<slug>[bot]`), which
+is what makes that possible and is one reason this is not a personal access
+token (a token would act as its owner). The guard has to be written against a
+re-run, where `github.actor` and `github.event_name` are still those of the
+ORIGINAL run and only `github.triggering_actor` and `github.run_attempt`
+change. Each sensitive job there begins with a step that fails unless
+`github.triggering_actor` is the repository owner, or the event is `schedule`
+AND it is the first attempt. A test in that repository fails for any job that
+reads a secret and has neither that guard nor an entry in an explicit open
+list. Check the fence exists before installing the App on a repository.
 
 Why not the CMS automation App: that App can push to `.github/workflows/*`.
 Installing it on the alert repository would let every site's key rewrite the

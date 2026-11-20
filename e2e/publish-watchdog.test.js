@@ -613,8 +613,14 @@ test.describe("CLI with a stub gh", () => {
   const pr9 = () => makePr({ number: 9, head: { ref: "cms/posts/other", sha: SHA_D, repo: { full_name: "o/r" } } });
 
   // `fixtures` maps a file name under fix/ to JSON (or a string for a raw file).
+  const made = [];
+  test.afterAll(() => {
+    for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   function setup({ pulls, openIssues = [], fixtures = {}, flags = [] } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-"));
+    made.push(dir);
     const fix = path.join(dir, "fix");
     const log = path.join(dir, "log");
     fs.mkdirSync(fix);
@@ -1190,6 +1196,19 @@ globalThis.fetch = async (url, init = {}) => {
       noSecrets(r);
     });
 
+    test("a refused mint is not tried again for the next issue in the same run: one attempt, two warnings, two comments", () => {
+      const env = setup({ pulls: [makePr(), pr9()], fixtures: { "mint-fail": "503" } });
+      const r = runCli(env, [], on(env));
+      expect(r.status).toBe(0);
+      expect(creates(env)).toHaveLength(2);
+      expect(mints(env)).toHaveLength(1);
+      expect(alertCalls(env)).toEqual([]);
+      expect(r.stdout.match(/was not sent: minting the email token failed \(status 503\)\./g)).toHaveLength(2);
+      const notes = bodies(env).filter((b) => typeof b.body === "string" && b.body.includes("was not sent"));
+      expect(notes).toHaveLength(2);
+      noSecrets(r);
+    });
+
     test("two new issues in one run: one mint, two emails", () => {
       const env = setup({ pulls: [makePr(), pr9()] });
       const r = runCli(env, [], on(env));
@@ -1223,6 +1242,21 @@ test.describe("renderSelfAlert and readSelfAlertConfig", () => {
     expect(subject).toBe(`Publish stuck: pull request #123456, via "Publish watchdog" https://github.com/${repo}/issues/123457`);
   });
 
+  test("the longest repository name GitHub allows still gets a subject that fits; the links stay in the body", () => {
+    const repo = `${"o".repeat(39)}/${"r".repeat(100)}`;
+    const { subject, body } = renderSelfAlert({ repo, prNumber: 123456, issueNumber: 123457 });
+    expect(subject).toBe('Publish stuck: pull request #123456, via "Publish watchdog"');
+    expect(body).toContain(`https://github.com/${repo}/issues/123457`);
+    expect(body).toContain(`https://github.com/${repo}/pull/123456`);
+    expect(body.length).toBeLessThan(4000);
+  });
+
+  test("the script's --repo still accepts what it accepted before the email step (an owner with a dot or underscore)", () => {
+    const r = spawnSync(process.execPath, [SCRIPT, "--repo", "a_b.c/r", "--grace-minutes", "x"], { encoding: "utf8" });
+    // Past the --repo check (exit 1) and on to the next usage error (exit 2).
+    expect(r.status).toBe(2);
+  });
+
   test("the email is on only with all three values, and the key leaves the environment either way", () => {
     const all = { SELF_ALERT_APP_ID: " Iv1.x ", SELF_ALERT_APP_PRIVATE_KEY: "KEY-TEXT", SELF_ALERT_REPO: " a/alerts " };
     expect(readSelfAlertConfig({ ...all })).toEqual({
@@ -1243,7 +1277,11 @@ test.describe("renderSelfAlert and readSelfAlertConfig", () => {
         expect(partial.SELF_ALERT_APP_PRIVATE_KEY).toBeUndefined();
       }
     }
-    for (const repo of ["alerts", "a/alerts/x", "a/al erts", "https://github.com/a/alerts", "a/alerts?x=1", "../a", "a/..", "a/.", "-a/alerts", "a_b/alerts"]) {
+    // A managed user's login carries an underscore; dots are fine in a name.
+    for (const repo of ["a_b/alerts", "a-b/al.er_ts", "A/.github"]) {
+      expect(readSelfAlertConfig({ ...all, SELF_ALERT_REPO: repo }).selfAlert.repo, repo).toBe(repo);
+    }
+    for (const repo of ["alerts", "a/alerts/x", "a/al erts", "https://github.com/a/alerts", "a/alerts?x=1", "../a", "a/..", "a/.", "-a/alerts", "_a/alerts"]) {
       const got = readSelfAlertConfig({ ...all, SELF_ALERT_REPO: repo });
       expect(got.selfAlert, repo).toBeNull();
       expect(got.note, repo).toMatch(/^::warning::/);
