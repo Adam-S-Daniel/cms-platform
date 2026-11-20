@@ -102,6 +102,22 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-11-12 — cms-platform/aws-bootstrap — edit
+
+- Motivation: the prompt-audit findings in https://github.com/Adam-S-Daniel/cms-platform/issues/989: a history narrative inside a rule and an inline code span broken across a line.
+- Change: the rule stays with a pointer to the v0.1.13 entry in `docs/VERSION-HISTORY.md`, and the `deploy.sh` code span is on one line. Frontmatter untouched.
+- Eval: exempt (DESIGN.md non-coverage table)
+- Outcome: pending merge.
+
+---
+
+## 2026-11-12 — cms-platform/browser-testing — edit
+
+- Change: two stale facts corrected to match the same file's earlier lines and `e2e/ci-matrix.js`: CI runs 14 project jobs, not 10, and sets `150%` workers (Playwright's CPU default applies only locally). From https://github.com/Adam-S-Daniel/cms-platform/issues/989.
+- Eval: wording-only: two descriptive sentences corrected; no rule, command or trigger changed, and the frontmatter is untouched.
+
+---
+
 ## 2026-11-13 — cms-platform/platform-release-and-bump — edit
 
 - Motivation: the skill's one pointer to `github-actions-sha-pinning` would dangle once that skill is removed (the entry below).
