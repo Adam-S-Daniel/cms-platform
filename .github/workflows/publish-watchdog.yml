@@ -32,6 +32,13 @@
 # is caught without waiting for the cron. The 60-minute stall rule is NOT
 # covered by the follow-ups.
 #
+# EMAIL (optional): with the `self_alert_app_private_key` secret and the
+# SELF_ALERT_APP_ID and SELF_ALERT_REPO repository variables, each newly opened
+# issue also dispatches `send-self-alert.yml` in that repository, which emails
+# its owner. A failed mint or dispatch is a warning on the run and a comment on
+# the issue; it never fails the sweep. See docs/CONSUMER-PROVISIONING.md
+# "Stuck-publish email".
+#
 # TRIGGERS (in the caller): a `repository_dispatch` knock sent by
 # publish-watchdog-signal.yml (a gating check failed, or a production deploy
 # succeeded) and a 6-hourly catch-all. There is deliberately no pull_request
@@ -59,6 +66,17 @@ on:
       issue_label:   { type: string, default: "publish-stuck" }
       work_label:    { type: string, default: "agent-ready" }
       dry_run:       { type: boolean, default: false }
+    secrets:
+      # Optional. The private key of a GitHub App that is installed ONLY on the
+      # repository named by the SELF_ALERT_REPO variable, with "Actions: Read
+      # and write" and nothing else; SELF_ALERT_APP_ID is its Client ID. With
+      # all three, each NEWLY OPENED issue also sends an email; without them,
+      # issues are opened as before. The key is named explicitly (never
+      # `secrets: inherit`) and reaches only the sweep step's environment. The
+      # script mints a token from it only when an email is due. That repository
+      # is public, so the email text is too: the script builds it from the
+      # site's name and two numbers only.
+      self_alert_app_private_key: { required: false }
 
 # Reusable-workflow permissions are capped by the CALLER's grant.
 permissions:
@@ -144,6 +162,7 @@ jobs:
           ref: ${{ steps.self.outputs.sha }}
           sparse-checkout: |
             scripts/publish-watchdog.js
+            scripts/mint-app-token.js
             e2e/public-content.js
           sparse-checkout-cone-mode: false
           path: .cms-platform
@@ -181,6 +200,9 @@ jobs:
           WATCHDOG_LABEL: ${{ inputs.issue_label }}
           WATCHDOG_WORK_LABEL: ${{ inputs.work_label }}
           WATCHDOG_DRY_RUN: ${{ inputs.dry_run }}
+          SELF_ALERT_APP_ID: ${{ vars.SELF_ALERT_APP_ID }}
+          SELF_ALERT_APP_PRIVATE_KEY: ${{ secrets.self_alert_app_private_key }}
+          SELF_ALERT_REPO: ${{ vars.SELF_ALERT_REPO }}
         run: |
           args=(--repo "$WATCHDOG_REPO" --issue-label "$WATCHDOG_LABEL" --work-label "$WATCHDOG_WORK_LABEL" --grace-minutes "$WATCHDOG_GRACE_MINUTES" --stall-minutes "$WATCHDOG_STALL_MINUTES" --follow-up-minutes "$WATCHDOG_FOLLOW_UPS" --assignees "$WATCHDOG_ASSIGNEES")
           if [[ "$WATCHDOG_DRY_RUN" == "true" ]]; then args+=(--dry-run); fi

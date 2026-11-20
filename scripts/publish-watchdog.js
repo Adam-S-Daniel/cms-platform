@@ -32,7 +32,15 @@
  * Usage: node scripts/publish-watchdog.js --repo <owner>/<name> [--dry-run]
  *   [--grace-minutes N] [--stall-minutes N] [--issue-label L] [--work-label L]
  *   [--follow-up-minutes "5,16"] [--assignees login,login] [--now <ISO time>]
+ *
+ * Environment (optional, all three or none): SELF_ALERT_APP_ID,
+ * SELF_ALERT_APP_PRIVATE_KEY and SELF_ALERT_REPO. With all three, each newly
+ * opened issue also asks <SELF_ALERT_REPO>'s send-self-alert.yml workflow to
+ * email its owner, as a GitHub App installed on that repository. The key comes
+ * in by environment only, never argv (argv shows in `ps`).
  */
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { hasE2eSlugSignature } = require("../e2e/public-content.js");
@@ -377,7 +385,9 @@ function ghError(what, err) {
   return e;
 }
 
-function ghApi(what, endpoint, { method, body } = {}) {
+// `token` replaces the credential for this ONE call (the self-alert dispatch,
+// which goes to another repository); every other call uses the job's own.
+function ghApi(what, endpoint, { method, body, token } = {}) {
   const args = ["api", endpoint];
   if (method) args.push("-X", method);
   if (body !== undefined) args.push("--input", "-");
@@ -388,6 +398,7 @@ function ghApi(what, endpoint, { method, body } = {}) {
       timeout: GH_TIMEOUT_MS,
       input: body !== undefined ? JSON.stringify(body) : undefined,
       stdio: ["pipe", "pipe", "pipe"],
+      ...(token ? { env: { ...process.env, GH_TOKEN: token } } : {}),
     });
     return out.trim() ? JSON.parse(out) : null;
   } catch (err) {
@@ -510,6 +521,155 @@ function createIssue(repo, pr, verdict, issueLabel, workLabel, assignees) {
     });
   }
   console.log(`  opened issue #${created && created.number} for pull request #${pr.number}`);
+  return created && Number.isInteger(created.number) ? created.number : null;
+}
+
+// ---- Self-alert email ----
+//
+// The issue is the alert of record; this asks a second repository's
+// `send-self-alert.yml` workflow to email its owner about it. That repository
+// is PUBLIC, so the subject and body below are public too: they carry the
+// site repository's name, two numbers and two links, and nothing a pull
+// request author controls (no title, branch or check name).
+//
+// The credential is a GitHub App installed on that repository only. A token is
+// minted when the first email of a run is needed (most runs open no issue and
+// mint nothing), narrowed to that one repository and `actions: write`, which is
+// what starting a workflow needs.
+const SELF_ALERT_WORKFLOW = "send-self-alert.yml";
+const SELF_ALERT_SUBJECT_MAX = 200;
+// An owner login and a repository name, as GitHub allows them. The value is
+// placed in an API path, so `.` and `..` segments are refused.
+const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/;
+
+function renderSelfAlert({ repo, prNumber, issueNumber }) {
+  const issueUrl = `https://github.com/${repo}/issues/${issueNumber}`;
+  const tail = `, via "Publish watchdog" ${issueUrl}`;
+  let subject = `Publish stuck on ${repo}: pull request #${prNumber} has not gone live${tail}`;
+  if (subject.length > SELF_ALERT_SUBJECT_MAX) subject = `Publish stuck: pull request #${prNumber}${tail}`;
+  const body = [
+    `A change published from the editor on ${repo} has not gone live.`,
+    "",
+    `What was found: ${issueUrl}`,
+    `Pull request: https://github.com/${repo}/pull/${prNumber}`,
+    "",
+    "What to do: open the issue. It lists the checks that failed or are still waiting. " +
+      "Nothing was lost; the content is still in the editor. " +
+      "The issue closes by itself when the change goes live.",
+  ].join("\n");
+  return { subject, body };
+}
+
+// Runs scripts/mint-app-token.js (the platform's one App-token minter) as a
+// child and returns the token. The child writes the token to the file named by
+// GITHUB_OUTPUT, so it gets a private file of its own here, removed afterwards;
+// its log is not forwarded (a failure reports the HTTP status only). Cached on
+// `selfAlert` for the rest of the run: a token lasts an hour, a job 30 minutes.
+function mintSelfAlertToken(selfAlert) {
+  if (selfAlert.token) return selfAlert.token;
+  const [owner, name] = selfAlert.repo.split("/");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "publish-watchdog-"));
+  const out = path.join(dir, "output");
+  try {
+    fs.writeFileSync(out, "", { mode: 0o600 });
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          path.join(__dirname, "mint-app-token.js"),
+          "--owner", owner,
+          "--repo", name,
+          "--repositories", name,
+          "--permissions", "actions=write",
+        ],
+        {
+          encoding: "utf8",
+          timeout: GH_TIMEOUT_MS,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            APP_CLIENT_ID: selfAlert.appId,
+            APP_ID: "",
+            APP_PRIVATE_KEY: selfAlert.privateKey,
+            GITHUB_OUTPUT: out,
+          },
+        },
+      );
+    } catch (err) {
+      const m = /HTTP (\d{3})/.exec(String((err && err.stdout) || ""));
+      throw new Error(`minting the email token failed (status ${m ? m[1] : "unknown"})`);
+    }
+    const m = /^token=(\S+)$/m.exec(fs.readFileSync(out, "utf8"));
+    if (!m) throw new Error("minting the email token returned no token");
+    // The runner hides this value in every later log line.
+    console.log(`::add-mask::${m[1]}`);
+    selfAlert.token = m[1];
+    return m[1];
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Never throws: a failed email must not fail the sweep or hide the issue. The
+// failure is a warning on the run AND a comment on the issue, so a broken
+// credential is seen by whoever opens the alert.
+function sendSelfAlert(selfAlert, { repo, prNumber, issueNumber }) {
+  if (!selfAlert || !Number.isInteger(issueNumber)) return;
+  try {
+    const { subject, body } = renderSelfAlert({ repo, prNumber, issueNumber });
+    if (subject.length > SELF_ALERT_SUBJECT_MAX) throw new Error("the subject is too long");
+    const token = mintSelfAlertToken(selfAlert);
+    const target = ghApi("reading the self-alert repository", `repos/${selfAlert.repo}`, { token });
+    const ref = target && target.default_branch;
+    if (typeof ref !== "string" || ref === "") throw new Error("the self-alert repository has no default branch");
+    ghApi(
+      "requesting the self-alert email",
+      `repos/${selfAlert.repo}/actions/workflows/${SELF_ALERT_WORKFLOW}/dispatches`,
+      { method: "POST", body: { ref, inputs: { subject, body } }, token },
+    );
+    console.log(`  self-alert email requested for pull request #${prNumber}`);
+  } catch (err) {
+    console.log(`::warning::The self-alert email for pull request #${prNumber} was not sent: ${err.message}.`);
+    try {
+      ghApi(`noting the unsent email on issue #${issueNumber}`, `repos/${repo}/issues/${issueNumber}/comments`, {
+        method: "POST",
+        body: {
+          body:
+            `The alert email for this issue was not sent (${err.message}). ` +
+            "See \"Stuck-publish email\" in the platform's docs/CONSUMER-PROVISIONING.md.",
+        },
+      });
+    } catch (noteErr) {
+      console.log(`::warning::${noteErr.message}.`);
+    }
+  }
+}
+
+// The email is on only when ALL THREE values are present. The key is read here
+// once and removed from the environment, so no other child process inherits
+// it; only the minting child is handed it.
+function readSelfAlertConfig(env) {
+  const appId = (env.SELF_ALERT_APP_ID || "").trim();
+  const privateKey = env.SELF_ALERT_APP_PRIVATE_KEY || "";
+  const repo = (env.SELF_ALERT_REPO || "").trim();
+  delete env.SELF_ALERT_APP_PRIVATE_KEY;
+  const present = [appId, privateKey, repo].filter((v) => v !== "").length;
+  if (present === 0) return { selfAlert: null, note: null };
+  if (present < 3) {
+    return {
+      selfAlert: null,
+      note:
+        "::notice::Self-alert email is off: it needs the SELF_ALERT_APP_PRIVATE_KEY secret and the " +
+        "SELF_ALERT_APP_ID and SELF_ALERT_REPO variables, all three. Issues are still opened.",
+    };
+  }
+  if (!REPO_RE.test(repo)) {
+    return {
+      selfAlert: null,
+      note: "::warning::SELF_ALERT_REPO is not an <owner>/<name> repository; self-alert email is off.",
+    };
+  }
+  return { selfAlert: { appId, privateKey, repo }, note: null };
 }
 
 function closeWatchdogIssue(repo, issueNumber, prNumber, body) {
@@ -555,7 +715,7 @@ const SINCE_DAYS = 14;
 // One full sweep: read, plan, act. Resolves { pending }; throws on a failure that
 // stops the pass (listing pull requests or issues, an issue write, or every
 // armed pull request unreadable).
-function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinutes, stallMinutes, nowMs }) {
+function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinutes, stallMinutes, nowMs, selfAlert }) {
   const all = listPages("listing open pull requests", `repos/${repo}/pulls?state=open`);
   const candidates = all.filter(
     (pr) =>
@@ -629,7 +789,10 @@ function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinute
     console.log("Dry run: nothing written.");
     return { pending: plan.pending };
   }
-  for (const { pr, verdict } of plan.open) createIssue(repo, pr, verdict, issueLabel, workLabel, assignees);
+  for (const { pr, verdict } of plan.open) {
+    const issueNumber = createIssue(repo, pr, verdict, issueLabel, workLabel, assignees);
+    sendSelfAlert(selfAlert, { repo, prNumber: pr.number, issueNumber });
+  }
   const bodyOf = new Map(issues.map((i) => [i.number, i.body]));
   for (const c of plan.close) closeWatchdogIssue(repo, c.issueNumber, c.prNumber, bodyOf.get(c.issueNumber));
   if (armed.length > 0 && skipped.length === armed.length) {
@@ -639,8 +802,10 @@ function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinute
 }
 
 async function main(argv) {
+  // Read (and drop from the environment) before anything else runs.
+  const { selfAlert, note: selfAlertNote } = readSelfAlertConfig(process.env);
   const repo = flag(argv, "--repo");
-  if (!repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+  if (!repo || !REPO_RE.test(repo)) {
     console.error("::error::publish-watchdog needs --repo <owner>/<name>.");
     return 1;
   }
@@ -674,11 +839,22 @@ async function main(argv) {
     return 1;
   }
   const now = () => (fixedNow === null ? Date.now() : fixedNow);
+  if (selfAlertNote) console.log(selfAlertNote);
 
   const result = await sweepWithFollowUps({
     runOnce: async () => {
       try {
-        return sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinutes, stallMinutes, nowMs: now() });
+        return sweepOnce({
+          repo,
+          dryRun,
+          issueLabel,
+          workLabel,
+          assignees,
+          graceMinutes,
+          stallMinutes,
+          nowMs: now(),
+          selfAlert,
+        });
       } catch (err) {
         console.error(`::error::${err.message}`);
         throw err;
@@ -698,6 +874,8 @@ module.exports = {
   renderIssue,
   planSweep,
   sweepWithFollowUps,
+  renderSelfAlert,
+  readSelfAlertConfig,
   isTestFixturePath,
   DEFAULT_GRACE_MINUTES,
   DEFAULT_STALL_MINUTES,
