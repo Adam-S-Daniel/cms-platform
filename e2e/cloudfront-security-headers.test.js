@@ -329,6 +329,9 @@ test.describe("CloudFront security headers (cms-platform#515)", () => {
       "https://www.githubstatus.com",
     ]);
     expect(d.get("script-src")).toContain("https://unpkg.com");
+    // Decap's preview pane links the site's /assets/css/main.css; on the
+    // admin host that path redirects to the apex.
+    expect(d.get("style-src")).toEqual(["'self'", "'unsafe-inline'", `https://${APEX}`]);
     for (const [name, sources] of d) {
       for (const src of sources) {
         expect(src, `${name}: a bare wildcard allows every host`).not.toBe("*");
