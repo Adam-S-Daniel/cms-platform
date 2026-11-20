@@ -198,8 +198,8 @@ two fences. Check both exist before installing the App on a repository:
    file cannot do this job, because the dispatcher chooses which copy of the
    file runs; an environment secret is handed only to a job that names the
    environment, on a branch the environment allows.
-2. **Every job that does more than send the alert refuses anyone but the
-   owner.** An App acts under its own name (`<slug>[bot]`), which is what
+2. **Every job that can reach the mail credential and does more than send the
+   alert refuses anyone but the owner.** An App acts under its own name (`<slug>[bot]`), which is what
    makes that possible and is one reason this is not a personal access token
    (a token would act as its owner). The guard has to be written against a
    re-run, where `github.actor`, `github.event_name` and the inputs are still
@@ -208,9 +208,16 @@ two fences. Check both exist before installing the App on a repository:
    both `github.actor` and `github.triggering_actor`; a scheduled run passes
    on its first attempt, or when the owner re-runs it.
 
-`fastmail-actions` has both, and a test there fails for any job that reads a
-secret without naming the environment and carrying the guard (or an entry in
-an explicit open list).
+And one piece of housekeeping: **no stale branches.** A dispatcher can run any
+workflow's copy from any branch, with that copy's `GITHUB_TOKEN` scopes, so an
+old branch that carries an older, laxer copy of a workflow with a write token
+is reachable too. Delete a branch once its pull request merges.
+
+`fastmail-actions` gets all of this in
+https://github.com/Adam-S-Daniel/fastmail-actions/pull/70 and the repository
+settings that pull request lists (not in place until both are done); a test
+there fails for any job that reads a secret without naming the environment
+and carrying the guard (or an entry in an explicit open list).
 
 Why not the CMS automation App: that App can push to `.github/workflows/*`.
 Installing it on the alert repository would let every site's key rewrite the
