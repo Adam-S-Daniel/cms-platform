@@ -161,7 +161,23 @@ jobs:
         working-directory: .cms-platform/e2e
         run: npm ci
 
+      # Single-page sites (cms.base_collections: []) have no posts collection, so
+      # this loop would publish nothing and --require-ran would fail it daily
+      # (#1068). Detect it from the site's _config.yml (parsed by a real YAML
+      # parser, e2e/site-capabilities.js) and skip the heavy steps below with a
+      # notice; the job still reports success. The host loop covers such a site
+      # with cms-publish-loop-single-page.spec.js. Locked by
+      # e2e/single-page-loop-gating.test.js.
+      - name: Detect single-page site
+        id: site_kind
+        working-directory: .cms-platform/e2e
+        env:
+          SITE_ROOT: ${{ github.workspace }}
+          LOOP_NAME: "prod mutation"
+        run: node single-page-detect.js
+
       - name: Install Playwright browser + system deps
+        if: ${{ steps.site_kind.outputs.single_page != 'true' }}
         uses: ./.cms-platform/.github/actions/install-playwright-browsers
         with:
           browser: chromium
@@ -170,7 +186,7 @@ jobs:
       # Skipped on workflow_dispatch/schedule and when playground mode is
       # off (the spec self-skips, so there is nothing to gate).
       - name: Await prod deploy of this merge
-        if: ${{ github.event_name == 'push' && vars.PROD_PLAYGROUND_MODE == 'true' }}
+        if: ${{ github.event_name == 'push' && vars.PROD_PLAYGROUND_MODE == 'true' && steps.site_kind.outputs.single_page != 'true' }}
         uses: ./.cms-platform/.github/actions/await-prod-deploy
         with:
           prod-url: ${{ vars.CMS_PROD_URL }}
@@ -190,13 +206,13 @@ jobs:
       # the loop. Runs only when the loop will actually mutate (playground
       # on), mirroring the run step's gate.
       - name: Self-heal orphaned canary markers
-        if: vars.PROD_PLAYGROUND_MODE == 'true'
+        if: ${{ vars.PROD_PLAYGROUND_MODE == 'true' && steps.site_kind.outputs.single_page != 'true' }}
         env:
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
         run: ./.cms-platform/scripts/reset-orphaned-canary.sh
 
       - name: Run prod mutation playground spec
-        if: vars.PROD_PLAYGROUND_MODE == 'true'
+        if: ${{ vars.PROD_PLAYGROUND_MODE == 'true' && steps.site_kind.outputs.single_page != 'true' }}
         working-directory: .cms-platform/e2e
         env:
           # PW_PROJECT — the project(s) this step runs. e2e/install-browsers-on-miss.js
@@ -235,7 +251,7 @@ jobs:
           exit "$status"
 
       - name: Upload test results
-        if: ${{ always() && vars.PROD_PLAYGROUND_MODE == 'true' }}
+        if: ${{ always() && vars.PROD_PLAYGROUND_MODE == 'true' && steps.site_kind.outputs.single_page != 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: prod-mutate-results
@@ -247,7 +263,7 @@ jobs:
           retention-days: 14
 
       - name: Post failure summary
-        if: ${{ failure() && vars.PROD_PLAYGROUND_MODE == 'true' }}
+        if: ${{ failure() && vars.PROD_PLAYGROUND_MODE == 'true' && steps.site_kind.outputs.single_page != 'true' }}
         uses: ./.cms-platform/.github/actions/post-failure-comment
         with:
           mode: post
@@ -256,7 +272,7 @@ jobs:
           title: prod-mutate
 
       - name: Resolve failure summary on success
-        if: ${{ success() && vars.PROD_PLAYGROUND_MODE == 'true' }}
+        if: ${{ success() && vars.PROD_PLAYGROUND_MODE == 'true' && steps.site_kind.outputs.single_page != 'true' }}
         # FAIL-OPEN: this step only stamps an EXISTING failure comment as
         # resolved. It runs on success(), so its own failure says nothing about
         # the tests — but without this it turns a fully GREEN job red, and via

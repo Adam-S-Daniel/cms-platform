@@ -2141,4 +2141,49 @@ Which loops are real on which site:
 
 | Loop | adamdaniel.ai | jodidaniel.com |
 | --- | --- | --- |
-| `cms-publish-loop-host` / `-prod` / `cms-scheduled-publish-loop` / `cms-media-roundtrip` | real (the `posts` and `e2e` canary collections) | no collection to publish through: now FAILS instead of passing; a loop that drives its own collections is the open part of #1068 |
+| `cms-publish-loop-host` | real: the `e2e` canary collection, plus the `posts` unpublish/tags specs | real: `cms-publish-loop-single-page.spec.js` through the site's own `media` folder collection and `_data/contact.yml` (below); the four canary specs self-skip |
+| `cms-publish-loop-prod` / `cms-scheduled-publish-loop` / `cms-media-roundtrip` | real (the `posts` collection) | skipped by design: an early `Detect single-page site` step reads `cms.base_collections`, prints a notice naming the site and pointing at the host loop, and every heavy step is gated on it; the job still reports success |
+
+### The single-page loop (#1068)
+
+A site with `cms.base_collections: []` has no `posts` collection and no `e2e`
+canaries, so `e2e/cms-publish-loop-single-page.spec.js` publishes through the
+site's own collections instead, and only the host loop runs it (one real
+publish pair per day on such a site, not four). It self-skips unless
+`RUN_HOST_REPO_PUBLISH_LOOP=1` and `isSinglePageConsumer` (from
+`site-capabilities.js`) agree, so a full site never runs it.
+
+- **Leg A, a `media` folder entry:** create through the editor (title `E2E
+  publish loop <runId>`, plain ASCII, a `date_display` of `December 2099`,
+  category, source, an `https://example.com/...` article URL, weight 99),
+  stamped `test_fixture: true` before the first Save by a Decap `preSave`
+  listener (`markEphemeralEntry`), Status Ready, Publish now, merge, deploy;
+  then wait for the real merge, re-open as a published entry, Delete, merge,
+  deploy. While `site_live` is false the item's page `/media/<slug>/` must
+  serve the coming-soon shell and none of the item's copy, and after the delete
+  it must 4xx.
+- **Leg B, a data-file section:** edit `heading` in `_data/contact.yml` through
+  the editor, publish, wait for the merge and for the merge commit's
+  `deploy-production` run to succeed, re-open, type the original back,
+  publish, wait for the merge and deploy. The heading is not rendered while
+  the site is gated, so the deploy run (not a URL) is the proof; the loop
+  refuses to start if an editor already has `cms/site_contact/contact` open.
+- **No API back doors in the spec body.** Every write is the editor UI. The
+  API reads merged state (a file on main, a PR's merge, a run's conclusion),
+  and the `afterAll` repairs a run that died mid-flow: a removal PR for a
+  leftover `_media/` item, a restore PR (the original bytes) when main still
+  carries the edit, both through `cms/ready` and skipped when there is nothing
+  to repair.
+- **Resting state:** no `_media/99-e2e-publish-loop-*` file, no open PR, and
+  the contact heading as it was. Decap re-serializes a data file it saves
+  (flow lists become block lists), so the first run may change the file's
+  bytes; the loop judges the parsed data (`sameData`), never the bytes.
+- **Locks:** `single-page-loop-fixture.test.js` (the pure builders and the
+  `preSave` stamp), `single-page-detect.test.js` (the detector) and
+  `single-page-loop-gating.test.js` (parses the three gated workflows, the
+  host loop and the spec's own skip calls). The branch cleanup in the host loop
+  covers `cms/media/99-e2e-publish-loop-*`, and `cms-recursion-churn.js` lists
+  `_media/99-e2e-publish-loop-*.md` as the host loop's self-churn.
+- **The three skipped loops keep their required-check shape:** the detector
+  step and the gates are step-level only; no job or workflow `if`, no new
+  `concurrency` group, and the `prod-mutating-loop` lane block is untouched.

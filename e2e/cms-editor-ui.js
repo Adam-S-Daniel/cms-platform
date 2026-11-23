@@ -555,13 +555,19 @@ async function reopenForPublishedDelete(
     perAttemptMs = 30_000,
     crossCheck = null,
     adminUrl = null,
+    // A site without the Posts collection (a single-page bio, #1068) names
+    // another sidebar link as its proof-of-login signal.
+    navLinkName = /^Posts$/i,
+    // A file-collection entry (`delete: false`) has no Delete button; for it
+    // "published" is just "loaded with no editorial Status chip".
+    requireDeleteButton = true,
   } = {},
 ) {
   const titleLocator = page.getByRole("textbox", { name: titleName });
-  // Decap's nav menu surfaces the "Posts" link only when the admin app is
-  // fully past its login flow. We use it as the proof-of-login signal
+  // Decap's nav menu surfaces its collection links only when the admin app is
+  // fully past its login flow. We use one as the proof-of-login signal
   // before deep-navigating to the entry URL.
-  const postsLink = page.getByRole("link", { name: /^Posts$/i }).first();
+  const postsLink = page.getByRole("link", { name: navLinkName }).first();
   // Decap's transient login state surfaces a "Logging in..." chip. If we
   // see it on the deep entry route, the session has lapsed (Decap is
   // re-authenticating). The bounce-through-admin-root below recovers it.
@@ -643,9 +649,11 @@ async function reopenForPublishedDelete(
       const draftChipVisible = await editorialStatusChip(page)
         .isVisible({ timeout: 2_000 })
         .catch(() => false);
-      const publishedDeleteVisible = await publishedDeleteButton(page)
-        .isVisible({ timeout: 2_000 })
-        .catch(() => false);
+      const publishedDeleteVisible = requireDeleteButton
+        ? await publishedDeleteButton(page)
+            .isVisible({ timeout: 2_000 })
+            .catch(() => false)
+        : true;
       if (!draftChipVisible && publishedDeleteVisible) {
         // PUBLISHED state reached: Delete will hit onDelete (delete from
         // main → a cms/<col>/<slug> delete PR / direct main commit).
@@ -826,9 +834,59 @@ async function markEphemeralTestPost(page, { title }) {
   expect(installed, "the test-post marker preSave listener should register").toBe(true);
 }
 
+// The single-page loop's disposable `media` item (#1068). Same mechanism as the
+// posts markers above, keyed on the entry's collection AND its run-unique title,
+// stamping the given markers (TEST_MEDIA_MARKERS in single-page-loop-fixture.js).
+// Runs IN THE PAGE, so it references nothing outside its body and argument.
+function installTestEntryMarkers({ collection, title, markers }) {
+  const CMS = window.CMS;
+  if (!CMS || typeof CMS.registerEventListener !== "function") {
+    throw new Error("markEphemeralEntry: window.CMS.registerEventListener is unavailable");
+  }
+  CMS.registerEventListener({
+    name: "preSave",
+    handler: ({ entry }) => {
+      if (!entry || entry.get("collection") !== collection) return undefined;
+      const data = entry.get("data");
+      if (!data || data.get("title") !== title) return undefined;
+      let next = data;
+      for (const key of Object.keys(markers)) next = next.set(key, markers[key]);
+      return next;
+    },
+  });
+  return true;
+}
+
+async function markEphemeralEntry(page, { collection, title, markers }) {
+  if (!collection || !title) {
+    throw new Error("markEphemeralEntry requires the collection name and the entry's unique title.");
+  }
+  const installed = await page.evaluate(installTestEntryMarkers, { collection, title, markers });
+  expect(installed, "the test-entry marker preSave listener should register").toBe(true);
+}
+
+// Pick `optionLabel` in a Decap `select` widget whose field label is `fieldLabel`
+// (a RegExp). Decap renders it as a react-select combobox: open it, click the
+// option, and confirm the choice shows. Falls back to the option's text when the
+// build does not give menu items the `option` role.
+async function chooseSelectOption(page, fieldLabel, optionLabel) {
+  await page.getByLabel(fieldLabel).first().click();
+  const byRole = page.getByRole("option", { name: optionLabel, exact: true });
+  const target =
+    (await byRole.count()) > 0 ? byRole.first() : page.getByText(optionLabel, { exact: true }).last();
+  await target.click();
+  await expect(
+    page.getByText(optionLabel, { exact: true }).first(),
+    `the select should now show "${optionLabel}"`,
+  ).toBeVisible();
+}
+
 module.exports = {
+  chooseSelectOption,
   collectionNewLink,
   installTestPostMarkers,
+  installTestEntryMarkers,
+  markEphemeralEntry,
   markEphemeralTestPost,
   publishedSwitch,
   setPublished,

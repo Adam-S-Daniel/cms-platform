@@ -32,6 +32,7 @@ const SPEC_FIXTURES = {
     "_e2e/canary-delete-1779206766920.md", // cms-delete-published.spec.js (runId-suffixed)
     "_posts/2024-01-02-e2e-unpublish-canary.md", // cms-unpublish-republish.spec.js
     "_tags/e2e-tags-canary-1779206559297.md", // cms-tags-lifecycle.spec.js (runId-suffixed)
+    "_media/99-e2e-publish-loop-1779206559297.md", // cms-publish-loop-single-page.spec.js (runId-suffixed)
   ],
   media: [
     "_posts/2099-12-31-e2e-media-roundtrip-1779206766920.md", // ephemeral per-run post (runId-suffixed)
