@@ -184,11 +184,6 @@ function publishKind(jobId, jobValue, requiredName) {
   return null;
 }
 
-// Boolean convenience for the callers that only need "does it publish this?".
-function jobPublishes(jobId, jobValue, requiredName) {
-  return publishKind(jobId, jobValue, requiredName) !== null;
-}
-
 // ── WHERE A CONCURRENCY GROUP CAN HIDE ───────────────────────────────────
 //
 // A short, quotable rendering of a `concurrency:` node for the offender text.
@@ -477,7 +472,6 @@ module.exports = {
   stripMatrixSuffix,
   hasMatrix,
   publishKind,
-  jobPublishes,
   describeConcurrency,
   concurrencyDeclarations,
   timeoutDeclarations,
