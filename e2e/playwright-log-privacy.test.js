@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const acorn = require("acorn");
 const { test, expect } = require("./base");
 const { readWorkflow, listWorkflows, parseYaml } = require("./workflow-yaml-utils");
-const { summarize, UNAVAILABLE } = require("./summarize-playwright");
+const { summarize, nothingRan, UNAVAILABLE } = require("./summarize-playwright");
 
 const RUNS = new Map([
   ["e2e-tests.yml", "playwright-output"],
@@ -162,6 +162,47 @@ test("Playwright summary validates every count and hides root error values", () 
   ]) expect(summarize({ stats: bad, errors: [] })).toBe(UNAVAILABLE);
   expect(summarize({ stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 0 },
     errors: HOSTILE })).toBe(UNAVAILABLE);
+});
+
+// #1068: jodidaniel.com's loops self-skipped every spec and went green.
+test("a loop that executed zero tests is not a pass", () => {
+  const stats = (expected, unexpected, flaky, skipped) =>
+    ({ stats: { expected, unexpected, flaky, skipped }, errors: [] });
+  expect(nothingRan(stats(0, 0, 0, 4))).toContain("executed 0 tests (4 skipped)");
+  expect(nothingRan(stats(0, 0, 0, 0))).toContain("executed 0 tests");
+  expect(nothingRan({ stats: { expected: "x" }, errors: [] })).toContain("unavailable");
+  expect(nothingRan(stats(1, 0, 0, 3))).toBeNull();
+  expect(nothingRan(stats(0, 1, 0, 0))).toBeNull();
+  expect(nothingRan(stats(0, 0, 1, 0))).toBeNull();
+});
+
+test("--require-ran fails the CLI on zero executed tests and names the site", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "require-ran-"));
+  try {
+    const run = (report) => {
+      const file = path.join(dir, "r.json");
+      fs.writeFileSync(file, JSON.stringify(report));
+      return require("node:child_process").spawnSync(process.execPath,
+        [path.join(__dirname, "summarize-playwright.js"), "--require-ran", file],
+        { encoding: "utf8", env: { ...process.env, GITHUB_REPOSITORY: "example/site" } });
+    };
+    const skipped = run({ stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 4 }, errors: [] });
+    expect(skipped.status).toBe(1);
+    expect(skipped.stdout).toContain("0 passed, 0 failed, 0 flaky, 4 skipped");
+    expect(skipped.stdout).toContain("::error title=Loop published nothing::example/site:");
+    const ran = run({ stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 3 }, errors: [] });
+    expect(ran.status).toBe(0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("every real publish loop workflow passes --require-ran", () => {
+  for (const name of ["cms-publish-loop-host", "cms-publish-loop-prod",
+    "cms-scheduled-publish-loop", "cms-media-roundtrip"]) {
+    const text = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", `${name}.yml`), "utf8");
+    expect(text).toContain("summarize-playwright.js --require-ran");
+  }
 });
 
 test("workflow inventory covers every browser Playwright invocation", () => {

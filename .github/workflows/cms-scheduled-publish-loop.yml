@@ -165,7 +165,10 @@ jobs:
             --max-failures=1 \
             --workers=1 \
             > /tmp/scheduled-publish-loop.log 2>&1 || status=$?
-          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          # --require-ran: zero executed tests (all self-skipped) must not read green (#1068).
+          require_ran=0
+          node summarize-playwright.js --require-ran "${PLAYWRIGHT_JSON_OUTPUT_FILE}" || require_ran=$?
+          if [ "$status" -eq 0 ]; then status=$require_ran; fi
           exit "$status"
 
       - name: Upload test results
