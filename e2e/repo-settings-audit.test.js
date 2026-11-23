@@ -90,6 +90,9 @@ const LIVE = {
     rulesets: [
       "jodidaniel.ruleset-main.json",
       "jodidaniel.ruleset-feature.json",
+      // Desired converged state, not a live capture: replace it with one once
+      // an operator's `--fix --yes` has created the ruleset.
+      "jodidaniel.ruleset-persistent.json",
     ],
   },
 };
@@ -248,7 +251,7 @@ test.describe("audit-repo-settings.js — pure helpers vs live-captured fixtures
 
     expect(scans.flatMap((scan) => scan.findings)).toEqual([]);
     const informationals = scans.flatMap((scan) => scan.informational);
-    expect(informationals).toHaveLength(5);
+    expect(informationals).toHaveLength(6);
     expect(
       informationals.every(
         (item) =>
