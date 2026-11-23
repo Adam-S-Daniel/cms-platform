@@ -607,8 +607,10 @@ test.describe("green but never merged, with checks finishing after the first pas
   });
 });
 
-// Item 1 of #1064: a check that finishes after the last fixed follow-up (16
-// minutes) still gets a pass at its finish plus the grace, up to 25 minutes.
+// Item 1 of #1064: a check that is already finished at the last fixed follow-up
+// (16 minutes) but whose grace has not elapsed gets one more pass at its finish
+// plus the grace, up to 25 minutes. A check still running at that follow-up is
+// left to the next sweep (the next signal or the 6-hourly schedule).
 test.describe("a slow publish that goes green late", () => {
   const T0 = Date.parse("2026-11-19T12:00:00Z");
   const at = (minutes) => new Date(T0 + minutes * 60000).toISOString();
@@ -654,9 +656,31 @@ test.describe("a slow publish that goes green late", () => {
     expect(passes.map((p) => p.opened)).toEqual([0, 0, 0, 1]);
   });
 
-  test("a check finishing after the cap gets no extra pass", async () => {
-    const passes = await drive(24);
-    expect(passes.map((p) => p.minute)).toEqual([1.5, 6.5, 17.5]);
+  // The cap is exercised with a stubbed runOnce: a real grace of 3 minutes
+  // cannot reach it from a finished check with the default follow-ups.
+  async function passMinutes(retryAtMinute) {
+    let t = 0;
+    const seen = [];
+    await sweepWithFollowUps({
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      followUpMinutes: [5],
+      runOnce: async () => {
+        seen.push(t / 60000);
+        return { pending: 1, retryAtMs: retryAtMinute * 60000 };
+      },
+    });
+    return seen;
+  }
+
+  test("a retry inside the 25-minute cap gets its pass", async () => {
+    expect(await passMinutes(24)).toEqual([0, 5, 24]);
+  });
+
+  test("a retry past the 25-minute cap gets no pass", async () => {
+    expect(await passMinutes(26)).toEqual([0, 5]);
   });
 
   test("a retry that is not in the future is ignored", async () => {
