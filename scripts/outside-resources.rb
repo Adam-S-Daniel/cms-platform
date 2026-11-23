@@ -83,6 +83,15 @@ LOADS = {
   "th" => %w[background],
 }.freeze
 
+# Loads that exist only inside an inline <svg>: SVG's <script> names its file
+# with `href` (an HTML <script href> loads nothing), and a filter's <feImage>
+# fetches an image.
+SVG_NS = "http://www.w3.org/2000/svg"
+SVG_LOADS = {
+  "script" => %w[href],
+  "feimage" => %w[href],
+}.freeze
+
 # `rel` tokens of a <link> that make the browser fetch its `href`.
 FETCHING_RELS = %w[
   stylesheet preload modulepreload prefetch prerender icon apple-touch-icon
@@ -102,9 +111,9 @@ SKIPPED = %w[admin/ assets/tools/].freeze
 NON_IMAGE_RELS = %w[stylesheet preload modulepreload prefetch prerender manifest].freeze
 
 # Elements whose address may be a `data:` URI (the policy's `img-src data:`
-# covers an image, a video poster, an SVG image and an icon link; a stylesheet
+# covers an image, a video poster, an SVG image or filter image and an icon link; a stylesheet
 # or preload link is NOT on it).
-DATA_OK = %w[img source image video link-icon].freeze
+DATA_OK = %w[img source image feimage video link-icon].freeze
 
 def site_host(config)
   url = config.is_a?(Hash) ? config["url"].to_s.strip : ""
@@ -173,7 +182,8 @@ def findings_in(doc, host)
     element = node.name.downcase
     attrs = attributes_of(node)
 
-    (LOADS[element] || []).each do |attribute|
+    svg_loads = node.namespace&.href == SVG_NS ? (SVG_LOADS[element] || []) : []
+    ((LOADS[element] || []) + svg_loads).each do |attribute|
       next unless attrs.key?(attribute)
 
       addresses = attribute == "srcset" ? srcset_addresses(attrs[attribute]) : [attrs[attribute]]
