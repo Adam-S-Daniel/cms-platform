@@ -127,8 +127,10 @@ suite can exercise a slow real-time behaviour without waiting on the clock.
 
 `sign-in-renewal.js` (#516) keeps typed work when the GitHub sign-in ends
 mid-edit: it shows a "Sign in again" notice, renews the sign-in in the same tab
-and swaps the dead token on later GitHub API requests. It wraps nothing itself;
-`publish-via-auto-merge.js`'s fetch wrap (the only one) calls
+and swaps the dead token on later GitHub API requests. A second open tab takes
+the renewed sign-in from the stored session, after the same-account check. It
+wraps nothing itself; `publish-via-auto-merge.js`'s fetch wrap (the only one
+that changes what is sent) calls
 `window.CMSSignInRenewal.prepare()` / `.observe()`, so it loads non-deferred
 BEFORE that file, in `index.html` only. Reads `CMS_OAUTH_BASE_URL`. Detail:
 `docs/ADMIN-AUTH-SECURITY.md` § "Signing in again without a reload".
