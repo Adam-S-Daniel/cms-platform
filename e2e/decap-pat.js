@@ -39,10 +39,6 @@
 // new key.
 const DECAP_CMS_USER_KEY = "decap-cms-user";
 
-// Legacy alias retained so an old reference in archived code doesn't
-// break imports. Will be removed in a follow-up cleanup.
-const NETLIFY_CMS_USER_KEY = DECAP_CMS_USER_KEY;
-
 // The host-repo publish/delete/unpublish/tags-lifecycle specs (and every
 // helper that defaults `repo = HOST_REPO` — cms-fixture-pr.js,
 // github-actions-poll.js, reset-orphaned-canary.sh) target whatever repo
@@ -106,7 +102,6 @@ async function seedDecapAuth(page, { token = getPat(), login = getLogin() } = {}
 module.exports = {
   HOST_REPO,
   DECAP_CMS_USER_KEY,
-  NETLIFY_CMS_USER_KEY,
   buildAuthRecord,
   getLogin,
   getPat,
