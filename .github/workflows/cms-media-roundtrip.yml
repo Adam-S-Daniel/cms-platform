@@ -201,6 +201,8 @@ jobs:
           # specs instead of timing out on a Posts sidebar link that never renders.
           SITE_ROOT: ${{ github.workspace }}
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
+          # Lets --require-ran tolerate an empty secret only on a fork (Dependabot is read from GITHUB_ACTOR).
+          CMS_E2E_FORK: ${{ github.event.repository.fork }}
           TARGET: prod
           RUN_PROD_MUTATE_PLAYGROUND: "1"
         run: |
