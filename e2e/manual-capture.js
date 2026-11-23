@@ -120,10 +120,7 @@ async function captureStep(page, opts) {
 }
 
 module.exports = {
-  CAPTURE_DIR,
   REPO_ROOT,
-  SCREENSHOT_DIR,
   captureStep,
-  shouldCapture,
   slugify,
 };
