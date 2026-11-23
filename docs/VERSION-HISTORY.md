@@ -10,9 +10,12 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.188)
+## Version history (v0.1.0 → v0.1.189)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.189 — A second open editor tab uses a sign-in renewed in another tab, and a dead token is re-checked once before the editor gives up on it.**
+[#1113](https://github.com/Adam-S-Daniel/cms-platform/pull/1113), closing the follow-ups on [#1049](https://github.com/Adam-S-Daniel/cms-platform/issues/1049). A tab whose token died while another tab signed in again now takes the stored session's token, but only when another tab wrote it (a `storage` event), it names the same account as the tab's dead token, and `GET /user` with it agrees; it then shows a short note, and otherwise the Sign in again notice, where it used to show nothing. After the two-second wait a dead token is tried once more with a real `GET /user` before it is ended, so one stray "Bad credentials" no longer ends a tab's sign-in. The "only fetch wrap" wording is corrected in the remaining files. Seven new cases in `e2e/sign-in-renewal.test.js`. No change to a site's callers beyond the pin.
 
 **v0.1.188 — A stuck publish can also send an email, as a GitHub App that can do nothing else.**
 [#1088](https://github.com/Adam-S-Daniel/cms-platform/pull/1088). The publish watchdog (v0.1.182) opens a `publish-stuck` issue, and an issue reaches only someone whose GitHub account notifies them. The owner's account sends him no issue email at all (checked in his mailbox), so the alert reached him only in GitHub's web and mobile notifications. Now, with three optional values on a site (`SELF_ALERT_APP_ID` and `SELF_ALERT_REPO` variables, `SELF_ALERT_APP_PRIVATE_KEY` secret), each NEWLY OPENED issue also dispatches `send-self-alert.yml` in the repository `SELF_ALERT_REPO` names, which emails its owner from its own stored credentials. No email on a dry run, for an existing issue, on a failed create, or on a close.
