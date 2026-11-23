@@ -47,7 +47,7 @@ Publish.
    line, since mail clients take a colon right after a URL as part of it. No
    email is sent when there is nothing to list. A find the results file
    (below) already holds is not listed again. When this run wrote the
-   results file, the email opens with a link to the New mentions page
+   results file to the site repository, the email opens with a link to the New mentions page
    (`<admin URL>/media-search.html`), where each find is added or skipped.
 7. **Record** every find in `findings.json` for the `/admin` "New mentions"
    page (see "Results file").

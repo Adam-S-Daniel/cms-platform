@@ -513,6 +513,9 @@ def test_results_repo_and_branch_come_from_the_environment(site):
     h.run()
     assert h.results.writes[0]["repo"] == "owner/results"
     assert h.results.writes[0]["branch"] == "persistent/other"
+    # The New mentions page reads only the site repository, so no link to it.
+    assert "results_written=1" in h.stdout
+    assert "media-search.html" not in h.sent[0][1]
 
 
 def test_a_bad_results_repo_is_a_notice(site):

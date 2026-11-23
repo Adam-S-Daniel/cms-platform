@@ -424,7 +424,8 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
                            unconfirmed, would_open, review_link=admin_url and review_link,
                            preview=mode != "live",
                            page_link=(admin_url.rstrip("/") + "/media-search.html"
-                                      if admin_url and results_written else ""))
+                                      if admin_url and results_written
+                                      and results.repo.lower() == args.repo.lower() else ""))
     if digest is None:
         say("media-discovery: nothing new; no email")
     elif args.no_email:
