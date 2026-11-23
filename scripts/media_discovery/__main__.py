@@ -140,6 +140,7 @@ class _Results:
         self.skip_ids = set()
         self.touched = set()
         self.run_findings = []
+        self.unrecorded = 0
         for f in (prior or {}).get("findings", []):
             if isinstance(f, dict) and isinstance(f.get("id"), str):
                 if f.get("status") == "confirmed":
@@ -151,13 +152,16 @@ class _Results:
     def _reread(self):
         self.prior, self.sha = self.client.read_json(self.repo, self.branch, FINDINGS_PATH)
         self.decisions, _ = self.client.read_json(self.repo, self.branch, DECISIONS_PATH)
-        if not _valid_findings(self.prior):
+        if not _valid_findings(self.prior) or (self.prior is None and self.sha):
             raise GitHubError(0, "GET /repos/{repo}/contents/{path}")
 
     def publish(self, person: str, now: str, say):
         """Merge this run into the file and write it. (findings that are new for
         the email, 1 when the file was written else 0). A refused write is a
         notice, never a failure: the digest still goes out."""
+        if self.unrecorded:
+            say(f"::notice::{self.unrecorded} find(s) could not be recorded and are left out "
+                "of the results file and the email")
         branch_ready = False
         for attempt in range(2):
             doc, new = merge_results(self.prior, self.decisions, self.run_findings,
@@ -203,7 +207,9 @@ def _open_results(env, default_repo, github_factory, say):
         say(f"::notice::earlier results could not be read (HTTP {exc.status}); continuing "
             "without the results file")
         return None
-    if not _valid_findings(prior):
+    if not _valid_findings(prior) or (prior is None and sha):
+        # An existing file that could not be read is kept, never replaced: a
+        # write would drop every earlier find and email them all again.
         say("::notice::the results file is not in the expected shape; continuing without it")
         return None
     return _Results(client, repo, branch, prior, sha, decisions)
@@ -313,7 +319,7 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
             results.run_findings.append(build_finding(
                 cand, kind, status, problems, entry, titles, cfg.person.names[0]))
         except Exception:  # noqa: BLE001 - a find that cannot be recorded is not a failure
-            pass
+            results.unrecorded += 1
 
     def unconfirmed_entry(cand, kind):
         try:

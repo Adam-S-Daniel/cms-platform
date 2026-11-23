@@ -168,7 +168,7 @@ problem) instead of being ignored.
 | `MEDIA_DISCOVERY_REVIEWERS` | variable | comma-separated GitHub logins requested on each PR | no reviewers requested |
 | `CMS_AUTOMATION_APP_ID` | variable | live mode (the PR-writing App) | email-only, with a `::notice::` |
 | `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode; the results file | email-only, with a `::notice::`; no results file |
-| `MEDIA_DISCOVERY_RESULTS_REPO` | variable (`OWNER/NAME`) | optional: the repository that holds the results file | the site repository |
+| `MEDIA_DISCOVERY_RESULTS_REPO` | variable (`OWNER/NAME`) | optional: the repository that holds the results file. The New mentions admin page always reads the site repository, so set this only when that page is not used | the site repository |
 
 The SMTP host defaults to `smtp.fastmail.com` on port 587, upgraded with
 STARTTLS before the login (the setup Fastmail gives its own mail clients); the

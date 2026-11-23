@@ -211,6 +211,22 @@ def test_read_json_of_junk_is_none_with_its_sha_and_other_errors_raise_templates
     assert exc.value.endpoint == "GET /repos/{repo}/contents/{path}"
 
 
+def test_read_json_over_1mb_is_fetched_raw():
+    big = {"version": 1, "findings": [{"id": "a"}]}
+    calls = []
+    path = "/repos/o/r/contents/findings.json?ref=b"
+
+    def t(method, url, headers, body):
+        calls.append(headers["Accept"])
+        if headers["Accept"] == "application/vnd.github.raw+json":
+            return 200, big
+        return 200, {"sha": "s", "content": "", "encoding": "none", "size": 2_000_000}
+
+    gh = GitHub("t", transport=t)
+    assert gh.read_json("o/r", "b", "findings.json") == (big, "s")
+    assert calls == ["application/vnd.github+json", "application/vnd.github.raw+json"]
+
+
 def test_write_json_creates_without_a_sha_and_updates_with_one():
     t = Transport({("PUT", "/repos/o/r/contents/findings.json"):
                    [(201, {"content": {"sha": "n1"}}), (200, {"content": {"sha": "n2"}})]})
@@ -437,6 +453,12 @@ def test_a_failed_read_is_a_fixed_notice_and_the_run_carries_on(site):
 
 def test_a_malformed_results_file_is_left_alone(site):
     h = ResultsHarness(site, files={"findings.json": ({"findings": "nope"}, "s")}).run()
+    assert h.results.writes == [] and "not in the expected shape" in h.stdout
+    assert h.code == 0
+
+
+def test_an_existing_unreadable_results_file_is_not_overwritten(site):
+    h = ResultsHarness(site, files={"findings.json": (None, "s")}).run()
     assert h.results.writes == [] and "not in the expected shape" in h.stdout
     assert h.code == 0
 

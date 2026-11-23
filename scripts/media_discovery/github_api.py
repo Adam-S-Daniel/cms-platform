@@ -56,10 +56,11 @@ class GitHub:
         self._transport = transport
         self._api = api.rstrip("/")
 
-    def _call(self, method: str, path: str, endpoint: str, payload=None, ok=(200, 201)):
+    def _call(self, method: str, path: str, endpoint: str, payload=None, ok=(200, 201),
+              accept: str = "application/vnd.github+json"):
         headers = {
             "Authorization": f"Bearer {self._token}",
-            "Accept": "application/vnd.github+json",
+            "Accept": accept,
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": USER_AGENT,
         }
@@ -148,8 +149,8 @@ class GitHub:
     def read_json(self, repo: str, branch: str, path: str):
         """(parsed JSON, blob sha) of `path` on `branch`, or (None, None) when it
         is not there (a missing file or a missing branch both answer 404). A
-        file that is not UTF-8 JSON reads as (None, sha), so the caller can
-        replace it."""
+        file that is not UTF-8 JSON reads as (None, sha); callers treat that as
+        unreadable and do not overwrite it. A file over 1 MB is fetched raw."""
         r = self._repo(repo)
         status, data = self._call(
             "GET", f"/repos/{r}/contents/{quote(path, safe='/')}?ref={quote(branch, safe='')}",
@@ -157,6 +158,13 @@ class GitHub:
         if status == 404 or not isinstance(data, dict):
             return None, None
         sha = data.get("sha")
+        if data.get("encoding") == "none" or (not data.get("content") and data.get("size")):
+            # Over 1 MB the contents API leaves `content` empty; the raw media
+            # type still returns the file, which the transport parses as JSON.
+            _, doc = self._call(
+                "GET", f"/repos/{r}/contents/{quote(path, safe='/')}?ref={quote(branch, safe='')}",
+                "GET /repos/{repo}/contents/{path}", accept="application/vnd.github.raw+json")
+            return doc, sha
         try:
             raw = base64.b64decode(data.get("content") or "")
             return json.loads(raw.decode("utf-8")), sha
