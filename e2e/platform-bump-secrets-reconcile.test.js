@@ -478,3 +478,59 @@ test.describe("platform-bump reusable — wires the secrets reconcile into the b
     expect(run).toMatch(/SEED_NOTE="\$\{SEED_NOTE\}\$\{CONTEXT_NOTE\}\$\{SECRETS_NOTE\}"/);
   });
 });
+
+// A release can add a key to a caller's top-level `permissions:` (cms-platform
+// #1114 added `statuses: read` to the publish-watchdog caller, because a
+// reusable job asking for a permission its caller does not grant fails to
+// start). pin-consistency compares the block against the template at the
+// consumer's OWN pinned ref, so it can only land on the bump commit.
+test.describe("reconcile-caller-secrets.js — top-level permissions", () => {
+  const withPerms = (perms, tail = "") =>
+    `name: Publish watchdog
+on:
+  workflow_dispatch:
+
+permissions:
+${perms}
+jobs:
+  sweep:
+    uses: ${SLUG}/.github/workflows/publish-watchdog.yml@${V}
+${tail}`;
+  const CANON = withPerms("  contents: read\n  checks: read\n  statuses: read\n  issues: write\n");
+  const NAME = "publish-watchdog.yml";
+
+  test("a permission the template gained is added, site comments stay, and pin-consistency then passes", () => {
+    const consumer = withPerms("  contents: read\n  # Site note: checks stay read-only.\n  checks: read\n  issues: write\n");
+    const fx = fixture({ [NAME]: [CANON, consumer] });
+
+    const before = checker(fx);
+    expect(before.status, out(before)).not.toBe(0);
+    expect(before.stderr).toMatch(/top-level `permissions`/);
+
+    const r = reconcile(fx);
+    expect(r.status, out(r)).toBe(0);
+    expect(r.stdout).toMatch(/^UPDATED publish-watchdog\.yml permissions: added statuses$/m);
+
+    const after = checker(fx);
+    expect(after.status, out(after)).toBe(0);
+    const text = fs.readFileSync(fx.wf(NAME), "utf8");
+    expect(text).toContain("  # Site note: checks stay read-only.\n  checks: read\n  statuses: read\n  issues: write\n");
+  });
+
+  test("a permission whose level the template changed takes the template's, and a second run is a no-op", () => {
+    const consumer = withPerms("  contents: read\n  checks: read\n  statuses: write\n  issues: write\n");
+    const fx = fixture({ [NAME]: [CANON, consumer] });
+    const r = reconcile(fx);
+    expect(r.status, out(r)).toBe(0);
+    expect(fs.readFileSync(fx.wf(NAME), "utf8")).toBe(CANON);
+    const again = reconcile(fx);
+    expect(again.stdout).not.toMatch(/^UPDATED/m);
+  });
+
+  test("a permission the template dropped is removed", () => {
+    const consumer = withPerms("  contents: read\n  checks: read\n  statuses: read\n  issues: write\n  actions: write\n");
+    const fx = fixture({ [NAME]: [CANON, consumer] });
+    expect(reconcile(fx).status).toBe(0);
+    expect(fs.readFileSync(fx.wf(NAME), "utf8")).toBe(CANON);
+  });
+});

@@ -29,7 +29,9 @@
 # ruleset for THIS repo. And it RECONCILES every existing caller's per-job
 # `secrets:` map with the template at the new ref (keys added, dropped or
 # changed; comments kept) — the one call-interface facet the seed pass never
-# reached (v0.1.113's `app_private_key`). All of these have to ride the bump
+# reached (v0.1.113's `app_private_key`), and its top-level `permissions:` block
+# the same way (a reusable job asking for a permission its caller does not
+# grant fails to start: publish-watchdog's `statuses: read`). All of these have to ride the bump
 # commit, because pin-consistency compares the consumer against the platform
 # at that consumer's OWN pinned ref: split one off into its own PR and it fails
 # in the mirror-image direction instead.

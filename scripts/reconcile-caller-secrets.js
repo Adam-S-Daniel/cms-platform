@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Reconcile each consumer thin caller's per-job `secrets:` map, its per-job
-// `with:` KEY set and its `workflow_dispatch` inputs with the canonical
-// examples/site template (the last two: see "`with:` keys" below).
+// `with:` KEY set, its `workflow_dispatch` inputs and its top-level
+// `permissions:` block with the canonical examples/site template (the last
+// three: see "`with:` keys" below and splicePermissions).
 //
 // WHY THIS EXISTS. platform-bump moves pins, seeds new callers, retires old
 // ones and reconciles `required_contexts`, but nothing moved a caller's
@@ -498,6 +499,56 @@ function withoutSecrets(src) {
   return stable(obj);
 }
 
+// The top-level `permissions:` splice. A reusable job that asks for a
+// permission its caller does not grant fails to start, and the checker compares
+// the block WHOLE against the template at the consumer's own ref, so a release
+// that adds one (cms-platform #1114: `statuses: read`) has to reach the caller
+// on the bump commit. Keys the template gained or dropped, and keys whose level
+// it changed, are spliced; kept keys keep the consumer's text and comments.
+// Returns null when there is nothing to do.
+function splicePermissions(src, canonSrc, name) {
+  const want = structuralShape(canonSrc, name).permissions;
+  const have = structuralShape(src, name).permissions;
+  if (stable(want) === stable(have)) return null;
+  const keysOf = (v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v) : []);
+  const valueOf = (v, k) => (v && typeof v === "object" ? v[k] : undefined);
+  const changed = keysOf(want).filter((k) => keysOf(have).includes(k) && stable(want[k]) !== stable(valueOf(have, k)));
+  const add = [...setDiff(keysOf(want), keysOf(have)), ...changed];
+  const drop = [...setDiff(keysOf(have), keysOf(want)), ...changed];
+  if (!add.length && !drop.length) throw new Manual("`permissions:` differs in a form the splice cannot read");
+  const doc = parse(src);
+  const cdoc = parse(canonSrc);
+  if (!YAML.isMap(doc.contents) || !YAML.isMap(cdoc.contents)) throw new Manual("the workflow is not a block map");
+  const starts = lineStarts(src);
+  const lines = src.split("\n");
+  const cstarts = lineStarts(canonSrc);
+  const clines = canonSrc.split("\n");
+  const top = itemSpans(doc.contents, starts, lines, -1);
+  const ctop = itemSpans(cdoc.contents, cstarts, clines, -1);
+  const at = top.findIndex((x) => x.key === "permissions");
+  const cat = ctop.findIndex((x) => x.key === "permissions");
+  const jobsAt = top.find((x) => x.key === "jobs");
+  if (at === -1 && !jobsAt) throw new Manual("the workflow has no `jobs:` to insert `permissions:` before");
+  const next = mergeMap({
+    lines, starts, clines, cstarts,
+    pair: at === -1 ? undefined : top[at].pair,
+    pairFloor: at === -1 ? -1 : (top[at - 1]?.last ?? -1),
+    cpair: cat === -1 ? undefined : ctop[cat].pair,
+    cpairFloor: cat === -1 ? -1 : (ctop[cat - 1]?.last ?? -1),
+    add, drop,
+    render: (c) => clines.slice(c.first, c.last + 1),
+    insert: { at: jobsAt ? jobsAt.first : lines.length, col: 0, unit: 2 },
+  });
+  return { text: next.join("\n"), add, drop: setDiff(drop, changed), changed };
+}
+
+// Everything except the top-level `permissions` must be unchanged by a splice.
+function withoutPermissions(src) {
+  const obj = YAML.parse(src) || {};
+  delete obj.permissions;
+  return stable(obj);
+}
+
 function reconcileFile(name, canonSrc, src) {
   const canonShape = structuralShape(canonSrc, name);
   const report = [];
@@ -522,6 +573,29 @@ function reconcileFile(name, canonSrc, src) {
     }
     report.push(`job ${jn}: ${diffKeys(want, have)}`);
     text = next;
+  }
+
+  // The top-level `permissions:` block.
+  const perms = splicePermissions(text, canonSrc, name);
+  if (perms) {
+    let verified;
+    try {
+      parse(perms.text);
+      verified = structuralShape(perms.text, name).permissions;
+    } catch {
+      throw new Manual("permissions: the spliced file no longer parses");
+    }
+    if (stable(verified) !== stable(canonShape.permissions)) throw new Manual("permissions: the splice did not verify");
+    if (withoutPermissions(perms.text) !== withoutPermissions(text)) {
+      throw new Manual("permissions: the splice changed more than the permissions block");
+    }
+    const parts = [];
+    const added = setDiff(perms.add, perms.changed);
+    if (added.length) parts.push(`added ${added.join(", ")}`);
+    if (perms.changed.length) parts.push(`changed ${perms.changed.join(", ")}`);
+    if (perms.drop.length) parts.push(`removed ${perms.drop.join(", ")}`);
+    report.push(`permissions: ${parts.join("; ")}`);
+    text = perms.text;
   }
 
   // `with:` key sets, as the checker sees them.
