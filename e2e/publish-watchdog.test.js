@@ -607,6 +607,159 @@ test.describe("green but never merged, with checks finishing after the first pas
   });
 });
 
+// Item 1 of #1064: a check that finishes after the last fixed follow-up (16
+// minutes) still gets a pass at its finish plus the grace, up to 25 minutes.
+test.describe("a slow publish that goes green late", () => {
+  const T0 = Date.parse("2026-11-19T12:00:00Z");
+  const at = (minutes) => new Date(T0 + minutes * 60000).toISOString();
+
+  async function drive(checksGreenAtMinute) {
+    let clock = T0 + 1.5 * 60000;
+    const passes = [];
+    await sweepWithFollowUps({
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      runOnce: async () => {
+        const minute = (clock - T0) / 60000;
+        const done = minute >= checksGreenAtMinute;
+        const plan = planSweep({
+          prs: [
+            {
+              pr: makePr({ updated_at: at(0) }),
+              checkRuns: [
+                run("build", done ? "completed" : "in_progress", done ? "success" : null, {
+                  started_at: at(0.2),
+                  completed_at: done ? at(checksGreenAtMinute) : null,
+                }),
+              ],
+              requiredContexts: ["build"],
+              files: ["_posts/2026-11-18-real-post.md"],
+            },
+          ],
+          issues: [],
+          nowMs: clock,
+        });
+        passes.push({ minute, opened: plan.open.length });
+        return { pending: plan.pending, retryAtMs: plan.retryAtMs };
+      },
+    });
+    return passes;
+  }
+
+  test("a check finishing at 15 minutes alerts at 18 minutes, not at the next sweep", async () => {
+    const passes = await drive(15);
+    expect(passes.map((p) => p.minute)).toEqual([1.5, 6.5, 17.5, 18]);
+    expect(passes.map((p) => p.opened)).toEqual([0, 0, 0, 1]);
+  });
+
+  test("a check finishing after the cap gets no extra pass", async () => {
+    const passes = await drive(24);
+    expect(passes.map((p) => p.minute)).toEqual([1.5, 6.5, 17.5]);
+  });
+
+  test("a retry that is not in the future is ignored", async () => {
+    let t = 0;
+    let calls = 0;
+    const r = await sweepWithFollowUps({
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      followUpMinutes: [5],
+      runOnce: async () => {
+        calls++;
+        return { pending: 1, retryAtMs: -1 };
+      },
+    });
+    expect(r).toEqual({ passes: 2, failures: 0 });
+    expect(calls).toBe(2);
+  });
+
+  test("classifyPublish names the pass that will see the grace elapse", () => {
+    const v = classify({
+      graceMinutes: 3,
+      pr: makePr({ updated_at: iso(0) }),
+      checkRuns: [run("build", "completed", "success", { completed_at: iso(1) })],
+    });
+    expect(v.state).toBe("in-flight");
+    expect(v.nextPassAtMs).toBe(NOW - 60000 + 3 * 60000);
+  });
+});
+
+// Item 2 of #1064: a required context with no check run is not "finished".
+test.describe("a required context with no check run", () => {
+  const greenBuild = (over) => run("build", "completed", "success", { completed_at: iso(30), ...over });
+  const twoRequired = { requiredContexts: ["build", "e2e"], graceMinutes: 3 };
+
+  test("is in flight while the pull request is young, and names the retry time", () => {
+    const v = classify({ ...twoRequired, pr: makePr({ updated_at: iso(5) }), checkRuns: [greenBuild()] });
+    expect(v.state).toBe("in-flight");
+    expect(v.nextPassAtMs).toBe(NOW - 5 * 60000 + 10 * 60000);
+  });
+
+  test("is stuck once the wait is over, and the issue names it", () => {
+    const v = classify({ ...twoRequired, pr: makePr({ updated_at: iso(11) }), checkRuns: [greenBuild()] });
+    expect(v.state).toBe("stuck");
+    expect(v.missing).toEqual(["e2e"]);
+    const { body } = renderIssue({ repo: "o/r", pr: makePr(), verdict: v });
+    expect(body).toContain("These required checks never started");
+    expect(body).toContain("- e2e");
+  });
+
+  test("a required list that every context satisfies is unchanged", () => {
+    const v = classify({ requiredContexts: ["build"], pr: makePr({ updated_at: iso(60) }), checkRuns: [greenBuild()] });
+    expect(v.state).toBe("stuck");
+    expect(v.missing).toBeUndefined();
+  });
+});
+
+// Item 3 of #1064: a person reopening an issue the sweep closed.
+test.describe("a reopened resolved issue", () => {
+  const SHA = "a".repeat(40);
+  const stuckEntry = () => ({
+    pr: makePr({ updated_at: iso(60) }),
+    checkRuns: [run("build", "completed", "failure")],
+    requiredContexts: ["build"],
+    files: ["_posts/2026-11-18-real-post.md"],
+  });
+  const resolved = (state) => ({
+    number: 50,
+    state,
+    user: { login: "github-actions[bot]" },
+    body: `<!-- publish-watchdog-resolved:pr=7 sha=${SHA} -->\nbody`,
+  });
+
+  test("open, with its pull request stuck: marker restored, no second issue", () => {
+    const plan = planSweep({ prs: [stuckEntry()], issues: [resolved("open")], nowMs: NOW });
+    expect(plan.open).toEqual([]);
+    expect(plan.restore).toEqual([{ issueNumber: 50, prNumber: 7 }]);
+  });
+
+  test("closed: still does not suppress a new alert", () => {
+    const plan = planSweep({ prs: [stuckEntry()], issues: [resolved("closed")], nowMs: NOW });
+    expect(plan.open).toHaveLength(1);
+    expect(plan.restore).toEqual([]);
+  });
+
+  test("open, but for an older commit: a new issue opens and nothing is restored", () => {
+    const old = { ...resolved("open"), body: `<!-- publish-watchdog-resolved:pr=7 sha=${"b".repeat(40)} -->` };
+    const plan = planSweep({ prs: [stuckEntry()], issues: [old], nowMs: NOW });
+    expect(plan.open).toHaveLength(1);
+    expect(plan.restore).toEqual([]);
+  });
+
+  test("an issue not authored by the Actions bot is never restored", () => {
+    const plan = planSweep({
+      prs: [stuckEntry()],
+      issues: [{ ...resolved("open"), user: { login: "someone" } }],
+      nowMs: NOW,
+    });
+    expect(plan.restore).toEqual([]);
+  });
+});
+
 test.describe("CLI with a stub gh", () => {
   const SHA_A = "a".repeat(40);
   const SHA_D = "d".repeat(40);
@@ -753,6 +906,19 @@ esac`,
     const r = runCli(env);
     expect(r.status).toBe(0);
     expect(creates(env)).toHaveLength(1);
+  });
+
+  test("a reopened resolved issue on a stuck pull request gets its marker back and no second issue opens", () => {
+    const env = setup({
+      pulls: stuckPulls(),
+      openIssues: [{ number: 50, state: "open", user: { login: "github-actions[bot]" }, body: `<!-- publish-watchdog-resolved:pr=7 sha=${SHA_A} -->\nbody` }],
+    });
+    const r = runCli(env);
+    expect(r.status).toBe(0);
+    expect(creates(env)).toHaveLength(0);
+    const patch = writes(env).filter((l) => l.includes("repos/o/r/issues/50"));
+    expect(patch).toHaveLength(1);
+    expect(JSON.parse(logged(env, "body-1.json")).body).toBe(`<!-- publish-watchdog:pr=7 sha=${SHA_A} -->\nbody`);
   });
 
   test("a 422 on create retries once without the work label", () => {
@@ -908,14 +1074,23 @@ esac`,
     expect(creates(env)).toHaveLength(1);
   });
 
-  test("a 422 with assignees retries once without assignees AND without the work label", () => {
+  test("a 422 with assignees retries once without assignees and KEEPS the work label", () => {
     const env = setup({ pulls: stuckPulls(), fixtures: { "issue-fail-assigned": "" } });
     const r = runCli(env, ["--assignees", "nobody-here"]);
     expect(r.status).toBe(0);
     expect(creates(env)).toHaveLength(2);
     const retry = JSON.parse(logged(env, "body-2.json"));
     expect(retry.assignees).toBeUndefined();
-    expect(retry.labels).toEqual(["publish-stuck"]);
+    expect(retry.labels).toEqual(["publish-stuck", "agent-ready"]);
+  });
+
+  test("a 422 that survives dropping the assignees then drops the work label too", () => {
+    const env = setup({ pulls: stuckPulls(), fixtures: { "issue-fail-assigned": "", "issue-fail-labelled": "" } });
+    const r = runCli(env, ["--assignees", "nobody-here"]);
+    expect(r.status).toBe(0);
+    expect(creates(env)).toHaveLength(3);
+    expect(JSON.parse(logged(env, "body-2.json")).labels).toEqual(["publish-stuck", "agent-ready"]);
+    expect(JSON.parse(logged(env, "body-3.json")).labels).toEqual(["publish-stuck"]);
   });
 
   test("follow-ups re-run the sweep while a publish is in flight (0,0 means two extra passes, no real wait)", () => {
@@ -1531,6 +1706,10 @@ test.describe("workflow files", () => {
     ["a failure from a fork head repository", { wf: "e2e", conclusion: "failure", head: "fork/r" }, false],
     ["the editorial workflow from a fork head repository", { wf: "editorial", conclusion: "success", head: "fork/r" }, false],
     ["a failure on a push (not a pull_request run)", { wf: "e2e", conclusion: "failure", event: "push" }, false],
+    ["the editorial workflow on a loop fixture branch (cms/e2e-fixture/)", { wf: "editorial", conclusion: "success", branch: "cms/e2e-fixture/seed-x-123" }, false],
+    ["a failure on a loop fixture branch (cms/e2e-fixture/)", { wf: "e2e", conclusion: "failure", branch: "cms/e2e-fixture/seed-x-123" }, false],
+    ["a failure on a loop fixture branch (cms/e2e/)", { wf: "e2e", conclusion: "failure", branch: "cms/e2e/some-slug" }, false],
+    ["a real post whose slug merely starts with e2e", { wf: "e2e", conclusion: "failure", branch: "cms/posts/e2e-notes" }, true],
     ["a production deploy success", { wf: "deploy", conclusion: "success", event: "push", branch: "main" }, true],
     ["a production deploy failure", { wf: "deploy", conclusion: "failure", event: "push", branch: "main" }, false],
     // A display title is author-chosen text: a pull request TITLED like a

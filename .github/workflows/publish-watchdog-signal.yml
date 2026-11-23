@@ -57,12 +57,19 @@ jobs:
     # the last bug here was a field assumption only a live run exposed, and a
     # missing or differently shaped field only makes its own clause false.
     #
+    # Loop-generated fixture pull requests (`cms/e2e/<slug>` from the editor
+    # specs, `cms/e2e-fixture/<slug>` from e2e/cms-fixture-pr.js) never alert
+    # (the sweep ignores them), so they start no signal run: each one would mint
+    # an App token and send a dispatch for nothing.
+    #
     # When this is false the job is skipped before a runner is allocated.
     if: >-
       github.event_name == 'workflow_run'
       && github.event.workflow_run.head_repository.full_name == github.repository
       && ((github.event.workflow_run.event == 'pull_request'
            && startsWith(github.event.workflow_run.head_branch, 'cms/')
+           && !startsWith(github.event.workflow_run.head_branch, 'cms/e2e/')
+           && !startsWith(github.event.workflow_run.head_branch, 'cms/e2e-fixture/')
            && (contains(fromJSON('["failure","timed_out","startup_failure","cancelled"]'), github.event.workflow_run.conclusion)
                || github.event.workflow.path == '.github/workflows/cms-editorial-workflow.yml'
                || github.event.workflow_run.path == '.github/workflows/cms-editorial-workflow.yml'))
