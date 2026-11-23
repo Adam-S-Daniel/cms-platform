@@ -60,17 +60,6 @@ ENV = {
 }
 
 
-@pytest.fixture
-def site(tmp_path):
-    (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "media-discovery.yml").write_text(CONFIG_YAML, encoding="utf-8")
-    (tmp_path / "_media").mkdir()
-    (tmp_path / "_media" / "1-old.md").write_text(
-        '---\ntitle: "Already Listed Interview"\narticle_url: "https://elsewhere.example.com/x"\n'
-        "---\n", encoding="utf-8")
-    return tmp_path
-
-
 def message(payload, stop="tool_use"):
     block = SimpleNamespace(type="tool_use", id="toolu_1", name="submit_candidates", input=payload)
     return SimpleNamespace(stop_reason=stop, content=[block])

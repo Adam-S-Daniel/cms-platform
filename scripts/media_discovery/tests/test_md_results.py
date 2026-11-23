@@ -9,7 +9,7 @@ from datetime import datetime
 import pytest
 from md_fixtures import CFG, make_candidate, page
 from test_md_cli import (CONFIRMED, ENV, MONTH_ONLY_EVENT, PAGES, UNCONFIRMED, FakeGitHub,
-                         Harness, main, site)  # noqa: F401 - `site` is a fixture
+                         Harness, main)
 
 from media_discovery.corroborate import Problem
 from media_discovery.github_api import GitHub, GitHubError
