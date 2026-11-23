@@ -377,13 +377,8 @@ function assertEveryEntryHasCooldown(label, doc) {
 module.exports = {
   parseDependabotConfig,
   assertEveryEntryHasCooldown,
-  bundlerEntries,
-  themeIgnoreEntry,
   assertUnscopedThemeIgnore,
   wildcardMatches,
-  collectUsesRefs,
-  usesDependencyName,
-  platformActionNames,
   assertPlatformActionsIgnored,
   assertNoUnsupportedActionsCooldownDays,
 };

@@ -190,7 +190,7 @@
     publish-via-auto-merge.js, whose fetch wrap calls it: when the GitHub
     sign-in ends mid-edit it shows a "Sign in again" notice and renews the
     sign-in in this tab, so the typed work is never lost to a reload. It
-    wraps nothing itself (that file owns the only fetch wrap).
+    wraps nothing itself (that file owns the only wrap that rewrites requests).
   -->
   <script src="sign-in-renewal.js"></script>
   <!--

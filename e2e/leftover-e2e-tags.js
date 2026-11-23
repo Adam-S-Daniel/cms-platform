@@ -174,7 +174,6 @@ async function sweepLeftoverE2eTags({ repo, ref = "main", ghImpl, removeImpl, no
 }
 
 module.exports = {
-  CANARY_TAG_RE,
   STALE_AFTER_MS,
   classifyE2eTags,
   sweepLeftoverE2eTags,

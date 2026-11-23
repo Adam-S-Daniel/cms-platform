@@ -461,7 +461,6 @@ module.exports = {
   readFileOnRef,
   // Exported for unit tests / debugging
   createBranchFromMain,
-  putFileOnBranch,
   deleteFileOnBranch,
   openPr,
   addReadyLabel,

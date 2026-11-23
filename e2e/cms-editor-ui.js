@@ -839,8 +839,6 @@ module.exports = {
   clickEditorDelete,
   deleteConfirmButton,
   confirmEditorDelete,
-  publishedDeleteButton,
-  editorialStatusChip,
   reopenForPublishedDelete,
   MEDIA_LIBRARY_TOP_SELECTOR,
   mediaLibraryButton,

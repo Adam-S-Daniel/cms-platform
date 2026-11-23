@@ -238,12 +238,10 @@ function isUncacheable(value) {
 }
 
 module.exports = {
-  WORKFLOW_DIR,
   awsCommands,
   flagValues,
   isLongCache,
   isUncacheable,
-  workflowPath,
   readWorkflow,
   listWorkflows,
   parseYaml,

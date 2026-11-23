@@ -109,11 +109,18 @@ function parseFrontMatterText(src) {
   return fm;
 }
 
-// Jekyll's default-published semantics: a post is published unless its
-// front matter explicitly says `published: false`. A missing key means
-// published (Jekyll builds it).
+// Jekyll's default-published semantics: a missing key means published, and
+// Jekyll builds a post unless `published` is false or empty (it reads
+// `data.fetch("published", true)`, so nil is unpublished too). Its YAML
+// loader (Psych, YAML 1.1) reads a plain `no` or `off`, in any case, as false
+// and `~` or `null` as nil; `n` and `y` stay strings. Works on this module's
+// string map and on a YAML-parsed object alike.
+const UNPUBLISHED_VALUE_RE = /^(?:false|no|off|null|~)?$/i;
 function isPublished(frontMatter) {
-  return String((frontMatter && frontMatter.published) || "").toLowerCase() !== "false";
+  if (!frontMatter || !Object.prototype.hasOwnProperty.call(frontMatter, "published")) return true;
+  const value = frontMatter.published;
+  if (value === null || value === undefined || value === false) return false;
+  return !UNPUBLISHED_VALUE_RE.test(String(value).trim());
 }
 
 // The structural E2E-canary slug signature. Matches BOTH the URL slug
@@ -181,6 +188,4 @@ module.exports = {
   isPublished,
   isTestFixturePost,
   hasE2eSlugSignature,
-  E2E_DATED_FILE_SLUG_RE,
-  E2E_URL_SLUG_RE,
 };

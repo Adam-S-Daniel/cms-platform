@@ -402,8 +402,6 @@ function describeVersion(v) {
 module.exports = {
   ADMIN_PREFIX,
   MANIFEST_FILE,
-  ACCEPTABLE_MISSING,
-  CMS_IDENTITY_PLACEHOLDER,
   sha256,
   decapPin,
   scriptManifest,
@@ -416,5 +414,4 @@ module.exports = {
   normalizeInjectedIdentity,
   parityShaForFile,
   isExcludedAdminPath,
-  HOOK_SKIP_BASENAMES,
 };

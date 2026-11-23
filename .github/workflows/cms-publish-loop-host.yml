@@ -226,12 +226,15 @@ jobs:
           # harness runs from .cms-platform/e2e here, so the base_collections guards'
           # default (resolve __dirname/..) would point at the PLATFORM, not the
           # consumer; set it so keepsBaseCollection() reads the consumer's _config.yml
-          # and a single-page bio (base_collections:[]) correctly SKIPS the collection
-          # specs instead of timing out on a Posts sidebar link that never renders.
+          # and a single-page bio (base_collections:[]) so the collection specs skip instead of timing out on a Posts
+          # sidebar link that never renders. --require-ran below then FAILS that run
+          # (#1068), unless CMS_E2E_PAT is empty on a fork or Dependabot run.
           SITE_ROOT: ${{ github.workspace }}
           # Fine-grained PAT scoped to the host repo (contents r/w +
           # pull_requests r/w + metadata r).
           CMS_E2E_PAT: ${{ secrets.CMS_E2E_PAT }}
+          # Lets --require-ran tolerate an empty secret only on a fork (Dependabot is read from GITHUB_ACTOR).
+          CMS_E2E_FORK: ${{ github.event.repository.fork }}
           # Tells playwright.config.js (via TARGET=) NOT to spin up the
           # local Jekyll + decap-server webServer — the specs hit the
           # deployed prod URL directly.
@@ -258,7 +261,10 @@ jobs:
             --max-failures=1 \
             --workers=1 \
             > /tmp/host-loop.log 2>&1 || status=$?
-          node summarize-playwright.js "${PLAYWRIGHT_JSON_OUTPUT_FILE}"
+          # --require-ran: zero executed tests (all self-skipped) must not read green (#1068).
+          require_ran=0
+          node summarize-playwright.js --require-ran "${PLAYWRIGHT_JSON_OUTPUT_FILE}" || require_ran=$?
+          if [ "$status" -eq 0 ]; then status=$require_ran; fi
           exit "$status"
 
       - name: Upload test results

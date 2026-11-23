@@ -263,6 +263,15 @@ test.describe("sign-in-renewal.js", () => {
     expect(h.session.get("cms-sign-in-expired")).toBe("1");
   });
 
+  test("a stored session without a login is refused, since the account cannot be checked", async () => {
+    const h = boot({ user: { token: OLD, backendName: "github" } });
+    h.liveTokens.add(NEW);
+    await expireAndSignIn(h);
+    expect(h.storedToken()).toBe(OLD);
+    expect(h.text()).toContain("did not work");
+    expect(h.session.get("cms-sign-in-expired")).toBe("1");
+  });
+
   test("a failed or malformed sign-in keeps the notice and the old session", async () => {
     const h = boot();
     await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));

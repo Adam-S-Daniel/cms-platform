@@ -117,6 +117,20 @@ class OutsideResourcesJudgeTest < Minitest::Test
     end
   end
 
+  # SVG names its loads with `href`: an inline SVG <script href> fetches and
+  # runs a script, and a filter's <feImage href> fetches an image. An HTML
+  # <script href> loads nothing, so only the SVG one counts.
+  def test_svg_script_and_feimage_hrefs_are_loads
+    {
+      '<svg><script href="https://example.net/a.js"></script></svg>' => '<script href>',
+      '<svg><script xlink:href="https://example.net/a.js"></script></svg>' => '<script href>',
+      '<svg><filter id="f"><feImage href="https://example.net/a.png"/></filter></svg>' => '<feimage href>',
+    }.each do |html, expected|
+      assert_includes findings(html).map(&:first), expected, html
+    end
+    assert_empty findings('<script href="https://example.net/a.js"></script>')
+  end
+
   # A browser reads the plain `href` when an SVG element has both.
   def test_the_plain_href_wins_over_xlink_href
     found = findings('<svg><image xlink:href="/x.png" href="https://example.net/x.png"/></svg>')

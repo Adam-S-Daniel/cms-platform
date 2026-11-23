@@ -102,6 +102,11 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-11-23 — cms-platform/code-quality — edit
+
+- Change: the `python-unit-tests` row now lists the same four pytest paths `self-ci.yml` runs, and two table rows regain their `> ` callout prefix (https://github.com/Adam-S-Daniel/cms-platform/issues/989)
+- Eval: wording-only: corrects a stale command and a markup prefix to match `self-ci.yml`; no rule or trigger changed
+
 ## 2026-11-12 — cms-platform/aws-bootstrap — edit
 
 - Motivation: the prompt-audit findings in https://github.com/Adam-S-Daniel/cms-platform/issues/989: a history narrative inside a rule and an inline code span broken across a line.

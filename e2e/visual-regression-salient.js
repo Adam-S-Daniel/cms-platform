@@ -188,9 +188,6 @@ function parseNulStatus(raw) {
 }
 
 module.exports = {
-  NON_SALIENT_OVERRIDES,
-  SALIENT_PATTERNS,
-  TOOL_REVIEW_FIELDS,
   isSalient,
   isSalientChange,
   parseFrontMatter,

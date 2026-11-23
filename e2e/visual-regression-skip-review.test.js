@@ -75,4 +75,37 @@ test.describe("visual-regression workflow: auto-approve when no diffs", () => {
     expect(scripts).toMatch(/t\.visuallyDifferent\s*===\s*0/);
     expect(scripts).toMatch(/Auto-approved/i);
   });
+
+  test("approve-regression fails closed when detect or generate did not complete (#1058)", () => {
+    const job = workflow().jobs["approve-regression"];
+    // Still runs under always() so the required check reports a status.
+    expect(String(job.if).trim()).toBe("always()");
+    expect(job.needs).toEqual(expect.arrayContaining(["detect", "generate"]));
+    const step = job.steps.find((s) => s.name === "Approval confirmed");
+    expect(step.env.DETECT_RESULT).toMatch(/needs\.detect\.result/);
+    expect(step.env.GENERATE_RESULT).toMatch(/needs\.generate\.result/);
+    const run = step.run;
+    // detect must have succeeded before anything is auto-approved.
+    expect(run).toMatch(/\[ "\$DETECT_RESULT" != "success" \][\s\S]*?exit 1/);
+    // failed or cancelled generate fails the job.
+    expect(run).toMatch(/"\$GENERATE_RESULT" = "failure"[\s\S]*"\$GENERATE_RESULT" = "cancelled"[\s\S]*?exit 1/);
+    // the skipped-generate auto-approve comes after both failure branches.
+    expect(run.indexOf("Auto-approved: no salient")).toBeGreaterThan(run.lastIndexOf("exit 1"));
+  });
+
+  test("approve-regression run: text has no expression interpolation and the job has minimal permissions", () => {
+    // `needs.generate.outputs.visually-different` derives from the PR's built
+    // tree, so it must reach the shell through `env:`, never `${{ }}` inside
+    // `run:`: the script runs after a reviewer approves the environment.
+    const job = workflow().jobs["approve-regression"];
+    for (const step of job.steps) {
+      if (step.run) expect(step.run, `step "${step.name}" run:`).not.toContain("${{");
+    }
+    const step = job.steps.find((s) => s.name === "Approval confirmed");
+    expect(step.env.VISUALLY_DIFFERENT).toMatch(/needs\.generate\.outputs\.visually-different/);
+    expect(step.run).toMatch(/"\$VISUALLY_DIFFERENT"/);
+    // The echo-only job gets no token scopes (no inherited id-token or
+    // pull-requests: write).
+    expect(job.permissions).toEqual({});
+  });
 });

@@ -91,6 +91,15 @@ test.describe("page-frame targets", () => {
     expect(isFutureDated("_posts/2026-06-01-today.md", NOW)).toBe(false);
   });
 
+  test("a post Jekyll does not build (published: no, off or empty) is not opened", () => {
+    for (const v of ["no", "Off", ""]) {
+      const root = site({ ...BLOG_SITE, "_posts/2026-04-01-quiet.md": post(`title: Quiet\npublished: ${v}`) });
+      const t = pageFrameTargets({ nowMs: NOW, siteRoot: root, changedFiles: ["_posts/2026-04-01-quiet.md"] });
+      expect(t.posts.map((p) => p.source), v).not.toContain("_posts/2026-04-01-quiet.md");
+      expect(t.removedPosts, v).toBe(1);
+    }
+  });
+
   test("the changed list is one path per line, so a name may hold a space", () => {
     expect(parseChanged("a.md\n_posts/b c.md\r\nd.md\n")).toEqual(["a.md", "_posts/b c.md", "d.md"]);
     expect(parseChanged(undefined)).toBeNull();

@@ -420,7 +420,6 @@ module.exports = {
   homeUsesThemeLayout,
   pageUsesThemeLayout,
   renderedAdminConfigPath,
-  isBuilt,
   adminCollections,
   hasAdminCollection,
   hasRenderedCanary,

@@ -810,7 +810,6 @@ module.exports = {
   formatEastern,
   frameStepLabel,
   hostFromUrl,
-  listFrameDirs,
   sanitizeBannerText,
   writeManifest,
   BANNER_MAX_CHARS,

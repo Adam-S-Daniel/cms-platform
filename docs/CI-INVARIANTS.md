@@ -1677,6 +1677,17 @@ Six decisions in it that are not obvious from the YAML:
   the theme's `admin/`, are outside what it sees.
   `theme/spec/destination_conflicts_test.rb` runs it over real site
   directories, one of them with a plugin gem loaded only through that group.
+- **No post or page body may hold `${{`.** After the address check, the job
+  runs `scripts/liquid-expressions-in-content.rb`. Jekyll runs Liquid over a
+  body, so a post quoting GitHub Actions syntax (`${{ secrets.X }}`) builds
+  green and prints `$` (issue 1061). The author's text is never rewritten:
+  the step fails naming the file and line, and the fix is `{% raw %}` ...
+  `{% endraw %}` in the Markdown (a token inside a raw block passes). It reads
+  every collection document and every page under `pages/` before Liquid, and
+  only `${{`: a bare `{{ site.title }}` in a post can be deliberate. Locked by
+  `theme/spec/liquid_expressions_in_content_test.rb`. The other half of that
+  issue, an unclosed tag in a first paragraph copied raw into an excerpt, was
+  closed by `listing_excerpt` (#1067, below).
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through
@@ -2102,3 +2113,24 @@ and most are expected to be abandoned.
 chooses them, and an issue notification mails them out. It carries only the
 number, API-built URLs and check names from our own workflows.
 `e2e/publish-watchdog.test.js` locks all of this.
+
+## A loop that executed zero tests is a failure (#1068)
+
+`cms-publish-loop-host`, `cms-publish-loop-prod`, `cms-scheduled-publish-loop`
+and `cms-media-roundtrip` run `summarize-playwright.js --require-ran` on the
+JSON report. Playwright counts a self-skipped spec as skipped and exits 0, so a
+site with `cms.base_collections: []` (jodidaniel.com, a single-page consumer)
+used to read green having published nothing (run 44576678143: 0 passed, 4
+skipped, no pull request). With `--require-ran`, passed + failed + flaky equal
+to 0, or a missing or malformed report, fails the step with an
+`::error title=Loop published nothing::<owner/repo>: ...` annotation.
+
+An empty `CMS_E2E_PAT` is exempt only on a Dependabot (`GITHUB_ACTOR`) or fork
+(`CMS_E2E_FORK`) run, where the specs self-skip by design: the CLI prints a notice
+and exits 0. Anywhere else it is a missing secret and fails.
+
+Which loops are real on which site:
+
+| Loop | adamdaniel.ai | jodidaniel.com |
+| --- | --- | --- |
+| `cms-publish-loop-host` / `-prod` / `cms-scheduled-publish-loop` / `cms-media-roundtrip` | real (the `posts` and `e2e` canary collections) | no collection to publish through: now FAILS instead of passing; a loop that drives its own collections is the open part of #1068 |
