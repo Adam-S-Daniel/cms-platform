@@ -95,15 +95,33 @@ def test_every_step_after_detect_is_gated_on_the_config(reusable):
         assert CONFIGURED in str(later.get("if", "")), f"ungated step: {later.get('name')}"
 
 
-def test_the_app_token_is_minted_with_exactly_contents_and_pull_requests_write(reusable):
+def test_the_app_token_is_minted_in_both_modes_with_narrow_permissions(reusable):
     mint = step(reusable, "app")
-    assert "steps.mode.outputs.mode == 'live'" in mint["if"]
-    words = shell_words(mint["run"])
-    assert "mint-app-token.js" in words[words.index("node") + 1]
-    assert words[words.index("--permissions") + 1] == "contents=write,pull_requests=write"
-    assert "--repositories" in words
+    # Gated on the App being configured, not on live mode: the results file is
+    # written with this token in email-only runs too.
+    assert "steps.mode.outputs.app == 'true'" in mint["if"]
+    assert "outputs.mode" not in mint["if"]
     assert mint["env"] == {"APP_CLIENT_ID": "${{ vars.CMS_AUTOMATION_APP_ID }}",
-                           "APP_PRIVATE_KEY": "${{ secrets.app_private_key }}"}
+                           "APP_PRIVATE_KEY": "${{ secrets.app_private_key }}",
+                           "MODE": "${{ steps.mode.outputs.mode }}",
+                           "RESULTS_REPO": "${{ vars.MEDIA_DISCOVERY_RESULTS_REPO }}"}
+    script = mint["run"]
+    words = shell_words(script)
+    assert "mint-app-token.js" in words[words.index("node") + 1]
+    # Permissions are chosen in the shell: pull_requests=write only in live mode.
+    assert words[words.index("--permissions") + 1] == "$perms"
+    assert 'perms="contents=write"' in script
+    assert script.count("pull_requests=write") == 1
+    assert 'if [ "$MODE" = "live" ]; then\n  perms="contents=write,pull_requests=write"' in \
+        script.replace("            ", "")
+    assert words[words.index("--repositories") + 1] == "$repos"
+    # The results repository joins only when it is another repo of the same owner.
+    assert '"${RESULTS_REPO%%/*}" = "$owner"' in script
+
+
+def test_the_mode_step_reports_whether_the_app_is_configured(reusable):
+    mode = step(reusable, "mode")
+    assert 'echo "app=true"' in mode["run"] and 'echo "app=false"' in mode["run"]
 
 
 def test_the_private_key_reaches_only_the_mode_and_mint_steps(reusable):
@@ -140,6 +158,20 @@ def test_recipients_and_smtp_user_are_masked_before_the_cli_runs(reusable):
     assert script.index('::add-mask::$MEDIA_DISCOVERY_SMTP_USER') < cli
     assert script.index('::add-mask::$r') < cli
     assert "MEDIA_DISCOVERY_MAIL_TO" in script[:script.index('::add-mask::$r')]
+
+
+def test_results_token_is_separate_from_github_token(reusable):
+    run_step = steps(reusable)[-1]
+    assert run_step["env"]["MEDIA_DISCOVERY_RESULTS_REPO"] == \
+        "${{ vars.MEDIA_DISCOVERY_RESULTS_REPO }}"
+    script = run_step["run"]
+    handoff = 'export MEDIA_DISCOVERY_RESULTS_TOKEN="$APP_TOKEN"'
+    assert handoff in script
+    # Handed over in either mode, so before the live/email-only branch.
+    assert script.index(handoff) < script.index('export GITHUB_TOKEN="$APP_TOKEN"')
+    assert 'MEDIA_DISCOVERY_RESULTS_TOKEN="$READ_TOKEN"' not in script
+    for s in steps(reusable):
+        assert "MEDIA_DISCOVERY_RESULTS_TOKEN" not in s.get("env", {})
 
 
 def test_cli_env_names_the_documented_knobs(reusable):

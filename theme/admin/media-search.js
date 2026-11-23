@@ -131,6 +131,8 @@
   function reasonParts(r) {
     var predicate = String((r && r.text) || "").trim().replace(/^(Another page|The main link)\s+/i, "");
     if (r && r.main) return { lead: "The main link", href: null, predicate: predicate };
+    // A reason about the find as a whole (no page): the sentence is all predicate.
+    if (r && (r.whole || !String(r.url || "").trim())) return { lead: "", href: null, predicate: predicate };
     var href = safeUrl(r && r.url);
     var title = typeof (r && r.title) === "string" ? r.title.replace(/\s+/g, " ").trim() : "";
     if (title.length > TITLE_MAX) title = title.slice(0, TITLE_MAX - 1).trimEnd() + "\u2026";
@@ -140,6 +142,22 @@
       lead = host ? "A page on " + host : "Another page";
     }
     return { lead: lead, href: href, predicate: predicate };
+  }
+
+  // The pieces of one reason line, in order: [{ text, href }]. An empty lead
+  // adds no segment, so a whole-find reason never starts with a stray space.
+  function reasonSegments(parts) {
+    var out = [];
+    if (parts.lead) out.push({ text: parts.lead, href: parts.href || null });
+    out.push({ text: (parts.lead ? " " : "") + parts.predicate, href: null });
+    return out;
+  }
+
+  // Only a find that came with a ready-made entry can become a draft; one
+  // without (say, an event with no exact date) has to be added by hand.
+  var NO_ENTRY_NOTE = "Add it by hand in the website editor if it\u2019s yours.";
+  function canAdd(f) {
+    return !!(f && f.entry && typeof f.entry === "object" && f.entry.collection && f.entry.path);
   }
 
   // ── Findings and decisions ───────────────────────────────────────────
@@ -596,6 +614,9 @@
     formatTimestamp: formatTimestamp,
     safeUrl: safeUrl,
     reasonParts: reasonParts,
+    reasonSegments: reasonSegments,
+    canAdd: canAdd,
+    NO_ENTRY_NOTE: NO_ENTRY_NOTE,
     normalizeDecisions: normalizeDecisions,
     mergeDecision: mergeDecision,
     removeDecision: removeDecision,
@@ -707,10 +728,10 @@
 
   function reasonList(f) {
     var items = (f.reasons || []).filter(function (r) { return r && r.text; }).map(function (r) {
-      var parts = reasonParts(r);
       var li = el("li", {});
-      li.appendChild(parts.href ? extLink(parts.href, parts.lead) : document.createTextNode(parts.lead));
-      li.appendChild(document.createTextNode(" " + parts.predicate));
+      reasonSegments(reasonParts(r)).forEach(function (seg) {
+        li.appendChild(seg.href ? extLink(seg.href, seg.text) : document.createTextNode(seg.text));
+      });
       return li;
     });
     if (!items.length) return null;
@@ -730,12 +751,19 @@
     var open = extLink(f.primary_url, "Open the page");
     if (open) card.appendChild(el("p", { class: "ms-open" }, [open]));
     if (!sure) card.appendChild(reasonList(f));
-    var addBtn = button(busy ? "Adding…" : sure ? "Add to site" : "It's me — add it", "ms-primary",
-      function () { decide(f, "added", card); });
     var skipBtn = button(sure ? "Not for the site" : "Not me / skip", "ms-secondary",
       function () { decide(f, "skipped", card); });
-    addBtn.disabled = skipBtn.disabled = busy;
-    card.appendChild(el("div", { class: "ms-actions" }, [addBtn, skipBtn]));
+    skipBtn.disabled = busy;
+    var buttons = [skipBtn];
+    if (canAdd(f)) {
+      var addBtn = button(busy ? "Adding…" : sure ? "Add to site" : "It's me — add it", "ms-primary",
+        function () { decide(f, "added", card); });
+      addBtn.disabled = busy;
+      buttons.unshift(addBtn);
+    } else {
+      card.appendChild(el("p", { class: "ms-when", text: NO_ENTRY_NOTE }));
+    }
+    card.appendChild(el("div", { class: "ms-actions" }, buttons));
     return card;
   }
 

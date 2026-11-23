@@ -225,7 +225,9 @@ def _heading(cand: Candidate) -> list[str]:
             _plain_url(cand.primary_url)]
 
 
-def _problem_text(problem: Problem, person: str) -> str | None:
+def problem_text(problem: Problem, person: str) -> str | None:
+    """The bare predicate for a problem about one source ("is a file the search
+    can't read ..."), or None when the code has no per-source wording."""
     code, detail = problem.code, problem.detail
     if code == "unreadable-type":
         return "is a file the search can't read (such as an image or a locked PDF)."
@@ -264,7 +266,7 @@ def _why(cand: Candidate, problems, person: str) -> list[str]:
     lines = []
     for prob in problems:
         if prob.url:
-            text = _problem_text(prob, person)
+            text = problem_text(prob, person)
             if text is None:
                 continue
             if prob.url == cand.primary_url:

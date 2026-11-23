@@ -45,7 +45,10 @@ Publish.
    be drafted), then every find that did not check out with a plain-English
    reason per page (`corroborate.Problem`). Each URL sits alone on its own
    line, since mail clients take a colon right after a URL as part of it. No
-   email is sent when there is nothing to list.
+   email is sent when there is nothing to list. A find the results file
+   (below) already holds is not listed again.
+7. **Record** every find in `findings.json` for the `/admin` "New mentions"
+   page (see "Results file").
 
 ## The verification rules (phase 1, precisely)
 
@@ -164,7 +167,8 @@ problem) instead of being ignored.
 | `MEDIA_DISCOVERY_MODE` | variable | `live` opens PRs | email-only |
 | `MEDIA_DISCOVERY_REVIEWERS` | variable | comma-separated GitHub logins requested on each PR | no reviewers requested |
 | `CMS_AUTOMATION_APP_ID` | variable | live mode (the PR-writing App) | email-only, with a `::notice::` |
-| `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode | email-only, with a `::notice::` |
+| `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode; the results file | email-only, with a `::notice::`; no results file |
+| `MEDIA_DISCOVERY_RESULTS_REPO` | variable (`OWNER/NAME`) | optional: the repository that holds the results file. The New mentions admin page always reads the site repository, so set this only when that page is not used | the site repository |
 
 The SMTP host defaults to `smtp.fastmail.com` on port 587, upgraded with
 STARTTLS before the login (the setup Fastmail gives its own mail clients); the
@@ -181,9 +185,61 @@ PYTHONPATH=<platform>/scripts python3 -m media_discovery run \
   [--today YYYY-MM-DD] [--no-email]
 ```
 
+## Results file (`findings.json`)
+
+Each run records what it found on the branch `persistent/media-search` of the
+results repository, for the `/admin` page "New mentions"
+(`theme/admin/media-search.js`, `/admin/media-search.html`). The page reads
+`findings.json`, which only this job writes, and reads and writes
+`decisions.json` (what the editor added or skipped). Code:
+`scripts/media_discovery/results.py` (the finding shape and the merge) and
+`github_api.py` (`read_json`, `write_json`, `ensure_branch`).
+
+Each finding has an id, `sha256(normalized primary URL)[:16]`, a status
+(`confirmed` or `unconfirmed`), the candidate's fields, a `reasons` list
+(per-page plain-English reasons; a page that is not the main link carries its
+own `title`, from the HTML `<title>` or the PDF's metadata title, kept as the
+page wrote it) and an `entry` (the draft file, or null when none could be made,
+such as an event with no exact date; the page then offers only "skip" and tells
+the editor to add it by hand).
+
+**A find is listed and emailed once.** On each run:
+
+- an id not in the file is added and emailed;
+- an id already confirmed, or decided in `decisions.json`, is skipped before
+  its pages are fetched (counted as `repeats`) and only gets a new `last_seen`;
+- an id that was unconfirmed and still is gets its reasons refreshed and is not
+  emailed;
+- an id that was unconfirmed and now checks out (and is undecided) is upgraded
+  to confirmed and emailed as ready;
+- anything the run did not see stays as it was.
+
+A run with nothing new sends no email. The file is written whenever the run got
+far enough to merge (`searched_at` moves every time, so the page shows when the
+last search ran). A write refused because someone wrote first (HTTP 409 or 422)
+is re-read, merged again and tried once more.
+
+**Where it lives.** `vars.MEDIA_DISCOVERY_RESULTS_REPO` names the repository
+(`OWNER/NAME`); unset, it is the site repository. The branch is
+`persistent/media-search` (the CLI reads `MEDIA_DISCOVERY_RESULTS_BRANCH` if a
+different one is ever needed) and is created from the default branch when
+missing, so a dedicated, private results repository must **already have a
+commit on its default branch**. The CMS automation App must be **installed on
+the results repository** with Contents: write. The workflow mints the App token
+in both modes, `contents=write` in email-only and `contents=write,
+pull_requests=write` in live, narrowed to the site repository plus the results
+repository when it is another repository of the same owner, and hands it to the
+CLI as `MEDIA_DISCOVERY_RESULTS_TOKEN`. The editor's own sign-in must be able to
+read and write that branch for the page to work.
+
+**Failing soft.** Without the App (no token), or when the file cannot be read or
+written, the run prints a fixed `::notice::`, keeps no file and emails as it did
+before this existed. The summary line ends `repeats=N results_written=0|1`.
+
 ## Modes
 
-- **email-only** (the default): nothing is written to GitHub. The digest lists
+- **email-only** (the default): no draft or pull request is written (only the
+  results file, above). The digest lists
   each confirmed find under "Ready to add" and calls the run a preview, with a
   section on what a normal run does differently. Use it to judge the quality of the finds before turning PRs on. It
   lists earlier discovery PRs with the job's read-only `GITHUB_TOKEN`; if that

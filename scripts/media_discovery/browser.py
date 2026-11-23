@@ -16,6 +16,7 @@ without the retry.
 
 from . import fetch as fetch_mod
 from .corroborate import FetchedPage
+from .text import clean_title
 
 NAV_TIMEOUT_MS = 25_000
 IDLE_TIMEOUT_MS = 5_000
@@ -102,7 +103,11 @@ class BrowserSession:
                 pass
             text = page.inner_text("body")[:fetch_mod.MAX_BYTES]
             status = response.status if response is not None else 0
-            return FetchedPage(url, page.url, status, text)
+            try:
+                title = clean_title(page.title())
+            except Exception:  # noqa: BLE001 - a page without a readable title has none
+                title = ""
+            return FetchedPage(url, page.url, status, text, title=title)
         except Exception:  # noqa: BLE001 - a browser failure is data, not a crash
             return FetchedPage(url, url, 0, "")
         finally:
