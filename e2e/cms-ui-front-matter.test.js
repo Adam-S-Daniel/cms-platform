@@ -170,7 +170,7 @@ test("Decap test dependencies resolve the same explicitly overridden Immutable r
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
   const lock = JSON.parse(fs.readFileSync(path.join(__dirname, "package-lock.json"), "utf8"));
   const version = manifest.devDependencies.immutable;
-  expect(manifest.overrides["decap-cms"].immutable).toBe(version);
+  expect(manifest.overrides["decap-cms"].immutable).toBe("$immutable");
   expect(manifest.overrides["decap-cms-core"].immutable).toBe("$immutable");
   expect(lock.packages[""].devDependencies.immutable).toBe(version);
   for (const [name, dependency] of Object.entries(lock.packages)) {
