@@ -165,3 +165,5 @@ updates:
       npm-security:
         applies-to: security-updates
         patterns: ["*"]
+
+# Touched 2026-11-23 to re-run GitHub's config check, which was left queued.
