@@ -263,3 +263,29 @@ test.describe("discoverAllPages (_site scan)", () => {
     expect(pages.has("/preview/")).toBe(false);
   });
 });
+
+test.describe("discoverAllPages from source: what Jekyll publishes", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+
+  // No _site, so the source scan runs. Jekyll (Psych, YAML 1.1) does not build
+  // a post or page whose `published` is false, no, off or empty.
+  test("a post or page with published: no, off or empty is not a page", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "detect-published-"));
+    const write = (rel, fm) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), `---\ntitle: T\n${fm}\n---\nb\n`);
+    };
+    write("_posts/2026-01-01-live.md", "published: true");
+    write("_posts/2026-01-02-quiet-no.md", "published: no");
+    write("_posts/2026-01-03-quiet-off.md", "published: Off");
+    write("_posts/2026-01-04-quiet-empty.md", "published:");
+    write("pages/hidden.md", "permalink: /hidden/\npublished: no");
+    const pages = discoverAllPages(root);
+    expect(pages.has("/blog/live/")).toBe(true);
+    for (const p of ["/blog/quiet-no/", "/blog/quiet-off/", "/blog/quiet-empty/", "/hidden/"]) {
+      expect(pages.has(p), p).toBe(false);
+    }
+  });
+});
