@@ -65,6 +65,13 @@ test.describe("page-frame alert", () => {
     expect(alert.plan(results, issues).gone).toEqual([]);
   });
 
+  test("a daily sweep that checked no page closes nothing as no longer published", () => {
+    // A run that crashed before any page test (a spec that failed to load, a
+    // global setup error) leaves an empty report: that is not every post gone.
+    const issues = [{ number: 5, body: "<!-- page-frame: /blog/a/ -->\n" }];
+    expect(alert.plan([], issues, { all: true }).gone).toEqual([]);
+  });
+
   test("unpublishing changes only the published line", () => {
     const src = "---\ntitle: A\npublished: true\ntags: [x]\n---\n\nBody with published: true\n";
     expect(alert.unpublishFrontMatter(src)).toBe(

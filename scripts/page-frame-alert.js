@@ -105,7 +105,9 @@ function plan(results, openIssues, { all = false } = {}) {
     else if (r.outcome === "passed" && issue) close.push({ ...r, issue });
   }
   const checked = new Set(results.map((r) => r.page));
-  const gone = all ? [...byPage].filter(([page]) => !checked.has(page)).map(([page, issue]) => ({ page, issue })) : [];
+  // A sweep that checked no page at all (the run crashed before any page test)
+  // says nothing about which posts are published: close nothing as gone.
+  const gone = all && results.length > 0 ? [...byPage].filter(([page]) => !checked.has(page)).map(([page, issue]) => ({ page, issue })) : [];
   return { open, close, still, gone };
 }
 
