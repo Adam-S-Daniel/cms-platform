@@ -732,6 +732,17 @@ test.describe("a required context with no check run", () => {
     expect(body).toContain("- e2e");
   });
 
+  test("a required context reported as a commit status, not a check run, is not missing", () => {
+    const v = classify({
+      ...twoRequired,
+      pr: makePr({ updated_at: iso(11) }),
+      checkRuns: [greenBuild()],
+      statusContexts: ["e2e"],
+    });
+    expect(v.missing).toBeUndefined();
+    expect(v.reason).not.toBe("A required check never started.");
+  });
+
   test("a required list that every context satisfies is unchanged", () => {
     const v = classify({ requiredContexts: ["build"], pr: makePr({ updated_at: iso(60) }), checkRuns: [greenBuild()] });
     expect(v.state).toBe("stuck");
@@ -833,6 +844,8 @@ case "$ep" in
     if [ -f "${fix}/checks-$sha-$page.json" ]; then cat "${fix}/checks-$sha-$page.json"
     elif [ -f "${fix}/checks-$sha-1.json" ]; then echo '{"total_count": 0, "check_runs": []}'
     else cat "${fix}/checks.json"; fi ;;
+  repos/o/r/commits/*/status*)
+    if [ -f "${fix}/statuses.json" ]; then cat "${fix}/statuses.json"; else echo '{"statuses": []}'; fi ;;
   repos/o/r/git/ref/heads/*other*) echo '{"object": {"sha": "${SHA_D}"}}' ;;
   repos/o/r/git/ref/heads/*)
     if [ -f "${fix}/ref.json" ]; then cat "${fix}/ref.json"; else echo '{"object": {"sha": "${SHA_A}"}}'; fi ;;
