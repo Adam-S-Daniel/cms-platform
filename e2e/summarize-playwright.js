@@ -57,7 +57,11 @@ if (require.main === module) {
   process.stdout.write(summarizeFile(file) + "\n");
   if (requireRan) {
     const reason = nothingRanFile(file);
-    if (reason) {
+    // No CMS_E2E_PAT (fork PR, Dependabot) is the specs' documented self-skip,
+    // so a zero-run report there is expected, not a failure.
+    if (reason && !process.env.CMS_E2E_PAT) {
+      process.stdout.write("::notice::no CMS_E2E_PAT in this run; the loop specs self-skip by design, so --require-ran is not enforced\n");
+    } else if (reason) {
       const site = String(process.env.GITHUB_REPOSITORY || "this site")
         .replace(/[^A-Za-z0-9._\/-]/g, "");
       process.stdout.write(`::error title=Loop published nothing::${site}: ${reason}\n`);

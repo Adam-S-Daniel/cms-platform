@@ -184,14 +184,21 @@ test("--require-ran fails the CLI on zero executed tests and names the site", ()
       fs.writeFileSync(file, JSON.stringify(report));
       return require("node:child_process").spawnSync(process.execPath,
         [path.join(__dirname, "summarize-playwright.js"), "--require-ran", file],
-        { encoding: "utf8", env: { ...process.env, GITHUB_REPOSITORY: "example/site" } });
+        { encoding: "utf8", env: { ...process.env, GITHUB_REPOSITORY: "example/site", CMS_E2E_PAT: pat } });
     };
+    let pat = "x-present";
     const skipped = run({ stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 4 }, errors: [] });
     expect(skipped.status).toBe(1);
     expect(skipped.stdout).toContain("0 passed, 0 failed, 0 flaky, 4 skipped");
     expect(skipped.stdout).toContain("::error title=Loop published nothing::example/site:");
     const ran = run({ stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 3 }, errors: [] });
     expect(ran.status).toBe(0);
+    // No secret (fork or Dependabot run): the specs self-skip by design, so it is not a failure.
+    pat = "";
+    const noSecret = run({ stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 4 }, errors: [] });
+    expect(noSecret.status).toBe(0);
+    expect(noSecret.stdout).toContain("::notice::no CMS_E2E_PAT");
+    expect(noSecret.stdout).not.toContain("::error");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -202,6 +209,8 @@ test("every real publish loop workflow passes --require-ran", () => {
     "cms-scheduled-publish-loop", "cms-media-roundtrip"]) {
     const text = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", `${name}.yml`), "utf8");
     expect(text).toContain("summarize-playwright.js --require-ran");
+    // The no-secret skip is recognized from CMS_E2E_PAT in the step's own env.
+    expect(text).toMatch(/CMS_E2E_PAT: \$\{\{ secrets\.CMS_E2E_PAT \}\}[\s\S]*summarize-playwright\.js --require-ran/);
   }
 });
 

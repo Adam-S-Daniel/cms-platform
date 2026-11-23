@@ -2125,6 +2125,9 @@ skipped, no pull request). With `--require-ran`, passed + failed + flaky equal
 to 0, or a missing or malformed report, fails the step with an
 `::error title=Loop published nothing::<owner/repo>: ...` annotation.
 
+A run with no `CMS_E2E_PAT` (fork PR, Dependabot) is exempt: the specs self-skip
+there by design, so the CLI prints a notice and exits 0.
+
 Which loops are real on which site:
 
 | Loop | adamdaniel.ai | jodidaniel.com |
