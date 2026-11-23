@@ -529,6 +529,27 @@ ruleset_library:
         actor_type: RepositoryRole
         bypass_mode: always
 
+  # why: `persistent/media-search` holds media-discovery's findings.json and
+  # decisions.json across runs (.github/workflows/media-discovery.yml,
+  # RESULTS), so it must outlive every PR. Only deletion is blocked, with no
+  # bypass actors, no required reviews and no status checks: the workflow's
+  # App token still pushes to it, and delete_branch_on_merge silently skips
+  # it. Same shape as the fleet's `persistent branches` ruleset
+  # (Adam-S-Daniel/repo-settings docs/decisions/0007), declared here because
+  # cms-platform owns every surface of this repo except the label allowlist
+  # (repo-settings ADR 0016).
+  persistent-branches:
+    target: branch
+    enforcement: active
+    conditions:
+      ref_name:
+        include:
+          - refs/heads/persistent/**
+        exclude: []
+    rules:
+      - type: deletion
+    bypass_actors: []
+
 repos:
   Adam-S-Daniel/cms-platform:
     rulesets:
@@ -577,3 +598,4 @@ repos:
       # PR, skip-with-success path).
       main: consumer-main
       cms-feature-branches: cms-feature-branches
+      persistent branches: persistent-branches

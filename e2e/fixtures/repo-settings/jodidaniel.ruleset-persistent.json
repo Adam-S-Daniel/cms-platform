@@ -1,0 +1,1 @@
+{"name":"persistent branches","target":"branch","source_type":"Repository","source":"jodidaniel/jodidaniel.com","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["refs/heads/persistent/**"]}},"rules":[{"type":"deletion"}],"bypass_actors":[]}
