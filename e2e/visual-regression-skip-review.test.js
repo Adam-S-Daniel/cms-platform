@@ -75,4 +75,21 @@ test.describe("visual-regression workflow: auto-approve when no diffs", () => {
     expect(scripts).toMatch(/t\.visuallyDifferent\s*===\s*0/);
     expect(scripts).toMatch(/Auto-approved/i);
   });
+
+  test("approve-regression fails closed when detect or generate did not complete (#1058)", () => {
+    const job = workflow().jobs["approve-regression"];
+    // Still runs under always() so the required check reports a status.
+    expect(String(job.if).trim()).toBe("always()");
+    expect(job.needs).toEqual(expect.arrayContaining(["detect", "generate"]));
+    const step = job.steps.find((s) => s.name === "Approval confirmed");
+    expect(step.env.DETECT_RESULT).toMatch(/needs\.detect\.result/);
+    expect(step.env.GENERATE_RESULT).toMatch(/needs\.generate\.result/);
+    const run = step.run;
+    // detect must have succeeded before anything is auto-approved.
+    expect(run).toMatch(/\[ "\$DETECT_RESULT" != "success" \][\s\S]*?exit 1/);
+    // failed or cancelled generate fails the job.
+    expect(run).toMatch(/"\$GENERATE_RESULT" = "failure"[\s\S]*"\$GENERATE_RESULT" = "cancelled"[\s\S]*?exit 1/);
+    // the skipped-generate auto-approve comes after both failure branches.
+    expect(run.indexOf("Auto-approved: no salient")).toBeGreaterThan(run.lastIndexOf("exit 1"));
+  });
 });
