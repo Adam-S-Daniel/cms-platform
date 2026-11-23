@@ -26,10 +26,12 @@
  *
  * Save then works on the open entry, with nothing retyped.
  *
- * ── No second fetch wrap ────────────────────────────────────────────────
- * publish-via-auto-merge.js owns the ONLY window.fetch wrap (a second wrap
- * risks the Safari loadEntries hang, see docs/CONSUMER-COMPATIBILITY.md).
- * This file wraps nothing: it exposes `window.CMSSignInRenewal`, and that
+ * ── No second wrap that rewrites requests ───────────────────────────────
+ * publish-via-auto-merge.js owns the ONLY window.fetch wrap that changes
+ * what is sent (a second one risks the Safari loadEntries hang, see
+ * docs/CONSUMER-COMPATIBILITY.md). media-library-tidy.js wraps fetch too,
+ * but sends every request as given and only filters two listings on the
+ * way back. This file wraps nothing: it exposes `window.CMSSignInRenewal`, and that
  * wrap calls `prepare()` before and `observe()` after each request. It must
  * therefore load BEFORE publish-via-auto-merge.js, non-deferred
  * (e2e/sign-in-renewal.test.js locks the order). `prepare()` returns null
@@ -42,13 +44,26 @@
  * "Bad credentials" for a token once, `prepare()` answers later requests
  * that carry it with the same 401, locally. Only that exact body marks a
  * token dead; any other 401 is passed through and judged again next time.
+ * One answer is not trusted on its own: before the notice appears the token
+ * is tried once more against GET /user, for real, and a token that works is
+ * put back in use (#1049 follow-up 3).
+ *
+ * ── A second open tab ───────────────────────────────────────────────────
+ * Signing in again in one tab leaves every other open tab holding the dead
+ * token in memory, with a stored session that no longer matches it. Such a
+ * tab takes the stored session's token instead of asking for another
+ * sign-in, but only when another tab wrote it (a `storage` event, which a
+ * tab never gets for its own writes), it names the account this tab was
+ * using, and GitHub confirms that (#1049 follow-up 1). Otherwise the tab
+ * shows the notice and asks.
  *
  * ── Security ────────────────────────────────────────────────────────────
  *  - The `message` listener checks `origin` (the OAuth proxy) AND `source`
  *    (the popup this page opened) before reading anything, and replies only
  *    to that checked origin (docs/ADMIN-AUTH-SECURITY.md).
- *  - The new token is accepted only if GitHub says it belongs to the SAME
- *    account as the session it replaces.
+ *  - A new token, from the popup or from another tab's stored session, is
+ *    accepted only if GitHub says it belongs to the SAME account as the
+ *    session it replaces. Without a known account name it is refused.
  *  - Tokens are swapped only on https://api.github.com/ requests and are
  *    never logged.
  *
@@ -75,6 +90,11 @@
 
   var dead = Object.create(null); // token -> true
   var replacement = Object.create(null); // dead token -> its replacement
+  var owner = Object.create(null); // token -> the account name its stored session gave
+  var need = ""; // the account whose sign-in ended in this tab
+  var probing = null; // the dead token being tried for real, once
+  var elsewhere = false; // another tab has changed the stored session
+  var adopting = Object.create(null); // dead token -> true while its check runs
   var authHandler = null;
 
   // ── Pure helpers ──────────────────────────────────────────────────────
@@ -155,7 +175,11 @@
     var auth = parseAuth(authValue(headersOf(input, init)));
     if (!auth) return null;
     var next = current(auth.token);
-    if (next === auth.token) return dead[auth.token] ? { response: unauthorized() } : null;
+    if (next === auth.token) {
+      if (dead[auth.token]) return probing === auth.token ? null : { response: unauthorized() };
+      noteOwner(auth.token);
+      return null;
+    }
     var value = auth.scheme + " " + next;
     if (init && init.headers) {
       var newInit = Object.assign({}, init);
@@ -208,18 +232,117 @@
     }
   }
 
+  // Remember which account a token belongs to while the stored session
+  // still says so. A second tab needs it later, when the stored session has
+  // already moved on to another token.
+  function noteOwner(token) {
+    if (owner[token]) return;
+    var user = storedUser();
+    if (user && user.token === token && typeof user.login === "string" && user.login) {
+      owner[token] = user.login;
+    }
+  }
+
+  function sameLogin(a, b) {
+    return typeof a === "string" && typeof b === "string" && !!a && a.toLowerCase() === b.toLowerCase();
+  }
+
+  // The account GitHub says a token belongs to, or "" when it will not say.
+  // `real` sends the request even though the token is marked dead.
+  function whoIs(token, real) {
+    var sent;
+    // prepare() runs inside this call, before it returns.
+    if (real) probing = token;
+    try {
+      sent = window.fetch(API_PREFIX + "user", {
+        cache: "no-cache",
+        headers: { Authorization: "token " + token, Accept: "application/vnd.github+json" },
+      });
+    } finally {
+      probing = null;
+    }
+    return sent
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .then(
+        function (who) {
+          return who && typeof who.login === "string" ? who.login : "";
+        },
+        function () {
+          return "";
+        },
+      );
+  }
+
+  function ask() {
+    setFlag(true);
+    showBanner();
+  }
+
   function markDead(token) {
     if (dead[token]) return;
     dead[token] = true;
+    need = owner[token] || "";
     // Decap signing the user out (a page load with a dead stored token)
     // removes the stored session right after its own 401. Wait, then speak
-    // only if this is still the session in use.
+    // only if there is still a session in use.
     setTimeout(function () {
+      if (!dead[token] || current(token) !== token) return;
       var user = storedUser();
-      if (!user || user.token !== token) return;
-      setFlag(true);
-      showBanner();
+      if (!user || typeof user.token !== "string") return;
+      if (user.token !== token) {
+        // Only another tab's write counts: this tab's own editor signing in
+        // afresh also changes the stored session, and needs nothing from here.
+        if (elsewhere) adopt(token, user);
+        return;
+      }
+      // One "Bad credentials" could be a passing fault at GitHub. Ask once
+      // more, for real, before telling the owner the sign-in has ended.
+      whoIs(token, true).then(function (login) {
+        if (login) {
+          delete dead[token];
+          return;
+        }
+        if (current(token) === token) ask();
+      });
     }, SETTLE_MS);
+  }
+
+  // Another tab signed in again: use its token here too, after the same
+  // check a sign-in in this tab gets.
+  function adopt(token, user) {
+    if (adopting[token] || !dead[token] || current(token) !== token) return Promise.resolve(false);
+    var next = user.token;
+    if (dead[next] || !sameLogin(owner[token], user.login)) {
+      ask();
+      return Promise.resolve(false);
+    }
+    adopting[token] = true;
+    return whoIs(next).then(function (login) {
+      delete adopting[token];
+      if (!sameLogin(owner[token], login)) {
+        ask();
+        return false;
+      }
+      replacement[token] = next;
+      setFlag(false);
+      showNote(
+        "You signed in again in another tab, and this tab now uses that sign-in. " +
+          "If a save failed here, press Save again.",
+      );
+      return true;
+    });
+  }
+
+  function onStorage(e) {
+    if (!e || e.key !== USER_KEY) return;
+    elsewhere = true;
+    var user = storedUser();
+    if (!user || typeof user.token !== "string") return;
+    Object.keys(dead).forEach(function (token) {
+      if (token !== user.token) adopt(token, user);
+    });
   }
 
   // ── The notice ────────────────────────────────────────────────────────
@@ -266,9 +389,13 @@
   }
 
   function showDone() {
-    var b = document.getElementById(BANNER_ID);
+    if (document.getElementById(BANNER_ID)) showNote("You are signed in again. Press Save to keep your work.");
+  }
+
+  // Good news with nothing to press; it clears itself.
+  function showNote(message) {
+    var b = showBanner(message);
     if (!b) return;
-    b.__text.textContent = "You are signed in again. Press Save to keep your work.";
     b.__button.style.display = "none";
     setTimeout(function () {
       // Only if nothing has gone wrong again in the meantime.
@@ -315,7 +442,7 @@
         }
       }
       if (typeof token !== "string" || !token) {
-        showBanner("Signing in did not work. Your typed work is still here. Choose Sign in again to retry.");
+        showBanner(FAILED);
         return;
       }
       accept(token);
@@ -323,61 +450,54 @@
     window.addEventListener("message", authHandler);
   }
 
+  var FAILED = "Signing in did not work. Your typed work is still here. Choose Sign in again to retry.";
+
   // Take the new token only when it is the same GitHub account.
   function accept(token) {
     var user = storedUser();
     if (!user || typeof user.token !== "string") return Promise.resolve(false);
-    return window
-      .fetch(API_PREFIX + "user", {
-        cache: "no-cache",
-        headers: { Authorization: "token " + token, Accept: "application/vnd.github+json" },
-      })
-      .then(function (res) {
-        return res.ok ? res.json() : null;
-      })
-      .then(
-        function (who) {
-          var login = who && typeof who.login === "string" ? who.login : "";
-          if (!login) {
-            showBanner("Signing in did not work. Your typed work is still here. Choose Sign in again to retry.");
-            return false;
-          }
-          if (typeof user.login !== "string" || !user.login) {
-            // Without the original account name the same-account check cannot
-            // run, so refuse rather than accept someone else's token.
-            showBanner("Signing in did not work: this session does not say which account opened the page. Your typed work is still here.");
-            return false;
-          }
-          if (user.login.toLowerCase() !== login.toLowerCase()) {
-            showBanner(
-              "You signed in as " + login + ", but this page was opened by " + user.login + ". " +
-                "Choose Sign in again and use the " + user.login + " account to keep your work.",
-            );
-            return false;
-          }
-          var old = user.token;
-          if (old !== token) {
-            replacement[old] = token;
-            Object.keys(dead).forEach(function (t) {
-              if (t !== token) replacement[t] = token;
-            });
-          }
-          user.token = token;
-          try {
-            localStorage.setItem(USER_KEY, JSON.stringify(user));
-          } catch {
-            /* the in-page swap still works; only the next page load asks again */
-          }
-          setFlag(false);
-          showDone();
-          return true;
-        },
-        function () {
-          showBanner("Signing in did not work. Your typed work is still here. Choose Sign in again to retry.");
-          return false;
-        },
-      );
+    var storedLogin = typeof user.login === "string" ? user.login : "";
+    // The account this tab was using. The stored session can name another
+    // one by now, if a different account signed in from another tab.
+    var expected = need || storedLogin;
+    return whoIs(token).then(function (login) {
+      if (!login) {
+        showBanner(FAILED);
+        return false;
+      }
+      if (!expected) {
+        // Without the original account name the same-account check cannot
+        // run, so refuse rather than accept someone else's token.
+        showBanner("Signing in did not work: this session does not say which account opened the page. Your typed work is still here.");
+        return false;
+      }
+      if (!sameLogin(expected, login)) {
+        showBanner(
+          "You signed in as " + login + ", but this page was opened by " + expected + ". " +
+            "Choose Sign in again and use the " + expected + " account to keep your work.",
+        );
+        return false;
+      }
+      Object.keys(dead).forEach(function (t) {
+        if (t !== token) replacement[t] = token;
+      });
+      // Leave a stored session alone when it belongs to another account.
+      if (sameLogin(storedLogin, login)) {
+        if (user.token !== token) replacement[user.token] = token;
+        user.token = token;
+        try {
+          localStorage.setItem(USER_KEY, JSON.stringify(user));
+        } catch {
+          /* the in-page swap still works; only the next page load asks again */
+        }
+      }
+      setFlag(false);
+      showDone();
+      return true;
+    });
   }
+
+  window.addEventListener("storage", onStorage);
 
   window.CMSSignInRenewal = {
     prepare: prepare,

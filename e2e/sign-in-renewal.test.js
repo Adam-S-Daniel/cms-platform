@@ -112,6 +112,14 @@ function boot({ user = { login: "Writer", token: OLD, backendName: "github" }, l
     renewal: window.CMSSignInRenewal,
     fetch: (input, init) => window.fetch(input, init),
     runTimers: () => { for (const t of timers.splice(0)) t.fn(); },
+    // The settle delay passes, and the one real re-check of the token answers.
+    afterDelay: async () => { for (const t of timers.splice(0)) t.fn(); await settle(); await settle(); },
+    // What another tab's write to the stored session looks like from here.
+    otherTabStores: (next) => {
+      local.set("decap-cms-user", JSON.stringify(next));
+      const fn = listeners.get("storage");
+      if (fn) fn({ key: "decap-cms-user" });
+    },
     message: (event) => { const fn = listeners.get("message"); if (fn) fn(event); },
     hasMessageListener: () => listeners.has("message"),
     storedToken: () => JSON.parse(local.get("decap-cms-user")).token,
@@ -127,7 +135,7 @@ const withToken = (token, extra) => ({ headers: { Authorization: `token ${token}
 async function expireAndSignIn(h, token = NEW) {
   await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
   await h.settle();
-  h.runTimers();
+  await h.afterDelay();
   h.button().listeners.click();
   const popup = h.opened[0];
   h.message({ origin: PROXY, source: popup, data: "authorizing:github" });
@@ -157,7 +165,7 @@ test.describe("sign-in-renewal.js", () => {
     expect(res.status).toBe(401);
     await h.settle();
     expect(h.banner(), "nothing until the settle delay has passed").toBeNull();
-    h.runTimers();
+    await h.afterDelay();
     expect(h.banner().attrs.role).toBe("alert");
     expect(h.banner().style.cssText).not.toMatch(/position\s*:\s*fixed/);
     expect(h.classes.has("cms-notice-band")).toBe(true);
@@ -180,9 +188,34 @@ test.describe("sign-in-renewal.js", () => {
     const h = boot({ live: [OLD] });
     h.renewal.observe(`${API}/user`, withToken(OLD), Response.json({ message: "Requires authentication" }, { status: 401 }));
     await h.settle();
-    h.runTimers();
+    await h.afterDelay();
     expect(h.banner()).toBeNull();
     expect((await h.fetch(`${API}/user`, withToken(OLD))).status).toBe(200);
+  });
+
+  test("the notice waits for a second, real answer from GitHub about the token", async () => {
+    const h = boot();
+    await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
+    await h.settle();
+    h.network.length = 0;
+    await h.afterDelay();
+    expect(h.network.map((n) => [n.url, n.auth]), "one re-check, really sent").toEqual([[`${API}/user`, `token ${OLD}`]]);
+    expect(h.text()).toContain("still on this page");
+  });
+
+  test("one Bad credentials for a token that works after all does not end the sign-in", async () => {
+    const h = boot();
+    expect((await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD))).status).toBe(401);
+    await h.settle();
+    h.liveTokens.add(OLD); // the fault at GitHub has passed
+    await h.afterDelay();
+    expect(h.banner()).toBeNull();
+    expect(h.session.has("cms-sign-in-expired")).toBe(false);
+    h.network.length = 0;
+    const init = withToken(OLD);
+    expect((await h.fetch(`${API}/repos/${REPO}/git/trees`, init)).status).toBe(200);
+    expect(h.network, "sent again, as the caller gave it").toHaveLength(1);
+    expect(h.network[0].rawInit).toBe(init);
   });
 
   test("a token known to be dead is answered here, not sent again", async () => {
@@ -201,7 +234,7 @@ test.describe("sign-in-renewal.js", () => {
     h.liveTokens.add(NEW);
     await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
     await h.settle();
-    h.runTimers();
+    await h.afterDelay();
     h.button().listeners.click();
     const popup = h.opened[0];
     expect(popup.url).toBe(`${PROXY}/prod/auth`);
@@ -272,11 +305,107 @@ test.describe("sign-in-renewal.js", () => {
     expect(h.session.get("cms-sign-in-expired")).toBe("1");
   });
 
+  test("a second tab takes the sign-in renewed in another tab, with nothing to press", async () => {
+    const h = boot();
+    h.liveTokens.add(NEW);
+    await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
+    await h.settle();
+    await h.afterDelay();
+    expect(h.button().style.display, "this tab is asking too").toBe("");
+    h.otherTabStores({ login: "writer", token: NEW, backendName: "github" });
+    await h.settle();
+    await h.settle();
+    expect(h.text()).toContain("another tab");
+    expect(h.button().style.display).toBe("none");
+    expect(h.session.has("cms-sign-in-expired")).toBe(false);
+    expect(h.opened, "no sign-in window").toHaveLength(0);
+    h.network.length = 0;
+    expect((await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD))).status).toBe(200);
+    expect(h.network[0].auth).toBe(`token ${NEW}`);
+    expect(h.storedToken(), "the other tab's session is left as it is").toBe(NEW);
+    h.runTimers();
+    expect(h.banner(), "the note clears itself").toBeNull();
+  });
+
+  test("a second tab that learns of the renewal first never shows the sign-in notice", async () => {
+    const h = boot({ live: [OLD] });
+    await h.fetch(`${API}/repos/${REPO}/branches/main`, withToken(OLD));
+    h.otherTabStores({ login: "Writer", token: NEW, backendName: "github" });
+    await h.settle();
+    expect(h.banner(), "the old token still works, so nothing changes yet").toBeNull();
+    h.liveTokens.delete(OLD);
+    h.liveTokens.add(NEW);
+    expect((await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD))).status).toBe(401);
+    await h.settle();
+    await h.afterDelay();
+    expect(h.text()).toContain("another tab");
+    expect(h.button().style.display).toBe("none");
+    h.network.length = 0;
+    expect((await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD))).status).toBe(200);
+    expect(h.network[0].auth).toBe(`token ${NEW}`);
+  });
+
+  test("a second tab does not take another account's sign-in, and asks instead", async () => {
+    const OTHER = "ghu_other";
+    const h = boot({ logins: { ghu_other: "SomeoneElse" } });
+    h.liveTokens.add(OTHER);
+    h.liveTokens.add(NEW);
+    await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
+    await h.settle();
+    h.otherTabStores({ login: "SomeoneElse", token: OTHER, backendName: "github" });
+    await h.afterDelay();
+    expect(h.text()).toContain("still on this page");
+    expect(h.button().style.display).toBe("");
+    h.network.length = 0;
+    expect((await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD))).status).toBe(401);
+    expect(h.network, "the other account's token is never sent for this tab").toHaveLength(0);
+
+    // Signing in here as this tab's own account works, and leaves the other
+    // account's stored session alone.
+    h.button().listeners.click();
+    const popup = h.opened[0];
+    h.message({ origin: PROXY, source: popup, data: `authorization:github:success:${JSON.stringify({ token: NEW })}` });
+    await h.settle();
+    await h.settle();
+    expect(h.text()).toContain("signed in again");
+    expect(h.storedToken()).toBe(OTHER);
+    h.network.length = 0;
+    await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
+    expect(h.network[0].auth).toBe(`token ${NEW}`);
+  });
+
+  test("a second tab asks when the stored session's token does not check out as the same account", async () => {
+    // The stored session CLAIMS the same account; GitHub says otherwise.
+    const h = boot({ logins: { [NEW]: "SomeoneElse" } });
+    h.liveTokens.add(NEW);
+    await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
+    await h.settle();
+    h.otherTabStores({ login: "Writer", token: NEW, backendName: "github" });
+    await h.settle();
+    await h.settle();
+    expect(h.text()).toContain("still on this page");
+    h.network.length = 0;
+    expect((await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD))).status).toBe(401);
+    expect(h.network).toHaveLength(0);
+  });
+
+  test("a stored session this tab's own editor replaced is not taken (the editor's own sign-in)", async () => {
+    const h = boot();
+    h.liveTokens.add(NEW);
+    await h.fetch(`${API}/user`, withToken(OLD));
+    await h.settle();
+    h.local.set("decap-cms-user", JSON.stringify({ login: "Writer", token: NEW, backendName: "github" }));
+    h.network.length = 0;
+    await h.afterDelay();
+    expect(h.banner()).toBeNull();
+    expect(h.network, "nothing is checked or swapped").toHaveLength(0);
+  });
+
   test("a failed or malformed sign-in keeps the notice and the old session", async () => {
     const h = boot();
     await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
     await h.settle();
-    h.runTimers();
+    await h.afterDelay();
     h.button().listeners.click();
     h.message({ origin: PROXY, source: h.opened[0], data: 'authorization:github:error:{"error":"denied"}' });
     await h.settle();
@@ -289,7 +418,7 @@ test.describe("sign-in-renewal.js", () => {
     const h = boot();
     await h.fetch(`${API}/repos/${REPO}/git/trees`, withToken(OLD));
     await h.settle();
-    h.runTimers();
+    await h.afterDelay();
     h.window.open = () => null;
     h.button().listeners.click();
     expect(h.text()).toContain("pop-ups");

@@ -1197,22 +1197,42 @@ the after-reload message said the work had been saved automatically.
 `theme/admin/sign-in-renewal.js` removes the need for the reload. The typed
 work is still in Decap's in-memory draft, so:
 
-1. `publish-via-auto-merge.js`'s fetch wrap (still the only one) hands each
+1. `publish-via-auto-merge.js`'s fetch wrap (still the only one that changes
+   what is sent; `media-library-tidy.js` also wraps `fetch`, but sends every
+   request as given and only filters two listings on the way back) hands each
    GitHub API response to the shim. A 401 whose body says *Bad credentials*
    marks that token dead.
-2. Two seconds later, if that token is still the stored session, a notice
-   appears in flow at the top of the page with a **Sign in again** button. A
-   page load with a dead stored token does not get the notice: Decap removes
-   the stored session and shows its own login page.
+2. Two seconds later, if that token is still the stored session, the shim
+   asks GitHub once more (`GET /user`, really sent). If that works, the token
+   goes back into use and nothing is shown, so one stray *Bad credentials*
+   does not end the sign-in for the tab. Otherwise a notice appears in flow
+   at the top of the page with a **Sign in again** button. A page load with a
+   dead stored token does not get the notice: Decap removes the stored
+   session and shows its own login page.
 3. The button runs the same popup handshake as the reviews dashboards. The
    `message` listener checks the proxy's origin and the popup it opened before
    reading anything.
-4. The new token is accepted only if `GET /user` says it is the same account.
+4. The new token is accepted only if `GET /user` says it is the same account,
+   and refused when the session does not name an account to compare with.
    It replaces the token in `localStorage["decap-cms-user"]`, and the fetch
    wrap swaps the old token for it on every later `api.github.com` request,
    because Decap keeps the old one in memory. Requests to any other host are
    never touched.
 5. Save now works on the open entry.
+
+**A second open tab.** Signing in again in one tab leaves every other open tab
+holding the dead token, with a stored session that no longer matches it. Such
+a tab used to show nothing and lose its typed work at the next reload. Now it
+takes the stored session's token without a second sign-in, when all three
+hold: another tab wrote the stored session (a `storage` event, which a tab
+never gets for its own writes, so Decap's own sign-in in the same tab is left
+alone); the stored session names the account the tab's dead token belonged to
+(the shim notes that name while the token is still the stored one); and
+`GET /user` with the stored token says the same. The tab then says it is using
+the other tab's sign-in. In any other case it shows the **Sign in again**
+notice. A sign-in from a tab whose stored session now belongs to a different
+account is checked against the tab's own account, and leaves that stored
+session alone.
 
 While a token is known dead and not yet replaced, requests carrying it are
 answered in the page with the same 401, so the polling shims do not fill the
@@ -1223,7 +1243,8 @@ Checked 2026-11-18 with the real Decap 3.17.3 bundle in Chromium against a
 stand-in for the GitHub API (not Firefox or WebKit, and not yet against
 GitHub itself): the draft stayed on screen, and the next Save sent every
 request with the new token. `e2e/sign-in-renewal.test.js` covers the shim and
-its hook.
+its hook. The second-tab path and the second look at a dead token (added
+2026-11-23) are covered by that file only; neither has been run in a browser.
 
 ### Org-owned consumers (#26) and the restriction detector
 

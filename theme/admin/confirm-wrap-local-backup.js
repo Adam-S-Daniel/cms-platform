@@ -66,8 +66,8 @@
  * is delegated to the ORIGINAL native confirm unchanged — the e2e delete flows depend on the
  * native dialog surviving (they auto-accept via page.on("dialog", ...)). We
  * wrap ONLY window.confirm, never window.fetch (publish-via-auto-merge.js
- * owns the single fetch wrap; a second wrap risks the Safari loadEntries
- * hang), so the two shims compose.
+ * owns the single fetch wrap that changes what is sent; a second one risks
+ * the Safari loadEntries hang), so the two shims compose.
  *
  * ── Second job: put the URL back when the leave prompt is cancelled (#733)
  * Decap's editor blocks navigation while the draft has unsaved changes. On a
