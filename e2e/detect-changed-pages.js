@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { parseNulPaths } = require("./visual-regression-salient");
 const { ensureMergeBase } = require("./ensure-merge-base");
+const { isPublished: isPublishedFrontMatter, parseFrontMatterText } = require("./public-content");
 
 // ROOT — the SITE repo root, where `git diff origin/main...HEAD` must run and
 // where _site/_posts/_projects/_tags/pages live. When the harness sits AT the
@@ -47,10 +48,16 @@ function readFrontMatter(filePath) {
   }
 }
 
+// Jekyll's rule, shared with the other crawls: `published` false, no, off or
+// empty is not built (public-content.js isPublished).
 function isPublished(filePath) {
-  const fm = readFrontMatter(filePath);
-  if (/^published:\s*false$/m.test(fm)) return false;
-  return true;
+  let src;
+  try {
+    src = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return true;
+  }
+  return isPublishedFrontMatter(parseFrontMatterText(src));
 }
 
 // Admin shell URLs that the regression video should always include — these
