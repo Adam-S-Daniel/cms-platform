@@ -21,7 +21,9 @@
  * and the editor counts a cancelled or pending check run against the publish.
  * While an armed publish is still in flight after a pass, it looks again at the
  * follow-up minutes (default 5 and 16) so a green-but-unmerged pull request is
- * caught without the cron; the 60-minute stall rule is not covered by that.
+ * caught without the cron (a pass is also scheduled when the grace for the newest
+ * finished check elapses, up to 25 minutes in); the 60-minute stall rule is not
+ * covered by that.
  * Everything but `main` is pure or injected; the CLI talks to GitHub through
  * the `gh` CLI with argv arrays (never a shell string).
  *
@@ -54,6 +56,14 @@ const { hasE2eSlugSignature } = require("../e2e/public-content.js");
 const DEFAULT_GRACE_MINUTES = 3;
 const DEFAULT_STALL_MINUTES = 60;
 const DEFAULT_FOLLOW_UPS = [5, 16];
+// The latest a follow-up pass may be scheduled, minutes after the first pass
+// (the same bound --follow-up-minutes enforces, inside the job's 30-minute budget).
+const FOLLOW_UP_CAP_MINUTES = 25;
+// How long a required context with no check run at all counts as "GitHub has not
+// created it yet", aged from the pull request's last update. GitHub can take
+// several minutes to start a workflow run; after this the context is treated as
+// missing for good and the publish is stuck.
+const MISSING_CONTEXT_WAIT_MINUTES = 10;
 const GH_TIMEOUT_MS = 30000;
 const MAX_CHECK_RUN_PAGES = 10;
 const FAILING_CONCLUSIONS = new Set([
@@ -203,6 +213,22 @@ function classifyPublish({
     }
     return { state: "in-flight", reason: "Checks are still running.", failing: [] };
   }
+  // A required context that has no check run at all is not "finished": GitHub
+  // may not have created its run yet. It is in flight for a bounded time aged
+  // from the pull request's last update; after that the issue names it.
+  const missing = required === null ? [] : required.filter((c) => !newest.some((r) => r.name === c));
+  if (missing.length > 0 && updatedAt !== null && Number.isFinite(nowMs)) {
+    const due = updatedAt + MISSING_CONTEXT_WAIT_MINUTES * 60 * 1000;
+    if (nowMs >= due) {
+      return { state: "stuck", reason: "A required check never started.", failing: [], missing };
+    }
+    return {
+      state: "in-flight",
+      reason: "A required check has not started yet.",
+      failing: [],
+      nextPassAtMs: due,
+    };
+  }
   let latest = null;
   if (newest.length === 0) {
     latest = updatedAt;
@@ -219,7 +245,13 @@ function classifyPublish({
       failing: [],
     };
   }
-  return { state: "in-flight", reason: "Waiting for the merge.", failing: [] };
+  // The pass that will see the grace elapse, so a caller can schedule it.
+  return {
+    state: "in-flight",
+    reason: "Waiting for the merge.",
+    failing: [],
+    ...(latest !== null ? { nextPassAtMs: latest + grace * 60 * 1000 } : {}),
+  };
 }
 
 // The marker is the first line of the body. With a head sha it also records
@@ -238,6 +270,12 @@ const MARKER_RE = /<!-- publish-watchdog:pr=(\d+)(?: sha=([0-9a-f]{40}))? -->/;
 // keeps suppressing a new alert for the same commit; one the watchdog closed
 // itself (the pull request was put on hold, say, then released still stuck)
 // does not.
+const RESOLVED_MARKER_RE = /<!-- publish-watchdog-resolved:pr=(\d+)(?: sha=([0-9a-f]{40}))? -->/;
+// The inverse, for a person who reopened an issue the sweep had closed.
+function restoreMarker(body) {
+  return String(body || "").replace(/<!-- publish-watchdog-resolved:pr=/g, "<!-- publish-watchdog:pr=");
+}
+
 function resolveMarker(body) {
   return String(body || "").replace(/<!-- publish-watchdog:pr=/g, "<!-- publish-watchdog-resolved:pr=");
 }
@@ -262,6 +300,11 @@ function renderIssue({ repo, pr, verdict }) {
     advice =
       "What to do: open the pull request, then each check above, and approve or start it " +
       "(or cancel and re-run it if it is hung). Nothing was lost; the content is still in the editor.";
+  } else if (verdict && Array.isArray(verdict.missing) && verdict.missing.length > 0) {
+    checks = "These required checks never started:\n\n" + verdict.missing.map((n) => `- ${n}`).join("\n");
+    advice =
+      "What to do: open the pull request and check why those workflows did not run " +
+      "(push an empty commit or re-run them). Nothing was lost; the content is still in the editor.";
   } else if (verdict && verdict.lagging) {
     checks = `GitHub has not caught up with this pull request for more than ${stall} minutes.`;
     advice =
@@ -299,6 +342,13 @@ function parseMarker(issue) {
   return m ? { pr: Number(m[1]), sha: m[2] || null } : null;
 }
 
+// Our own issue the sweep closed (marker rewritten to the resolved form).
+function parseResolvedMarker(issue) {
+  if (!issue || !issue.user || issue.user.login !== ISSUE_AUTHOR) return null;
+  const m = RESOLVED_MARKER_RE.exec(issue.body || "");
+  return m ? { pr: Number(m[1]), sha: m[2] || null } : null;
+}
+
 // `issues` are the watchdog's issues in ANY state. An issue closes when its pull
 // request went live, was closed, or is no longer a publish anyone is waiting on
 // (`ignored`); it stays open while the pull request is open and armed, stuck or
@@ -313,6 +363,7 @@ function planSweep({ prs, issues, nowMs, graceMinutes, stallMinutes, skipped }) 
   const stuck = new Map();
   const waiting = new Set();
   let pending = 0;
+  let retryAtMs = null;
   for (const entry of prs || []) {
     const verdict = classifyPublish({
       pr: entry.pr,
@@ -327,47 +378,84 @@ function planSweep({ prs, issues, nowMs, graceMinutes, stallMinutes, skipped }) 
     });
     if (verdict.state === "stuck") stuck.set(entry.pr.number, { pr: entry.pr, verdict });
     if (verdict.state !== "ignored") waiting.add(entry.pr.number);
-    if (verdict.state === "in-flight") pending++;
+    if (verdict.state === "in-flight") {
+      pending++;
+      if (Number.isFinite(verdict.nextPassAtMs) && (retryAtMs === null || verdict.nextPassAtMs < retryAtMs)) {
+        retryAtMs = verdict.nextPassAtMs;
+      }
+    }
   }
   const parsed = [];
   for (const issue of issues || []) {
     const mk = parseMarker(issue);
     if (mk) parsed.push({ ...mk, number: issue.number, open: !issue.state || issue.state === "open" });
   }
+  // An issue the sweep closed and a person reopened: its marker is in the
+  // resolved form, so it is recognized only while open.
+  const reopened = [];
+  for (const issue of issues || []) {
+    const mk = parseResolvedMarker(issue);
+    if (mk && (!issue.state || issue.state === "open")) reopened.push({ ...mk, number: issue.number });
+  }
   const open = [];
+  const restore = [];
   for (const [n, entry] of stuck) {
     if (skip.has(n)) continue;
     const sha = entry.pr.head && entry.pr.head.sha;
-    const have = parsed.some((x) => x.pr === n && (x.sha === null || x.sha === sha));
-    if (!have) open.push(entry);
+    const fits = (x) => x.pr === n && (x.sha === null || x.sha === sha);
+    const back = reopened.filter(fits);
+    // Its pull request is stuck: make it a live alert again (so it closes by
+    // itself later) instead of opening a second issue beside it.
+    for (const x of back) restore.push({ issueNumber: x.number, prNumber: n });
+    if (!parsed.some(fits) && back.length === 0) open.push(entry);
   }
   const close = [];
   for (const x of parsed) {
     if (x.open && !waiting.has(x.pr) && !skip.has(x.pr)) close.push({ issueNumber: x.number, prNumber: x.pr });
   }
-  return { open, close, pending };
+  return { open, close, restore, pending, retryAtMs };
 }
 
 // Run `runOnce` (one full sweep) and, while armed publishes are still in flight,
 // again at each follow-up (minutes since the first pass). Bounded: it stops
 // after the last follow-up whatever the state. A pass that throws does not
 // cancel the remaining follow-ups. All time and sleeping are injected.
+//
+// `runOnce` may also resolve `retryAtMs`: the moment the grace for the newest
+// finished check elapses. A pass is then scheduled at that moment when it comes
+// before the next fixed follow-up (or after the last one), but never later than
+// FOLLOW_UP_CAP_MINUTES after the first pass, so a slow publish that goes green
+// late is still judged without waiting for the next sweep.
 async function sweepWithFollowUps({ runOnce, sleep, now, followUpMinutes = [5, 16] }) {
   const start = now();
+  const cap = start + FOLLOW_UP_CAP_MINUTES * 60000;
   let passes = 0;
   let failures = 0;
   let next = 0;
+  let extra = 0;
   for (;;) {
     passes++;
     let pending = null;
+    let retryAt = null;
     try {
-      pending = (await runOnce()).pending;
+      const res = await runOnce();
+      pending = res.pending;
+      retryAt = Number.isFinite(res.retryAtMs) ? res.retryAtMs : null;
     } catch (err) {
       failures++;
     }
-    if (pending === 0 || next >= followUpMinutes.length) break;
-    const wait = start + followUpMinutes[next++] * 60000 - now();
-    await sleep(Math.max(0, wait));
+    if (pending === 0 || followUpMinutes.length === 0) break;
+    const fixedAt = next < followUpMinutes.length ? start + followUpMinutes[next] * 60000 : null;
+    const retryOk = retryAt !== null && retryAt > now() && retryAt <= cap && extra < 3;
+    if (retryOk && (fixedAt === null || retryAt < fixedAt)) {
+      extra++;
+      await sleep(retryAt - now());
+    } else if (fixedAt !== null) {
+      next++;
+      await sleep(Math.max(0, fixedAt - now()));
+    } else {
+      break;
+    }
   }
   return { passes, failures };
 }
@@ -503,22 +591,25 @@ function createIssue(repo, pr, verdict, issueLabel, workLabel, assignees) {
   if (workLabel) labels.push(workLabel);
   const first = { title, body, labels };
   if (assignees && assignees.length > 0) first.assignees = assignees;
+  // Only a validation failure (a missing work label, an assignee who cannot be
+  // assigned) is retried, and only when there is an optional part to drop; any
+  // other failure may follow a create that did happen server-side. The
+  // assignees go first (the likelier culprit), so a bad assignee does not also
+  // cost the work label; the label is dropped only if that retry is a 422 too.
+  const attempts = [first];
+  if (first.assignees) attempts.push({ title, body, labels });
+  if (workLabel) attempts.push({ title, body, labels: [issueLabel] });
   let created;
-  try {
-    created = ghApi(`opening an issue for #${pr.number}`, `repos/${repo}/issues`, {
-      method: "POST",
-      body: first,
-    });
-  } catch (err) {
-    // Only a validation failure (a missing work label, an assignee who cannot be
-    // assigned) is retried, once, with the optional parts dropped. Any other
-    // failure may follow a create that did happen server-side.
-    const dropsSomething = !!workLabel || !!first.assignees;
-    if (err.status !== "422" || !dropsSomething) throw err;
-    created = ghApi(`opening an issue for #${pr.number} (retry)`, `repos/${repo}/issues`, {
-      method: "POST",
-      body: { title, body, labels: [issueLabel] },
-    });
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      created = ghApi(`opening an issue for #${pr.number}${i === 0 ? "" : " (retry)"}`, `repos/${repo}/issues`, {
+        method: "POST",
+        body: attempts[i],
+      });
+      break;
+    } catch (err) {
+      if (err.status !== "422" || i === attempts.length - 1) throw err;
+    }
   }
   console.log(`  opened issue #${created && created.number} for pull request #${pr.number}`);
   return created && Number.isInteger(created.number) ? created.number : null;
@@ -803,20 +894,27 @@ function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinute
     console.log(`  stuck: #${pr.number}${names ? ` (checks: ${names})` : ""}`);
   }
   for (const c of plan.close) console.log(`  close: issue #${c.issueNumber} (pull request #${c.prNumber})`);
+  for (const c of plan.restore) console.log(`  reopened: issue #${c.issueNumber} (pull request #${c.prNumber}) is a live alert again`);
   if (dryRun) {
     console.log("Dry run: nothing written.");
-    return { pending: plan.pending };
+    return { pending: plan.pending, retryAtMs: plan.retryAtMs };
   }
   for (const { pr, verdict } of plan.open) {
     const issueNumber = createIssue(repo, pr, verdict, issueLabel, workLabel, assignees);
     sendSelfAlert(selfAlert, { repo, prNumber: pr.number, issueNumber });
   }
   const bodyOf = new Map(issues.map((i) => [i.number, i.body]));
+  for (const c of plan.restore) {
+    ghApi(`restoring the marker on issue #${c.issueNumber}`, `repos/${repo}/issues/${c.issueNumber}`, {
+      method: "PATCH",
+      body: { body: restoreMarker(bodyOf.get(c.issueNumber)) },
+    });
+  }
   for (const c of plan.close) closeWatchdogIssue(repo, c.issueNumber, c.prNumber, bodyOf.get(c.issueNumber));
   if (armed.length > 0 && skipped.length === armed.length) {
     throw new Error("every armed pull request failed to read");
   }
-  return { pending: plan.pending };
+  return { pending: plan.pending, retryAtMs: plan.retryAtMs };
 }
 
 async function main(argv) {
