@@ -184,14 +184,33 @@ test("--require-ran fails the CLI on zero executed tests and names the site", ()
       fs.writeFileSync(file, JSON.stringify(report));
       return require("node:child_process").spawnSync(process.execPath,
         [path.join(__dirname, "summarize-playwright.js"), "--require-ran", file],
-        { encoding: "utf8", env: { ...process.env, GITHUB_REPOSITORY: "example/site" } });
+        { encoding: "utf8", env: { ...process.env, GITHUB_REPOSITORY: "example/site", GITHUB_ACTOR: "someone", CMS_E2E_FORK: "false", CMS_E2E_PAT: pat, ...extra } });
     };
+    let pat = "x-present";
+    let extra = {};
     const skipped = run({ stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 4 }, errors: [] });
     expect(skipped.status).toBe(1);
     expect(skipped.stdout).toContain("0 passed, 0 failed, 0 flaky, 4 skipped");
     expect(skipped.stdout).toContain("::error title=Loop published nothing::example/site:");
     const ran = run({ stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 3 }, errors: [] });
     expect(ran.status).toBe(0);
+    const none = { stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 4 }, errors: [] };
+    // Empty secret on a normal run is a missing secret: still a failure, named.
+    pat = "";
+    const missing = run(none);
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toContain("CMS_E2E_PAT is missing or empty");
+    // Empty secret is tolerated only for Dependabot or a fork.
+    extra = { GITHUB_ACTOR: "dependabot[bot]" };
+    const dependabot = run(none);
+    expect(dependabot.status).toBe(0);
+    expect(dependabot.stdout).toContain("::notice::no CMS_E2E_PAT");
+    expect(dependabot.stdout).not.toContain("::error");
+    extra = { CMS_E2E_FORK: "true" };
+    expect(run(none).status).toBe(0);
+    // A fork flag never excuses a present secret that ran nothing.
+    pat = "x-present";
+    expect(run(none).status).toBe(1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -202,6 +221,12 @@ test("every real publish loop workflow passes --require-ran", () => {
     "cms-scheduled-publish-loop", "cms-media-roundtrip"]) {
     const text = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", `${name}.yml`), "utf8");
     expect(text).toContain("summarize-playwright.js --require-ran");
+    // The step that runs --require-ran carries the secret and the fork flag in its own env.
+    const steps = Object.values(parseYaml(text).jobs).flatMap((job) => job.steps || []);
+    const step = steps.find((st) => String(st.run || "").includes("summarize-playwright.js --require-ran"));
+    expect(step, name).toBeTruthy();
+    expect(step.env.CMS_E2E_PAT, name).toBe("${{ secrets.CMS_E2E_PAT }}");
+    expect(step.env.CMS_E2E_FORK, name).toBe("${{ github.event.repository.fork }}");
   }
 });
 

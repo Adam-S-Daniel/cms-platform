@@ -57,10 +57,18 @@ if (require.main === module) {
   process.stdout.write(summarizeFile(file) + "\n");
   if (requireRan) {
     const reason = nothingRanFile(file);
-    if (reason) {
+    // An empty CMS_E2E_PAT is the specs' documented self-skip only for Dependabot
+    // and fork runs. Anywhere else it is a missing secret, and green with nothing
+    // run is exactly what --require-ran exists to refuse (#1068).
+    const noSecretOk = !process.env.CMS_E2E_PAT &&
+      (process.env.GITHUB_ACTOR === "dependabot[bot]" || process.env.CMS_E2E_FORK === "true");
+    if (reason && noSecretOk) {
+      process.stdout.write("::notice::no CMS_E2E_PAT on a fork or Dependabot run; the loop specs self-skip by design, so --require-ran is not enforced\n");
+    } else if (reason) {
       const site = String(process.env.GITHUB_REPOSITORY || "this site")
         .replace(/[^A-Za-z0-9._\/-]/g, "");
-      process.stdout.write(`::error title=Loop published nothing::${site}: ${reason}\n`);
+      const hint = process.env.CMS_E2E_PAT ? "" : " (CMS_E2E_PAT is missing or empty)";
+      process.stdout.write(`::error title=Loop published nothing::${site}: ${reason}${hint}\n`);
       process.exitCode = 1;
     }
   }
