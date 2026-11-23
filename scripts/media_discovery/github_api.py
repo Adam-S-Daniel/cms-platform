@@ -144,3 +144,51 @@ class GitHub:
                 {"reviewers": reviewers}, ok=(200, 201, 422))
             requested = status != 422
         return OpenedPR(number, pr["html_url"], requested)
+
+    def read_json(self, repo: str, branch: str, path: str):
+        """(parsed JSON, blob sha) of `path` on `branch`, or (None, None) when it
+        is not there (a missing file or a missing branch both answer 404). A
+        file that is not UTF-8 JSON reads as (None, sha), so the caller can
+        replace it."""
+        r = self._repo(repo)
+        status, data = self._call(
+            "GET", f"/repos/{r}/contents/{quote(path, safe='/')}?ref={quote(branch, safe='')}",
+            "GET /repos/{repo}/contents/{path}", ok=(200, 404))
+        if status == 404 or not isinstance(data, dict):
+            return None, None
+        sha = data.get("sha")
+        try:
+            raw = base64.b64decode(data.get("content") or "")
+            return json.loads(raw.decode("utf-8")), sha
+        except (ValueError, UnicodeDecodeError):
+            return None, sha
+
+    def write_json(self, repo: str, branch: str, path: str, data, sha: str | None,
+                   message: str) -> str | None:
+        """Create or update `path` on `branch` with `data` as JSON. `sha` is the
+        blob sha being replaced (None to create). A stale sha is a GitHubError
+        with status 409 or 422. Returns the new blob sha."""
+        r = self._repo(repo)
+        text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        payload = {"message": message, "branch": branch,
+                   "content": base64.b64encode(text.encode("utf-8")).decode("ascii")}
+        if sha:
+            payload["sha"] = sha
+        _, resp = self._call("PUT", f"/repos/{r}/contents/{quote(path, safe='/')}",
+                             "PUT /repos/{repo}/contents/{path}", payload)
+        content = resp.get("content") if isinstance(resp, dict) else None
+        return content.get("sha") if isinstance(content, dict) else None
+
+    def ensure_branch(self, repo: str, branch: str) -> bool:
+        """Create `branch` from the default branch's head when it does not exist.
+        True when it was created. A repository with no commit has no default
+        branch head to copy, so that stays a GitHubError."""
+        r = self._repo(repo)
+        status, _ = self._call("GET", f"/repos/{r}/git/ref/heads/{quote(branch, safe='')}",
+                               "GET /repos/{repo}/git/ref/heads/{branch}", ok=(200, 404))
+        if status == 200:
+            return False
+        _, sha = self.default_branch_sha(repo)
+        status, _ = self._call("POST", f"/repos/{r}/git/refs", "POST /repos/{repo}/git/refs",
+                               {"ref": f"refs/heads/{branch}", "sha": sha}, ok=(201, 422))
+        return status == 201

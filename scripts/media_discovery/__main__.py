@@ -12,7 +12,7 @@ go only into the PRs (written by safe_md) and the emailed digest.
 import argparse
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from email.utils import getaddresses
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,12 +27,18 @@ from .fetch import fetch
 from .github_api import GitHub, GitHubError
 from .mailer import SMTPLoginError, send_digest
 from .render import render_digest, render_entry, render_pr
+from .results import build_finding, finding_id, merge_results
 
 CONFIG_PATH = ".github/media-discovery.yml"
 LABELS = ["decap-cms/pending_review", "media-discovery"]
 SMTP_PORT = 587  # STARTTLS, as Fastmail's own client setups use
 DEFAULT_SMTP_HOST = "smtp.fastmail.com"
 MODES = ("email-only", "live")
+DEFAULT_RESULTS_BRANCH = "persistent/media-search"
+FINDINGS_PATH = "findings.json"
+DECISIONS_PATH = "decisions.json"
+RESULTS_COMMIT_MESSAGE = "Update media search results"
+STALE_SHA_STATUSES = (409, 422)
 
 
 def _single_address(value: str) -> str | None:
@@ -111,6 +117,98 @@ class _LazyBrowser:
             self._session = None
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _valid_findings(doc) -> bool:
+    return doc is None or (isinstance(doc, dict) and isinstance(doc.get("findings"), list))
+
+
+class _Results:
+    """The results file on the data branch: read before the run, merged and
+    written after it. Built only by _open_results, so a run without a token or
+    with an unreadable file has no _Results and works as before."""
+
+    def __init__(self, client, repo, branch, prior, sha, decisions):
+        self.client, self.repo, self.branch = client, repo, branch
+        self.prior, self.sha, self.decisions = prior, sha, decisions
+        self.skip_ids = set()
+        self.touched = set()
+        self.run_findings = []
+        for f in (prior or {}).get("findings", []):
+            if isinstance(f, dict) and isinstance(f.get("id"), str):
+                if f.get("status") == "confirmed":
+                    self.skip_ids.add(f["id"])
+        decided = (decisions or {}).get("decisions") if isinstance(decisions, dict) else None
+        if isinstance(decided, dict):
+            self.skip_ids |= {k for k in decided if isinstance(k, str)}
+
+    def _reread(self):
+        self.prior, self.sha = self.client.read_json(self.repo, self.branch, FINDINGS_PATH)
+        self.decisions, _ = self.client.read_json(self.repo, self.branch, DECISIONS_PATH)
+        if not _valid_findings(self.prior):
+            raise GitHubError(0, "GET /repos/{repo}/contents/{path}")
+
+    def publish(self, person: str, now: str, say):
+        """Merge this run into the file and write it. (findings that are new for
+        the email, 1 when the file was written else 0). A refused write is a
+        notice, never a failure: the digest still goes out."""
+        branch_ready = False
+        for attempt in range(2):
+            doc, new = merge_results(self.prior, self.decisions, self.run_findings,
+                                     now=now, person=person, touched=self.touched)
+            try:
+                if not branch_ready:
+                    self.client.ensure_branch(self.repo, self.branch)
+                    branch_ready = True
+                self.client.write_json(self.repo, self.branch, FINDINGS_PATH, doc, self.sha,
+                                       RESULTS_COMMIT_MESSAGE)
+                return new, 1
+            except GitHubError as exc:
+                if attempt == 0 and exc.status in STALE_SHA_STATUSES:
+                    try:  # someone wrote first: read what they wrote and merge again
+                        self._reread()
+                        continue
+                    except GitHubError:
+                        pass
+                say("::notice::the results file could not be written; this run's finds are "
+                    "not saved to it")
+                return new, 0
+        return new, 0  # pragma: no cover - the loop always returns
+
+
+def _open_results(env, default_repo, github_factory, say):
+    """The _Results for this run, or None (results disabled, with a notice when
+    that is not just a missing token)."""
+    token = env.get("MEDIA_DISCOVERY_RESULTS_TOKEN", "").strip()
+    if not token:
+        return None
+    repo = env.get("MEDIA_DISCOVERY_RESULTS_REPO", "").strip() or default_repo
+    branch = env.get("MEDIA_DISCOVERY_RESULTS_BRANCH", "").strip() or DEFAULT_RESULTS_BRANCH
+    owner, _, name = repo.partition("/")
+    if not owner or not name or "/" in name:
+        say("::notice::MEDIA_DISCOVERY_RESULTS_REPO must be OWNER/NAME; continuing without "
+            "the results file")
+        return None
+    try:
+        client = github_factory(token)
+        prior, sha = client.read_json(repo, branch, FINDINGS_PATH)
+        decisions, _ = client.read_json(repo, branch, DECISIONS_PATH)
+    except GitHubError as exc:
+        say(f"::notice::earlier results could not be read (HTTP {exc.status}); continuing "
+            "without the results file")
+        return None
+    if not _valid_findings(prior):
+        say("::notice::the results file is not in the expected shape; continuing without it")
+        return None
+    return _Results(client, repo, branch, prior, sha, decisions)
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python3 -m media_discovery")
     sub = p.add_subparsers(dest="command", required=True)
@@ -125,7 +223,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetch,
          github_factory=GitHub, send=send_digest, out=None,
-         browser_factory=BrowserSession) -> int:
+         browser_factory=BrowserSession, clock=_utc_now) -> int:
     args = _parser().parse_args(argv)
     env = os.environ if env is None else env
     out = out or sys.stdout
@@ -187,6 +285,8 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
                 "continuing without that duplicate check")
             prior = set()
 
+    results = _open_results(env, args.repo, github_factory, say)
+
     try:
         candidates, notes = llm.find_candidates(cfg, existing, today, client_factory(api_key))
     except Exception as exc:  # noqa: BLE001 - reported without its message
@@ -199,20 +299,43 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
 
     seen = set(prior)
     counts = dict(duplicates=0, confirmed=0, prs_opened=0, unconfirmed=0)
+    repeats = 0
     browser_retries = browser_rescued = 0
     browser = _LazyBrowser(browser_factory)
     new_prs, would_open, unconfirmed = [], [], []
     failure = None
     reviewer_misses = 0
+    def record(cand, kind, status, problems, entry, pages):
+        if results is None:
+            return
+        titles = {u: p.title for u, p in (pages or {}).items() if getattr(p, "title", "")}
+        try:
+            results.run_findings.append(build_finding(
+                cand, kind, status, problems, entry, titles, cfg.person.names[0]))
+        except Exception:  # noqa: BLE001 - a find that cannot be recorded is not a failure
+            pass
+
+    def unconfirmed_entry(cand, kind):
+        try:
+            return render_entry(cand, kind, cfg)
+        except Exception:  # noqa: BLE001 - no draft can be made for it; the file says so
+            return None
+
     try:
         for cand in candidates:
+            if results is not None and finding_id(cand.primary_url) in results.skip_ids:
+                repeats += 1
+                results.touched.add(finding_id(cand.primary_url))
+                continue
             if is_duplicate(cand, existing, seen):
                 counts["duplicates"] += 1
                 continue
+            kind, final_pages = cand.kind, {}
             try:
                 kind = effective_kind(cand, today)
                 urls = list(dict.fromkeys([cand.primary_url, *cand.supporting_urls]))
                 pages = {u: fetcher(u) for u in urls}
+                final_pages = pages
                 verdict = verify(cand, pages, cfg)
                 if not verdict.confirmed:
                     retry = browser_eligible(verdict.problems, pages)
@@ -225,31 +348,39 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
                                 pages2[u], got = fetched, True
                         if got:
                             second = verify(cand, pages2, cfg)
-                            verdict = second
+                            verdict, final_pages = second, pages2
                             if second.confirmed:
                                 browser_rescued += 1
                 if not verdict.confirmed:
                     unconfirmed.append((cand, verdict.problems))
+                    record(cand, kind, "unconfirmed", verdict.problems,
+                           unconfirmed_entry(cand, kind), final_pages)
                     continue
                 try:
                     entry = render_entry(cand, kind, cfg)
                 except ValueError as exc:
-                    unconfirmed.append((cand, [Problem("no-entry", detail=str(exc))]))
+                    problems = [Problem("no-entry", detail=str(exc))]
+                    unconfirmed.append((cand, problems))
+                    record(cand, kind, "unconfirmed", problems, None, final_pages)
                     continue
             except Exception:  # noqa: BLE001 - one bad candidate must not end the run; no text logged
                 unconfirmed.append((cand, [Problem("internal-error")]))
+                record(cand, kind, "unconfirmed", [Problem("internal-error")], None, final_pages)
                 continue
             seen |= _urls(cand)
             counts["confirmed"] += 1
             if mode != "live":
                 would_open.append(cand)
+                record(cand, kind, "confirmed", [], entry, final_pages)
                 continue
             title, body = render_pr(cand, kind, entry, verdict, review_link)
             try:
                 opened = gh.open_entry_pr(args.repo, entry, title, body, LABELS, reviewers)
             except GitHubError as exc:
                 failure = failure or str(exc)
-                unconfirmed.append((cand, [Problem("draft-failed", detail=str(exc.status))]))
+                problems = [Problem("draft-failed", detail=str(exc.status))]
+                unconfirmed.append((cand, problems))
+                record(cand, kind, "unconfirmed", problems, entry, final_pages)
                 continue
             if opened is None:
                 counts["duplicates"] += 1
@@ -257,13 +388,28 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
             counts["prs_opened"] += 1
             reviewer_misses += not opened.reviewers_requested
             new_prs.append(cand)
+            record(cand, kind, "confirmed", [], entry, final_pages)
     finally:
         browser.close()
     counts["unconfirmed"] = len(unconfirmed)
 
+    results_written = 0
+    if results is not None:
+        # Only what the results file did not already hold is worth an email.
+        now = _iso(clock())
+        new_findings, results_written = results.publish(cfg.person.names[0], now, say)
+        new_ids = {f["id"] for f in new_findings}
+
+        def is_new(cand):
+            return finding_id(cand.primary_url) in new_ids
+        new_prs = [c for c in new_prs if is_new(c)]
+        would_open = [c for c in would_open if is_new(c)]
+        unconfirmed = [(c, p) for c, p in unconfirmed if is_new(c)]
+
     say(f"media-discovery: mode={mode} candidates={len(candidates)} dropped={dropped} "
         + " ".join(f"{k}={v}" for k, v in counts.items())
-        + f" browser_retries={browser_retries} browser_rescued={browser_rescued}")
+        + f" browser_retries={browser_retries} browser_rescued={browser_rescued}"
+        + f" repeats={repeats} results_written={results_written}")
     if reviewer_misses:
         say(f"::warning::{reviewer_misses} pull request(s) opened without the requested reviewers "
             "(check MEDIA_DISCOVERY_REVIEWERS: each must be a collaborator)")

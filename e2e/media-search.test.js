@@ -385,6 +385,35 @@ test.describe("media-search: GitHub flow with a fake fetch", () => {
       const got = MS.reasonParts({ main: true, url: "https://example.com/", text: PRED });
       expect(got).toEqual({ lead: "The main link", href: null, predicate: PRED });
     });
+    test("a reason about the find as a whole has no lead and no link", () => {
+      const text = "Only one website backed it up, and the search needs two separate ones.";
+      for (const r of [
+        { url: "", main: false, whole: true, code: "no-second-source", text },
+        { url: "", main: false, code: "no-second-source", text },
+        { whole: true, url: "https://example.com/", text },
+      ]) {
+        expect(MS.reasonParts(r)).toEqual({ lead: "", href: null, predicate: text });
+      }
+    });
+    test("reason segments add no empty lead or leading space", () => {
+      const text = "Something went wrong while checking it.";
+      expect(plain(MS.reasonSegments(MS.reasonParts({ url: "", whole: true, text })))).toEqual([
+        { text, href: null },
+      ]);
+      expect(
+        plain(MS.reasonSegments(MS.reasonParts({ url: "https://example.com/a", title: "T", text: "is odd." }))),
+      ).toEqual([
+        { text: "T", href: "https://example.com/a" },
+        { text: " is odd.", href: null },
+      ]);
+    });
+    test("only a find with an entry can be added from the page", () => {
+      expect(MS.canAdd(FINDING)).toBe(true);
+      expect(MS.canAdd({ ...FINDING, entry: null })).toBe(false);
+      expect(MS.canAdd({ ...FINDING, entry: {} })).toBe(false);
+      expect(MS.canAdd(null)).toBe(false);
+      expect(MS.NO_ENTRY_NOTE).toMatch(/by hand in the website editor/);
+    });
     test("a long title is capped at 90 characters with an ellipsis", () => {
       const got = MS.reasonParts({ url: "https://example.com/", title: "x".repeat(200), text: PRED });
       expect(got.lead).toHaveLength(90);

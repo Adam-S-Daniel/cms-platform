@@ -21,6 +21,7 @@ class FetchedPage:
     status: int
     text: str
     unreadable_type: bool = False  # fetched, but not a page type the checks can read
+    title: str = ""  # the page's own title (HTML <title> or PDF metadata), "" when unknown
 
 
 @dataclass

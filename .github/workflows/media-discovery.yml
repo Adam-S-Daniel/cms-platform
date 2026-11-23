@@ -28,7 +28,20 @@
 # GITHUB_TOKEN for the PR writes: a PR that token opens starts no workflows, so
 # its required checks would never report and Publish could never merge it.
 # The App token is minted with contents=write,pull_requests=write and narrowed
-# to this one repository.
+# to this one repository (plus the results repository, below).
+#
+# RESULTS. Every run also keeps `findings.json` (and reads `decisions.json`) on
+# the branch `persistent/media-search` of the RESULTS repository, which the
+# /admin "New mentions" page reads, so a find is listed and emailed once. The
+# results repository is `vars.MEDIA_DISCOVERY_RESULTS_REPO` (OWNER/NAME; default:
+# the site repository) and must already have a commit on its default branch. The
+# write needs the App, so the App token is minted in BOTH modes when the App is
+# configured: contents=write in email-only mode, contents=write plus
+# pull_requests=write in live mode, narrowed to the site repository and, when it
+# is a different repository of the same owner, the results repository. The CLI
+# gets it as MEDIA_DISCOVERY_RESULTS_TOKEN, separately from GITHUB_TOKEN, which
+# stays the PR-writing App token in live mode and the read-only token in
+# email-only mode. Without the App the run keeps no results file (a notice).
 #
 # PUBLIC LOGS. The CLI prints counts only. Nothing from `inputs`, `vars`,
 # `secrets` or `github.event` is interpolated into a `run:` body (it would be
@@ -194,6 +207,11 @@ jobs:
           APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
         run: |
+          if [ -n "$APP_CLIENT_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app=false" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$REQUESTED_MODE" != "live" ]; then
             echo "mode=email-only" >> "$GITHUB_OUTPUT"
           elif [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
@@ -205,16 +223,32 @@ jobs:
 
       - name: Mint the CMS automation App token
         id: app
-        if: steps.detect.outputs.configured == 'true' && steps.mode.outputs.mode == 'live'
+        if: steps.detect.outputs.configured == 'true' && steps.mode.outputs.app == 'true'
         env:
           APP_CLIENT_ID: ${{ vars.CMS_AUTOMATION_APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.app_private_key }}
+          MODE: ${{ steps.mode.outputs.mode }}
+          RESULTS_REPO: ${{ vars.MEDIA_DISCOVERY_RESULTS_REPO }}
         run: |
           set -euo pipefail
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repos="${GITHUB_REPOSITORY#*/}"
+          perms="contents=write"
+          if [ "$MODE" = "live" ]; then
+            perms="contents=write,pull_requests=write"
+          fi
+          # The results repository joins the token only when it is another
+          # repository of the same owner (one token cannot span owners).
+          results_name="${RESULTS_REPO#*/}"
+          if [ -n "$RESULTS_REPO" ] && [ "${RESULTS_REPO%%/*}" = "$owner" ] \
+             && [ "$results_name" != "$repos" ] \
+             && [[ "$results_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            repos="$repos,$results_name"
+          fi
           node .cms-platform/scripts/mint-app-token.js \
-            --owner "${GITHUB_REPOSITORY%%/*}" --repo "${GITHUB_REPOSITORY#*/}" \
-            --repositories "${GITHUB_REPOSITORY#*/}" \
-            --permissions contents=write,pull_requests=write
+            --owner "$owner" --repo "${GITHUB_REPOSITORY#*/}" \
+            --repositories "$repos" \
+            --permissions "$perms"
 
       - name: Run media discovery
         if: steps.detect.outputs.configured == 'true'
@@ -222,6 +256,7 @@ jobs:
           MODE: ${{ steps.mode.outputs.mode }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
           READ_TOKEN: ${{ github.token }}
+          MEDIA_DISCOVERY_RESULTS_REPO: ${{ vars.MEDIA_DISCOVERY_RESULTS_REPO }}
           ANTHROPIC_API_KEY: ${{ secrets.anthropic_api_key }}
           MEDIA_DISCOVERY_SMTP_USER: ${{ secrets.smtp_user }}
           MEDIA_DISCOVERY_SMTP_PASSWORD: ${{ secrets.smtp_password }}
@@ -246,6 +281,11 @@ jobs:
               echo "::add-mask::$r"
             fi
           done
+          # The results file is written with the App token in either mode,
+          # handed over separately from GITHUB_TOKEN.
+          if [ -n "$APP_TOKEN" ]; then
+            export MEDIA_DISCOVERY_RESULTS_TOKEN="$APP_TOKEN"
+          fi
           # The PR writes use the App token only; GITHUB_TOKEN is handed over
           # just for the read-only duplicate check in email-only mode.
           if [ "$MODE" = "live" ] && [ -n "$APP_TOKEN" ]; then
