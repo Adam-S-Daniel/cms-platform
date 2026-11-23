@@ -101,9 +101,6 @@ async function seedDecapAuth(page, { token = getPat(), login = getLogin() } = {}
 
 module.exports = {
   HOST_REPO,
-  DECAP_CMS_USER_KEY,
-  buildAuthRecord,
-  getLogin,
   getPat,
   seedDecapAuth,
 };

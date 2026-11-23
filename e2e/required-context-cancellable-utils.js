@@ -470,7 +470,6 @@ module.exports = {
   escapeRegExp,
   dynamicNameSkeleton,
   stripMatrixSuffix,
-  hasMatrix,
   publishKind,
   describeConcurrency,
   concurrencyDeclarations,

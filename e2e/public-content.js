@@ -181,6 +181,4 @@ module.exports = {
   isPublished,
   isTestFixturePost,
   hasE2eSlugSignature,
-  E2E_DATED_FILE_SLUG_RE,
-  E2E_URL_SLUG_RE,
 };

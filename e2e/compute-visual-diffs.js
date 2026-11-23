@@ -222,10 +222,6 @@ module.exports = {
   classifyDiff,
   computeAll,
   safeFileName,
-  normalizeText,
-  firstTextDivergence,
-  PER_CHANNEL_TOLERANCE,
-  RATIO_THRESHOLD,
 };
 
 if (require.main === module) {

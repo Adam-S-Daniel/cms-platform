@@ -115,8 +115,4 @@ async function augmentTimeoutError(err, hint = {}) {
 
 module.exports = {
   augmentTimeoutError,
-  shouldRunDiagnostic,
-  spawnDiagnosticAndCollect,
-  DIAGNOSTIC_SCRIPT,
-  BUDGET_MS,
 };

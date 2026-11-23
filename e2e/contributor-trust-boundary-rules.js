@@ -415,11 +415,7 @@ function lintWorkflows(files, { platformRepo = null } = {}) {
 const formatOffence = (o) => `${o.file}: [${o.rule}] ${o.where}: ${o.detail}`;
 
 module.exports = {
-  PRIVILEGED,
-  CONTRIBUTOR_REACHABLE,
-  HEAD_ROOTS,
   headRefs,
-  reusableName,
   lintWorkflows,
   formatOffence,
 };

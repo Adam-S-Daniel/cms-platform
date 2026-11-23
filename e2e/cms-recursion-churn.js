@@ -160,6 +160,5 @@ module.exports = {
   shouldRunLoop,
   isSelfChurn,
   isBumpArtifact,
-  isNonDeployingDoc,
   isBumpOnlyPush,
 };

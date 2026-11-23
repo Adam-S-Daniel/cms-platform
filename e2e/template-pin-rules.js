@@ -198,6 +198,4 @@ module.exports = {
   formatOffence,
   offences,
   pinNodes,
-  staleTokenOffences,
-  structuralOffences,
 };

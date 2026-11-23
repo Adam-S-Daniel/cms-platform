@@ -66,4 +66,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { summarize, summarizeFile, nothingRan, nothingRanFile, UNAVAILABLE };
+module.exports = { summarize, nothingRan, UNAVAILABLE };

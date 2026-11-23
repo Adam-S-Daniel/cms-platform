@@ -1115,7 +1115,6 @@ function makePreviewCanaryRecoverer({
 
 module.exports = {
   addLabel,
-  countActiveDeployRuns,
   deployLaneActivity,
   describeError,
   fetchPublicUrl,

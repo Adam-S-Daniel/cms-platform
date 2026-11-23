@@ -141,7 +141,6 @@ module.exports = {
   REPO_ROOT,
   findCanary,
   makeMarker,
-  MARKER_ID,
   MARKER_SRC,
   MARKER_LINE_RE,
   MARKER_ANY_RE,

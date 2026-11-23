@@ -143,4 +143,4 @@ function targetsFromEnv(env = process.env, siteRoot = cap.defaultSiteRoot()) {
   });
 }
 
-module.exports = { pageFrameTargets, isFutureDated, targetsFromEnv, parseChanged, isPostSource };
+module.exports = { pageFrameTargets, isFutureDated, targetsFromEnv, parseChanged };

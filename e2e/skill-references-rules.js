@@ -759,13 +759,8 @@ function loadTree(root) {
 
 module.exports = {
   allowlistStanza,
-  CFN_SKILLS,
-  REPO_ROOTS,
   checkSkill,
-  codeRegions,
   extractCitations,
   loadTree,
   parseAllowlist,
-  repoPath,
-  resolveCitation,
 };

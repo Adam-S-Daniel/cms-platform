@@ -96,4 +96,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { createReadStream, makeServer, SERVE14_CONFIG };
+module.exports = { createReadStream, makeServer };
