@@ -1966,7 +1966,7 @@ hours. **The rule: a Decap publish that is stuck opens a GitHub issue** (the
 issue notification is the alert; `agent-ready` queues it for the fleet worker),
 on the timing in the table below.
 
-**Signal, then sweep.** `publish-watchdog-signal.yml` (thin caller
+**Signal, then sweep.** The signal job's own `if`, not the thin caller, decides whether to act, and it reads the workflow FILE, never `workflow_run.name`. `publish-watchdog-signal.yml` (thin caller
 `examples/site/.github/workflows/publish-watchdog-knock.yml`) runs on
 `workflow_run` when, on a same-repository `cms/` pull request, a gating workflow
 fails, times out, fails to start or is cancelled, or the editorial workflow
