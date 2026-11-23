@@ -22,3 +22,9 @@ oauth-proxy/lambda.py text eol=lf
 .githooks/** linguist-vendored
 # managed by _agent-guidance: synced tooling is vendored, not this repo's code (see ADR 0048)
 .claude/hooks/** linguist-vendored
+
+# The e2e fixture Jekyll sites are test data, not platform code. Their
+# Gemfile.lock files are deliberately frozen to what a consumer site resolves,
+# so Dependabot must not bump them and the language-fit check exempts them.
+e2e/fixture-site/** linguist-vendored
+e2e/fixture-site-singlepage/** linguist-vendored

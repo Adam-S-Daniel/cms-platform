@@ -9,7 +9,9 @@
 #   - npm: the e2e harness toolchain (Playwright + helpers) under /e2e.
 # Bundler is intentionally omitted — theme/ ships a bare .gemspec with no
 # Gemfile.lock to resolve, so there is nothing for the bundler ecosystem
-# to pin here.
+# to pin here. The Gemfile.lock files under e2e/fixture-site* are frozen test
+# data, marked linguist-vendored in .gitattributes, which the nightly
+# language-fit check treats as exempt.
 #
 # Opened PRs auto-merge once the required self-ci checks pass — see
 # self-dependabot-auto-merge.yml + .github/rulesets/main.json.
@@ -145,6 +147,17 @@ updates:
       interval: weekly
     ignore:
       - dependency-name: "*"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+  # The root package.json only declares the `create-cms-site` bin for
+  # scaffold/create-site.js and has no dependencies, so there is nothing to
+  # bump today. The entry (and the empty package-lock.json beside it) keeps
+  # the manifest covered if a dependency is ever added.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
     cooldown:
       default-days: 7
       semver-major-days: 30
