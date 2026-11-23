@@ -17,7 +17,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const YAML = require("yaml");
-const { postPublicPath, isTestFixturePost, hasE2eSlugSignature } = require("./public-content");
+const { postPublicPath, isTestFixturePost, hasE2eSlugSignature, isPublished } = require("./public-content");
 const cap = require("./site-capabilities");
 
 function readFrontMatter(file) {
@@ -30,10 +30,6 @@ function readFrontMatter(file) {
   } catch {
     return null;
   }
-}
-
-function isPublishedFm(fm) {
-  return String(fm.published ?? "").toLowerCase() !== "false";
 }
 
 // A post the frame check should open: published, not an e2e fixture, with an
@@ -59,7 +55,7 @@ function postTarget(siteRoot, rel, { future = false, nowMs = Date.now() } = {}) 
   const file = path.join(siteRoot, rel);
   if (!fs.existsSync(file)) return null;
   const fm = readFrontMatter(file);
-  if (!fm || !isPublishedFm(fm)) return null;
+  if (!fm || !isPublished(fm)) return null;
   const base = path.basename(rel, path.extname(rel));
   if (isTestFixturePost(fm, { filename: path.basename(rel) })) return null;
   const urlPath = postPublicPath(base, fm);

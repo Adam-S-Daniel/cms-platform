@@ -193,3 +193,18 @@ test.describe("postPublicPath — the URL Jekyll serves a post at", () => {
     expect(postPublicPath("2025-12-01-slug-differs-from-file-name", fm)).toBe("/blog/front-matter-slug-wins/");
   });
 });
+
+test.describe("isPublished — what Jekyll builds", () => {
+  // Jekyll reads front matter with Psych (YAML 1.1): a plain `no` or `off`, in
+  // any case, is false, and an empty value is nil; Jekyll builds neither. A `n`
+  // or `y` stays a string in Psych, so that post is built.
+  test("YAML 1.1 false spellings and an empty value are unpublished", () => {
+    for (const v of ["false", "no", "No", "NO", "off", "Off", "", "~", "null"]) {
+      expect(isPublished(parseFrontMatterText(`---\ntitle: T\npublished: ${v}\n---\nb`)), v).toBe(false);
+    }
+    for (const v of ["true", "yes", "on", "n", "y"]) {
+      expect(isPublished(parseFrontMatterText(`---\ntitle: T\npublished: ${v}\n---\nb`)), v).toBe(true);
+    }
+    expect(isPublished(parseFrontMatterText("---\ntitle: T\n---\nb"))).toBe(true);
+  });
+});
