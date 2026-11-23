@@ -342,7 +342,13 @@
             showBanner("Signing in did not work. Your typed work is still here. Choose Sign in again to retry.");
             return false;
           }
-          if (typeof user.login === "string" && user.login.toLowerCase() !== login.toLowerCase()) {
+          if (typeof user.login !== "string" || !user.login) {
+            // Without the original account name the same-account check cannot
+            // run, so refuse rather than accept someone else's token.
+            showBanner("Signing in did not work: this session does not say which account opened the page. Your typed work is still here.");
+            return false;
+          }
+          if (user.login.toLowerCase() !== login.toLowerCase()) {
             showBanner(
               "You signed in as " + login + ", but this page was opened by " + user.login + ". " +
                 "Choose Sign in again and use the " + user.login + " account to keep your work.",

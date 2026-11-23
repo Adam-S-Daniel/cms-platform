@@ -426,7 +426,7 @@
     }
 
     // Sign-in renewal (sign-in-renewal.js, loaded just before this file). It
-    // wraps nothing itself because this is the only fetch wrap. `prepare`
+    // wraps nothing itself because this is the only wrap that rewrites requests. `prepare`
     // returns null for a request it has no reason to change, so the
     // pass-through below still hands on the caller's ORIGINAL arguments.
     var renewal = window.CMSSignInRenewal;
