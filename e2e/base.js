@@ -362,8 +362,5 @@ exports.test.step = _wrapStep(exports.test.step, exports.test);
 
 exports.expect = expect;
 exports.TARGET = TARGET;
-exports.resolveTargetBaseURL = resolveTargetBaseURL;
 exports.resolvePreviewBaseURL = resolvePreviewBaseURL;
 exports.safeTestId = safeTestId;
-exports.PER_TEST_FRAMES_ROOT = PER_TEST_FRAMES_ROOT;
-exports.PER_TEST_MAX_FRAMES = PER_TEST_MAX_FRAMES;
