@@ -171,11 +171,6 @@ function affectsDeployedPreview(file) {
   return !getDeployPreviewIgnoreMatchers().some((m) => m(file));
 }
 
-// Convenience: does ANY changed file affect the deployed preview?
-function anyAffectsDeployedPreview(changedFiles) {
-  return changedFiles.some((f) => affectsDeployedPreview(f));
-}
-
 const ALWAYS_RUN = [
   "e2e/compute-visual-diffs.test.js",
   "e2e/cms-config.spec.js",
@@ -1340,7 +1335,6 @@ module.exports = {
   HEAVY,
   PARITY_PREVIEW_SPECS,
   affectsDeployedPreview,
-  anyAffectsDeployedPreview,
   selectSpecs,
   selectParityPreviewSpecs,
   getChangedFiles,
