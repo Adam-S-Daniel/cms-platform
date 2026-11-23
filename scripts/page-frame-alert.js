@@ -225,6 +225,23 @@ function prepareUnpublishPr({ repo, base, result, token }) {
   });
 }
 
+// Every open alert issue, a page of 100 at a time until a short page: an alert
+// past the first page must still be found, or its page gets a second issue.
+const MAX_ISSUE_PAGES = 50;
+function listOpenIssues(repo, label) {
+  const all = [];
+  for (let page = 1; page <= MAX_ISSUE_PAGES; page++) {
+    const items = ghApi(
+      "listing open alert issues",
+      `repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(items)) break;
+    all.push(...items);
+    if (items.length < 100) break;
+  }
+  return all;
+}
+
 function flag(argv, name) {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
@@ -252,7 +269,7 @@ function main(argv) {
   const results = parseReport(JSON.parse(fs.readFileSync(reportPath, "utf8")));
   const openIssues = dryRun
     ? []
-    : ghApi("listing open alert issues", `repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`) || [];
+    : listOpenIssues(repo, label);
   const p = plan(results, openIssues.filter((i) => !i.pull_request), { all });
   console.log(`Checked ${results.length} page(s): ${p.open.length} newly broken, ${p.still.length} still broken, ${p.close.length} fixed, ${p.gone.length} no longer published.`);
   if (dryRun) {

@@ -164,3 +164,38 @@ test.describe("page-frame-live scope", () => {
     expect(chooseScope(300)).toBe("all=1");
   });
 });
+
+// main() lists the open alert issues through `gh`; a stub gh serves two pages.
+test.describe("page-frame alert: open issues past the first page", () => {
+  test("an alert on the second page of open issues is found, not opened again", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "page-frame-paging-"));
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, body: `<!-- page-frame: /blog/p${i}/ -->` }));
+    const page2 = [{ number: 500, body: "<!-- page-frame: /blog/a/ -->" }];
+    fs.writeFileSync(path.join(dir, "page1.json"), JSON.stringify(page1));
+    fs.writeFileSync(path.join(dir, "page2.json"), JSON.stringify(page2));
+    fs.writeFileSync(path.join(dir, "report.json"), JSON.stringify(report));
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+echo "$*" >> "${dir}/argv.log"
+case "$2" in
+  *issues\\?*page=2*) cat "${dir}/page2.json" ;;
+  *issues\\?*) cat "${dir}/page1.json" ;;
+  *) echo '{"number": 999}' ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const res = spawnSync(
+      process.execPath,
+      [path.join(__dirname, "..", "scripts", "page-frame-alert.js"), "--report", path.join(dir, "report.json"), "--repo", "o/r", "--sha", "abc"],
+      { encoding: "utf8", env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, PAGE_FRAME_APP_TOKEN: "" } },
+    );
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    const calls = fs.readFileSync(path.join(dir, "argv.log"), "utf8").trim().split("\n");
+    expect(calls.filter((c) => c.includes("-X POST") && /repos\/o\/r\/issues(\s|$)/.test(c))).toEqual([]);
+    expect(res.stdout).toContain("Issue #500 already tracks /blog/a/.");
+  });
+});
