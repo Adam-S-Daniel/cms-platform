@@ -4,7 +4,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
+const { spawnSync } = require("node:child_process");
 const { pageFrameTargets, parseChanged, isFutureDated } = require("./page-frame-targets");
+const { readWorkflow, parseYaml } = require("./workflow-yaml-utils");
 
 // A fixed clock: 2026-06-01 UTC.
 const NOW = Date.UTC(2026, 5, 1);
@@ -103,5 +105,50 @@ test.describe("page-frame targets", () => {
   test("the changed list is one path per line, so a name may hold a space", () => {
     expect(parseChanged("a.md\n_posts/b c.md\r\nd.md\n")).toEqual(["a.md", "_posts/b c.md", "d.md"]);
     expect(parseChanged(undefined)).toBeNull();
+  });
+});
+
+// page-frame-live.yml's "Choose the pages to check" step, run with a stub `gh`
+// that lists `count` changed files. GitHub's compare API lists at most 300
+// files, so a list that long may be cut short: every post is checked instead.
+function chooseScope(count) {
+  const job = parseYaml(readWorkflow("page-frame-live.yml")).jobs.check;
+  const step = job.steps.find((s) => s.name === "Choose the pages to check");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "page-frame-scope-"));
+  const stubs = path.join(dir, "bin");
+  fs.mkdirSync(stubs);
+  fs.writeFileSync(
+    path.join(stubs, "gh"),
+    `#!/usr/bin/env bash\nfor i in $(seq 1 ${count}); do echo "_posts/2026-01-01-p$i.md"; done\n`,
+    { mode: 0o755 },
+  );
+  const event = path.join(dir, "event.json");
+  fs.writeFileSync(event, JSON.stringify({ before: "a".repeat(40) }));
+  const output = path.join(dir, "output");
+  fs.writeFileSync(output, "");
+  const script = String(step.run).split("/tmp/").join(`${dir}/`);
+  const res = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      PATH: `${stubs}${path.delimiter}${process.env.PATH}`,
+      GITHUB_EVENT_PATH: event,
+      GITHUB_EVENT_NAME: "push",
+      GITHUB_OUTPUT: output,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_SHA: "b".repeat(40),
+      CHECK_ALL: "false",
+    },
+  });
+  expect(res.status, res.stderr).toBe(0);
+  return fs.readFileSync(output, "utf8").trim();
+}
+
+test.describe("page-frame-live scope", () => {
+  test("a push's own changed files are checked", () => {
+    expect(chooseScope(3)).toBe("all=0");
+  });
+
+  test("a changed-file list at the compare API's 300-file cap checks every post", () => {
+    expect(chooseScope(300)).toBe("all=1");
   });
 });
