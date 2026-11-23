@@ -214,7 +214,6 @@ def test_read_json_of_junk_is_none_with_its_sha_and_other_errors_raise_templates
 def test_read_json_over_1mb_is_fetched_raw():
     big = {"version": 1, "findings": [{"id": "a"}]}
     calls = []
-    path = "/repos/o/r/contents/findings.json?ref=b"
 
     def t(method, url, headers, body):
         calls.append(headers["Accept"])
