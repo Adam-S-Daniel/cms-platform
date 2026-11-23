@@ -92,4 +92,20 @@ test.describe("visual-regression workflow: auto-approve when no diffs", () => {
     // the skipped-generate auto-approve comes after both failure branches.
     expect(run.indexOf("Auto-approved: no salient")).toBeGreaterThan(run.lastIndexOf("exit 1"));
   });
+
+  test("approve-regression run: text has no expression interpolation and the job has minimal permissions", () => {
+    // `needs.generate.outputs.visually-different` derives from the PR's built
+    // tree, so it must reach the shell through `env:`, never `${{ }}` inside
+    // `run:`: the script runs after a reviewer approves the environment.
+    const job = workflow().jobs["approve-regression"];
+    for (const step of job.steps) {
+      if (step.run) expect(step.run, `step "${step.name}" run:`).not.toContain("${{");
+    }
+    const step = job.steps.find((s) => s.name === "Approval confirmed");
+    expect(step.env.VISUALLY_DIFFERENT).toMatch(/needs\.generate\.outputs\.visually-different/);
+    expect(step.run).toMatch(/"\$VISUALLY_DIFFERENT"/);
+    // The echo-only job gets no token scopes (no inherited id-token or
+    // pull-requests: write).
+    expect(job.permissions).toEqual({});
+  });
 });

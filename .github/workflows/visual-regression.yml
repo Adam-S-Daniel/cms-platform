@@ -575,6 +575,9 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     environment: ${{ (needs.generate.result == 'success' && needs.generate.outputs.visually-different != '0') && 'regression-review' || '' }}
+    # Echo-only job: it needs no token scopes (workflow-wide id-token and
+    # pull-requests: write are not inherited).
+    permissions: {}
     steps:
       - name: Approval confirmed
         # Fail closed (#1058): auto-approve a skipped `generate` only when
@@ -583,6 +586,10 @@ jobs:
         env:
           DETECT_RESULT: ${{ needs.detect.result }}
           GENERATE_RESULT: ${{ needs.generate.result }}
+          # Via env, never `${{ }}` in run: text: the output derives from the
+          # PR's built tree, so interpolating it would run PR-controlled shell
+          # after a reviewer approves the environment.
+          VISUALLY_DIFFERENT: ${{ needs.generate.outputs.visually-different }}
         run: |
           if [ "$DETECT_RESULT" != "success" ]; then
             echo "::error::detect did not succeed (${DETECT_RESULT}); cannot decide whether a render change needs review."
@@ -592,8 +599,8 @@ jobs:
             exit 1
           elif [ "$GENERATE_RESULT" != "success" ]; then
             echo "Auto-approved: no salient render change to review (generate: ${GENERATE_RESULT})."
-          elif [ "${{ needs.generate.outputs.visually-different }}" = "0" ]; then
+          elif [ "$VISUALLY_DIFFERENT" = "0" ]; then
             echo "Auto-approved: 0 pages visually different from production."
           else
-            echo "Visual regression approved by reviewer (${{ needs.generate.outputs.visually-different }} page(s) visually different)."
+            echo "Visual regression approved by reviewer (${VISUALLY_DIFFERENT} page(s) visually different)."
           fi
