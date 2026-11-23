@@ -161,3 +161,7 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 30
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]

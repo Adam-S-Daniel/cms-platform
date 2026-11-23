@@ -194,6 +194,6 @@ GOAL 1 (v0.1.4), issue #5 GOAL 2 (the v0.1.9–v0.1.12 sweep, `field_library` +
 `$ref`), #21 (v0.1.13, `ErrorCachingMinTTL`) and #22 (canary-branch cleanup).
 Still true: `code-quality` and `ci-runner-image` are **deliberate skips, never
 ported**, and `playwright-image-drift`'s "real repo is drift-free" subtest
-cannot self-check here (no root `package-lock.json` or
-`.github/ci-runner/Dockerfile`), so it exercises fully only against the
+cannot self-check here (the root `package-lock.json` is dependency-free, with no
+`@playwright/test`, and there is no `.github/ci-runner/Dockerfile`), so it exercises fully only against the
 synthetic `scaffold()` fixtures.
