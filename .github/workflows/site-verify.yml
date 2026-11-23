@@ -21,7 +21,8 @@
 # `scripts/verify-build-artifacts.rb`, this builds the site and runs it;
 # otherwise it prints a notice and succeeds. It always runs the platform's
 # `scripts/destination-conflicts.rb` (no two source files may be written to
-# one address), `scripts/outside-resources.rb` (no built page loads from
+# one address), `scripts/liquid-expressions-in-content.rb` (no post or page
+# body may hold `${{`, which Liquid prints as `$`), `scripts/outside-resources.rb` (no built page loads from
 # another site) and `scripts/liquid-escape-lint.rb` over the site's templates. Independently, it runs the fixed
 # self-test list (`scripts/test-verify-build-artifacts.rb`) when present, using
 # the site's bundle before building, except on a pull request that changes CMS
@@ -133,6 +134,7 @@ jobs:
             package.json
             scripts/liquid-escape-lint.rb
             scripts/destination-conflicts.rb
+            scripts/liquid-expressions-in-content.rb
             scripts/outside-resources.rb
             scripts/content-pr-guard.js
             e2e/package.json
@@ -231,6 +233,17 @@ jobs:
         env:
           JEKYLL_ENV: production
         run: bundle exec ruby .cms-platform/scripts/destination-conflicts.rb .
+
+      - name: Check that no post or page body holds a Liquid expression
+        # A post that quotes GitHub Actions syntax, `${{ secrets.X }}`, builds
+        # green and Liquid prints `$`: the expression is evaluated and comes
+        # out empty (cms-platform issue 1061). The author's text is not
+        # rewritten; the publish is refused, naming the file and line, and
+        # the fix is `{% raw %}` ... `{% endraw %}` in the Markdown. Runs on
+        # BOTH routes: it is a check about the content.
+        env:
+          JEKYLL_ENV: production
+        run: bundle exec ruby .cms-platform/scripts/liquid-expressions-in-content.rb .
 
       - name: Check that no page loads from another site
         # The owner's rule: a page on these sites loads nothing from another

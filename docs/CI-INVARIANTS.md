@@ -1677,6 +1677,17 @@ Six decisions in it that are not obvious from the YAML:
   the theme's `admin/`, are outside what it sees.
   `theme/spec/destination_conflicts_test.rb` runs it over real site
   directories, one of them with a plugin gem loaded only through that group.
+- **No post or page body may hold `${{`.** After the address check, the job
+  runs `scripts/liquid-expressions-in-content.rb`. Jekyll runs Liquid over a
+  body, so a post quoting GitHub Actions syntax (`${{ secrets.X }}`) builds
+  green and prints `$` (issue 1061). The author's text is never rewritten:
+  the step fails naming the file and line, and the fix is `{% raw %}` ...
+  `{% endraw %}` in the Markdown (a token inside a raw block passes). It reads
+  every collection document and every page under `pages/` before Liquid, and
+  only `${{`: a bare `{{ site.title }}` in a post can be deliberate. Locked by
+  `theme/spec/liquid_expressions_in_content_test.rb`. The other half of that
+  issue, an unclosed tag in a first paragraph copied raw into an excerpt, was
+  closed by `listing_excerpt` (#1067, below).
 - **Work/gate split.** `verify` carries the wall; `site-verify` is the gate
   (`needs:` + `if: always()`, no `timeout-minutes`, no `concurrency`) — the
   #285/#289 shape, held by `e2e/site-verify.test.js` through
