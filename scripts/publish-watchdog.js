@@ -116,6 +116,7 @@ function classifyPublish({
   pr,
   checkRuns,
   requiredContexts,
+  statusContexts,
   files,
   nowMs,
   graceMinutes,
@@ -216,7 +217,13 @@ function classifyPublish({
   // A required context that has no check run at all is not "finished": GitHub
   // may not have created its run yet. It is in flight for a bounded time aged
   // from the pull request's last update; after that the issue names it.
-  const missing = required === null ? [] : required.filter((c) => !newest.some((r) => r.name === c));
+  // A context can also be reported as a commit status (the statuses API), not
+  // a check run; one that has a status is not missing.
+  const statuses = Array.isArray(statusContexts) ? statusContexts : [];
+  const missing =
+    required === null
+      ? []
+      : required.filter((c) => !newest.some((r) => r.name === c) && !statuses.includes(c));
   if (missing.length > 0 && updatedAt !== null && Number.isFinite(nowMs)) {
     const due = updatedAt + MISSING_CONTEXT_WAIT_MINUTES * 60 * 1000;
     if (nowMs >= due) {
@@ -369,6 +376,7 @@ function planSweep({ prs, issues, nowMs, graceMinutes, stallMinutes, skipped }) 
       pr: entry.pr,
       checkRuns: entry.checkRuns,
       requiredContexts: entry.requiredContexts,
+      statusContexts: entry.statusContexts,
       files: entry.files,
       branchSha: entry.branchSha,
       incomplete: entry.incomplete,
@@ -404,9 +412,14 @@ function planSweep({ prs, issues, nowMs, graceMinutes, stallMinutes, skipped }) 
     const sha = entry.pr.head && entry.pr.head.sha;
     const fits = (x) => x.pr === n && (x.sha === null || x.sha === sha);
     const back = reopened.filter(fits);
-    // Its pull request is stuck: make it a live alert again (so it closes by
-    // itself later) instead of opening a second issue beside it.
-    for (const x of back) restore.push({ issueNumber: x.number, prNumber: n });
+    // Its pull request is stuck: make a reopened issue a live alert again (so
+    // it closes by itself later) instead of opening a second issue beside it.
+    // Exactly one alert stays live: a live issue already there wins, and among
+    // several reopened ones the lowest number does; the rest are left alone.
+    if (back.length > 0 && !parsed.some(fits)) {
+      const keep = back.reduce((a, b) => (b.number < a.number ? b : a));
+      restore.push({ issueNumber: keep.number, prNumber: n });
+    }
     if (!parsed.some(fits) && back.length === 0) open.push(entry);
   }
   const close = [];
@@ -572,6 +585,19 @@ function readCheckRuns(repo, sha, prNumber) {
   }
   const incomplete = total !== null ? runs.length < total : lastFull;
   return { runs, incomplete };
+}
+
+// The contexts reported as commit statuses (not check runs) on a commit, or
+// null when they cannot be read.
+function readStatusContexts(repo, sha, prNumber) {
+  try {
+    const res = ghApi(`reading commit statuses for #${prNumber}`, `repos/${repo}/commits/${sha}/status?per_page=100`);
+    const list = (res && Array.isArray(res.statuses) && res.statuses) || [];
+    return list.map((st) => st && st.context).filter((c) => typeof c === "string");
+  } catch (err) {
+    console.log(`::warning::${err.message}`);
+    return null;
+  }
 }
 
 function readBranchSha(repo, ref) {
@@ -848,6 +874,10 @@ function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinute
     try {
       const { runs, incomplete } = readCheckRuns(repo, pr.head.sha, pr.number);
       const branchSha = readBranchSha(repo, pr.head.ref);
+      const statusContexts =
+        Array.isArray(requiredContexts) && requiredContexts.length > 0
+          ? readStatusContexts(repo, pr.head.sha, pr.number)
+          : null;
       let files = null;
       try {
         const list = ghApi(
@@ -859,7 +889,7 @@ function sweepOnce({ repo, dryRun, issueLabel, workLabel, assignees, graceMinute
       } catch (err) {
         console.log(`::warning::${err.message}`);
       }
-      entries.push({ pr, checkRuns: runs, incomplete, requiredContexts, files, branchSha });
+      entries.push({ pr, checkRuns: runs, incomplete, requiredContexts, statusContexts, files, branchSha });
     } catch (err) {
       skipped.push(pr.number);
       console.log(`::warning::skipping pull request #${pr.number}: ${err.message}`);

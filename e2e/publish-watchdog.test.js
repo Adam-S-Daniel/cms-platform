@@ -732,6 +732,17 @@ test.describe("a required context with no check run", () => {
     expect(body).toContain("- e2e");
   });
 
+  test("a required context reported as a commit status, not a check run, is not missing", () => {
+    const v = classify({
+      ...twoRequired,
+      pr: makePr({ updated_at: iso(11) }),
+      checkRuns: [greenBuild()],
+      statusContexts: ["e2e"],
+    });
+    expect(v.missing).toBeUndefined();
+    expect(v.reason).not.toBe("A required check never started.");
+  });
+
   test("a required list that every context satisfies is unchanged", () => {
     const v = classify({ requiredContexts: ["build"], pr: makePr({ updated_at: iso(60) }), checkRuns: [greenBuild()] });
     expect(v.state).toBe("stuck");
@@ -772,6 +783,26 @@ test.describe("a reopened resolved issue", () => {
     const plan = planSweep({ prs: [stuckEntry()], issues: [old], nowMs: NOW });
     expect(plan.open).toHaveLength(1);
     expect(plan.restore).toEqual([]);
+  });
+
+  test("a live alert and a reopened one for the same pull request: only the live one stays", () => {
+    const live = {
+      number: 60,
+      state: "open",
+      user: { login: "github-actions[bot]" },
+      body: `<!-- publish-watchdog:pr=7 sha=${SHA} -->\nbody`,
+    };
+    const plan = planSweep({ prs: [stuckEntry()], issues: [resolved("open"), live], nowMs: NOW });
+    expect(plan.open).toEqual([]);
+    expect(plan.restore).toEqual([]);
+    expect(plan.close).toEqual([]);
+  });
+
+  test("two reopened issues for one pull request: exactly one, the lowest number, is restored", () => {
+    const second = { ...resolved("open"), number: 49 };
+    const plan = planSweep({ prs: [stuckEntry()], issues: [resolved("open"), second], nowMs: NOW });
+    expect(plan.open).toEqual([]);
+    expect(plan.restore).toEqual([{ issueNumber: 49, prNumber: 7 }]);
   });
 
   test("an issue not authored by the Actions bot is never restored", () => {
@@ -833,6 +864,8 @@ case "$ep" in
     if [ -f "${fix}/checks-$sha-$page.json" ]; then cat "${fix}/checks-$sha-$page.json"
     elif [ -f "${fix}/checks-$sha-1.json" ]; then echo '{"total_count": 0, "check_runs": []}'
     else cat "${fix}/checks.json"; fi ;;
+  repos/o/r/commits/*/status*)
+    if [ -f "${fix}/statuses.json" ]; then cat "${fix}/statuses.json"; else echo '{"statuses": []}'; fi ;;
   repos/o/r/git/ref/heads/*other*) echo '{"object": {"sha": "${SHA_D}"}}' ;;
   repos/o/r/git/ref/heads/*)
     if [ -f "${fix}/ref.json" ]; then cat "${fix}/ref.json"; else echo '{"object": {"sha": "${SHA_A}"}}'; fi ;;
@@ -1563,8 +1596,8 @@ test.describe("workflow files", () => {
     expect(sweepCaller.permissions).toEqual(sweepReusable.permissions);
   });
 
-  test("sweep reusable: four permissions, one job named sweep, no mode or watch inputs, persist-credentials false", () => {
-    expect(sweepReusable.permissions).toEqual({ contents: "read", "pull-requests": "read", checks: "read", issues: "write" });
+  test("sweep reusable: five permissions, one job named sweep, no mode or watch inputs, persist-credentials false", () => {
+    expect(sweepReusable.permissions).toEqual({ contents: "read", "pull-requests": "read", checks: "read", statuses: "read", issues: "write" });
     expect(Object.keys(sweepReusable.on)).toEqual(["workflow_call"]);
     expect(Object.keys(sweepReusable.jobs)).toEqual(["sweep"]);
     expect(sweepReusable.jobs.sweep["timeout-minutes"]).toBe(30);

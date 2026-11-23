@@ -2052,6 +2052,14 @@ late) or the check-run list could not be read in full, it is in flight, and stuc
 only once the pull request has been untouched for the stall window. An unknown
 never alerts, and neither does an unparseable timestamp.
 
+A required context counts as present when it is a check run OR a commit status on
+the head commit (the statuses API). Reading statuses needs `statuses: read` in
+the reusable AND in every caller (a reusable job asking for a permission its
+caller does not grant fails to start); without it the read warns and only check
+runs count. When two issues for one pull request and head commit are live (an
+open one and a reopened resolved one), the open one wins; among several
+reopened ones the lowest number is restored.
+
 **Lifecycle.** One issue per PR and head commit. Its first line is a hidden
 marker `<!-- publish-watchdog:pr=<n> sha=<head sha> -->`; only issues authored by
 `github-actions[bot]` count. The sweep reads every open issue with the label,
