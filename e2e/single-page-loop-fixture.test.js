@@ -60,7 +60,7 @@ test.describe("single-page publish loop fixture (#1068)", () => {
     const m = buildSinglePageMedia({ runId: 1790000000001 });
     expect(isSelfChurn("host", m.filePath)).toBe(true);
     for (const glob of SELF_CHURN_GLOBS) {
-      expect(isSelfChurn("host", glob.replace("*", "1790000000001"))).toBe(true);
+      expect(isSelfChurn("host", glob.split("*").join("1790000000001"))).toBe(true);
     }
     // A real media item is NOT swallowed by the gate.
     expect(isSelfChurn("host", "_media/1-fda-amicus.md")).toBe(false);
