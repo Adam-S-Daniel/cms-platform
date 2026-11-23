@@ -49,7 +49,7 @@ class LiquidExpressionsInContentTest < Minitest::Test
     write('_posts/2026-02-01-ci.md', "---\ntitle: CI\n---\nline one\n\nrun: echo ${{ secrets.X }}\n")
     out, code = run_script
     assert_equal 1, code, out
-    assert_includes out, 'FAIL "_posts/2026-02-01-ci.md" line 3 holds `${{`'
+    assert_includes out, 'FAIL "_posts/2026-02-01-ci.md" line 6 holds `${{`'
     assert_includes out, '1 file(s) need a change'
   end
 
@@ -72,7 +72,14 @@ class LiquidExpressionsInContentTest < Minitest::Test
           "---\ntitle: CI\n---\n{% raw %}${{ a }}{% endraw %}\nthen ${{ b }}\n")
     out, code = run_script
     assert_equal 1, code, out
-    assert_includes out, 'line 2'
+    assert_includes out, 'line 5'
+  end
+
+  def test_a_document_opting_out_of_liquid_is_skipped
+    write('_posts/2026-02-01-ci.md',
+          "---\ntitle: CI\nrender_with_liquid: false\n---\nrun: echo ${{ secrets.X }}\n")
+    out, code = run_script
+    assert_equal 0, code, out
   end
 
   def test_jekyll_really_drops_the_expression_from_the_page

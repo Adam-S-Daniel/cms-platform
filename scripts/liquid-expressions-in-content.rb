@@ -48,18 +48,33 @@ begin
     (path.start_with?("#{source}/") ? path[(source.length + 1)..] : path).sub(%r{\A/}, "")
   end
 
-  items = site.documents.map { |doc| [relative.call(doc.relative_path), doc.content.to_s] }
-  site.pages.each do |page|
+  # [name, body, lines of front matter before the body]. The body Jekyll hands
+  # back is the file's tail after the front matter, so the real file line is
+  # the body line plus the front matter's lines. A document that opts out with
+  # `render_with_liquid: false` never goes through Liquid, so it is skipped.
+  front_lines = lambda do |rel, body|
+    raw = File.read(File.join(source, rel), encoding: "utf-8")
+    raw.end_with?(body) ? raw[0, raw.length - body.length].count("\n") : 0
+  rescue SystemCallError
+    0
+  end
+  renders = ->(item) { item.data["render_with_liquid"] != false }
+
+  items = site.documents.select(&renders).map do |doc|
+    rel = relative.call(doc.relative_path)
+    [rel, doc.content.to_s, front_lines.call(rel, doc.content.to_s)]
+  end
+  site.pages.select(&renders).each do |page|
     name = relative.call(page.relative_path)
-    items << [name, page.content.to_s] if name.start_with?("pages/")
+    items << [name, page.content.to_s, front_lines.call(name, page.content.to_s)] if name.start_with?("pages/")
   end
 
   raw_block = /\{%-?\s*raw\s*-?%\}.*?\{%-?\s*endraw\s*-?%\}/m
-  findings = items.sort.filter_map do |name, body|
+  findings = items.sort_by(&:first).filter_map do |name, body, front|
     # Blank the raw blocks, keeping their newlines, so line numbers hold.
     scanned = body.gsub(raw_block) { |block| block.gsub(/[^\n]/, " ") }
     offset = scanned.index("${{")
-    [name, scanned[0, offset].count("\n") + 1] if offset
+    [name, front + scanned[0, offset].count("\n") + 1] if offset
   end
 
   if findings.empty?
