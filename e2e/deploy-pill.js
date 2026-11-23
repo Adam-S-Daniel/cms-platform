@@ -308,34 +308,8 @@ async function waitForChangeReflected({
   );
 }
 
-/**
- * Verify the pill is currently in its terminal hidden state. Use as
- * a precondition before driving an action — if the pill is still
- * spinning from a prior run, the test's lifecycle observation will
- * be confounded.
- */
-async function expectDeployPillHidden({ page, pillId, timeoutMs = 90_000 }) {
-  await page.waitForFunction(
-    (id) => {
-      const el = document.getElementById(id);
-      if (!el) return true;
-      if (el.innerHTML && el.innerHTML.includes("failed")) {
-        throw new Error(
-          "deploy-status-pill (#" +
-            id +
-            ") is in failure state — clear it before driving the next action",
-        );
-      }
-      return el.style.display === "none";
-    },
-    pillId,
-    { timeout: timeoutMs },
-  );
-}
-
 module.exports = {
   PILL_PROD,
   PILL_PREVIEW,
   waitForChangeReflected,
-  expectDeployPillHidden,
 };
