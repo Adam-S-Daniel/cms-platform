@@ -88,6 +88,8 @@ const isRunSelfTests = (s) => s.name === "Run the site's verifier self-tests";
 const ESCAPE_LINT_PATH = "scripts/liquid-escape-lint.rb";
 const ADDRESS_CHECK_PATH = "scripts/destination-conflicts.rb";
 const isAddressCheck = (s) => stepRun(s).includes(`ruby .cms-platform/${ADDRESS_CHECK_PATH} .`);
+const LIQUID_CHECK_PATH = "scripts/liquid-expressions-in-content.rb";
+const isLiquidCheck = (s) => stepRun(s).includes(`ruby .cms-platform/${LIQUID_CHECK_PATH} .`);
 const OUTSIDE_CHECK_PATH = "scripts/outside-resources.rb";
 const isOutsideCheck = (s) => stepRun(s).includes(`ruby .cms-platform/${OUTSIDE_CHECK_PATH} .`);
 const isEscapeLint = (s) => stepRun(s).includes(`ruby .cms-platform/${ESCAPE_LINT_PATH} --all .`);
@@ -211,7 +213,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     }
   });
 
-  test("the work job's steps are checkout → detect → platform fetch → setup-node → route → setup-ruby → self-tests → build → verifier → address check → outside-resource check → escape lint", () => {
+  test("the work job's steps are checkout → detect → platform fetch → setup-node → route → setup-ruby → self-tests → build → verifier → address check → liquid check → outside-resource check → escape lint", () => {
     const steps = workSteps();
     const checkout = findStep(steps, (s) => isCheckout(s) && !isFetchPlatform(s), "a checkout of the CALLER's tree");
     // `fetch-depth: 2` is the merge commit plus both parents, which the route
@@ -239,13 +241,18 @@ test.describe("#377 site-verify — the reusable's contract", () => {
       isAddressCheck,
       `a \`ruby .cms-platform/${ADDRESS_CHECK_PATH} .\` step`,
     );
+    const liquidCheck = findStep(
+      steps,
+      isLiquidCheck,
+      `a \`ruby .cms-platform/${LIQUID_CHECK_PATH} .\` step`,
+    );
     const outsideCheck = findStep(
       steps,
       isOutsideCheck,
       `a \`ruby .cms-platform/${OUTSIDE_CHECK_PATH} .\` step`,
     );
     const order = [
-      checkout, detect, self, fetch, node, route, ruby, selfTests, build, verifier, addressCheck, outsideCheck,
+      checkout, detect, self, fetch, node, route, ruby, selfTests, build, verifier, addressCheck, liquidCheck, outsideCheck,
       escapeLint,
     ].map((s) => steps.indexOf(s));
     expect(order, "and they run in dependency order").toEqual([...order].sort((a, b) => a - b));
@@ -298,6 +305,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     for (const needed of [
       ESCAPE_LINT_PATH,
       ADDRESS_CHECK_PATH,
+      LIQUID_CHECK_PATH,
       OUTSIDE_CHECK_PATH,
       // So Node takes the module type from the platform, not from a site
       // package.json that may say `"type": "module"`.
@@ -311,7 +319,7 @@ test.describe("#377 site-verify — the reusable's contract", () => {
     ]) {
       expect(sparse, `the platform fetch must include ${needed}`).toContain(needed);
     }
-    expect(steps.length, "no other step: there is nothing else this job should do").toBe(13);
+    expect(steps.length, "no other step: there is nothing else this job should do").toBe(14);
   });
 
   test("the detect script BEHAVES: false + notice when absent, true when present (executed)", () => {
