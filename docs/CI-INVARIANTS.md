@@ -2102,3 +2102,20 @@ and most are expected to be abandoned.
 chooses them, and an issue notification mails them out. It carries only the
 number, API-built URLs and check names from our own workflows.
 `e2e/publish-watchdog.test.js` locks all of this.
+
+## A loop that executed zero tests is a failure (#1068)
+
+`cms-publish-loop-host`, `cms-publish-loop-prod`, `cms-scheduled-publish-loop`
+and `cms-media-roundtrip` run `summarize-playwright.js --require-ran` on the
+JSON report. Playwright counts a self-skipped spec as skipped and exits 0, so a
+site with `cms.base_collections: []` (jodidaniel.com, a single-page consumer)
+used to read green having published nothing (run 44576678143: 0 passed, 4
+skipped, no pull request). With `--require-ran`, passed + failed + flaky equal
+to 0, or a missing or malformed report, fails the step with an
+`::error title=Loop published nothing::<owner/repo>: ...` annotation.
+
+Which loops are real on which site:
+
+| Loop | adamdaniel.ai | jodidaniel.com |
+| --- | --- | --- |
+| `cms-publish-loop-host` / `-prod` / `cms-scheduled-publish-loop` / `cms-media-roundtrip` | real (the `posts` and `e2e` canary collections) | no collection to publish through: now FAILS instead of passing; a loop that drives its own collections is the open part of #1068 |

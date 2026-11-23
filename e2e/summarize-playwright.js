@@ -27,8 +27,43 @@ function summarizeFile(file) {
   }
 }
 
-if (require.main === module) {
-  process.stdout.write(summarizeFile(process.argv[2]) + "\n");
+// A loop that ran no test proved nothing. Playwright counts a self-skipped
+// spec as "skipped" and exits 0, so a site whose cms.base_collections is []
+// (jodidaniel.com) read as a green publish loop that published nothing (#1068).
+// Returns null when something ran, else the reason, aggregate counts only.
+function nothingRan(report) {
+  if (summarize(report) === UNAVAILABLE) {
+    return "the Playwright report is unavailable, so it cannot show a test ran";
+  }
+  const { expected, unexpected, flaky, skipped } = report.stats;
+  if (expected + unexpected + flaky > 0) return null;
+  return `executed 0 tests (${skipped} skipped); the specs self-skip when the ` +
+    "site has no collection they publish through (cms.base_collections: []), " +
+    "so this loop did not exercise a real publish";
 }
 
-module.exports = { summarize, summarizeFile, UNAVAILABLE };
+function nothingRanFile(file) {
+  try {
+    return nothingRan(JSON.parse(fs.readFileSync(file, "utf8")));
+  } catch (_) {
+    return "the Playwright report is unavailable, so it cannot show a test ran";
+  }
+}
+
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const requireRan = args[0] === "--require-ran";
+  const file = requireRan ? args[1] : args[0];
+  process.stdout.write(summarizeFile(file) + "\n");
+  if (requireRan) {
+    const reason = nothingRanFile(file);
+    if (reason) {
+      const site = String(process.env.GITHUB_REPOSITORY || "this site")
+        .replace(/[^A-Za-z0-9._\/-]/g, "");
+      process.stdout.write(`::error title=Loop published nothing::${site}: ${reason}\n`);
+      process.exitCode = 1;
+    }
+  }
+}
+
+module.exports = { summarize, summarizeFile, nothingRan, nothingRanFile, UNAVAILABLE };
