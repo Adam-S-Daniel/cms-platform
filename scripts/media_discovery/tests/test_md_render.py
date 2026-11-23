@@ -262,6 +262,18 @@ def test_digest_normal_run_points_at_the_editor_in_plain_words():
         assert jargon not in text
 
 
+def test_digest_links_the_new_mentions_page_near_the_top_on_its_own_line():
+    c = make_candidate()
+    _, text = render_digest("site.example.com", "Pat Rivera", [], [(c, [])],
+                            page_link="https://site.example.com/admin/media-search.html")
+    lines = text.splitlines()
+    i = lines.index("https://site.example.com/admin/media-search.html")
+    assert "New mentions page" in lines[i - 2]
+    assert i < lines.index("COULDN'T CONFIRM (1)")
+    _, without = render_digest("site.example.com", "Pat Rivera", [], [(c, [])])
+    assert "New mentions page" not in without
+
+
 def test_digest_preview_run_says_what_differs_from_a_normal_run():
     c = make_candidate()
     _, text = render_digest("s", "Pat Rivera", [], [], [c], preview=True)

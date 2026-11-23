@@ -375,8 +375,11 @@ def test_first_run_writes_the_results_file_and_emails_everything(site):
     assert lonely["entry"] is not None  # a draft could be made for it
     forum = by[MONTH_ONLY_EVENT["primary_url"]]
     assert forum["entry"] is None and forum["reasons"][0]["code"] == "no-entry"
-    [(subject, _, _)] = h.sent
+    [(subject, body, _)] = h.sent
     assert subject.startswith("site.example.com new mentions: 1 to add, 2 to double-check")
+    # The email opens with a link to the New mentions page, on a line of its own.
+    assert "\nhttps://site.example.com/admin/media-search.html\n" in body
+    assert body.index("media-search.html") < body.index("READY TO ADD")
     assert "repeats=0 results_written=1" in h.stdout
     # The PR token and the results token are different credentials.
     assert set(h.factory_tokens) == {"ghs-test", RES_TOKEN}
@@ -439,6 +442,7 @@ def test_without_a_results_token_no_file_is_read_or_written(site):
     h = Harness(site, env=dict(ENV)).run(mode="email-only")
     assert h.code == 0 and "results_written=0" in h.stdout and "repeats=0" in h.stdout
     assert len(h.sent) == 1
+    assert "media-search.html" not in h.sent[0][1]  # the page would not list these finds
 
 
 def test_a_failed_read_is_a_fixed_notice_and_the_run_carries_on(site):
@@ -448,6 +452,7 @@ def test_a_failed_read_is_a_fixed_notice_and_the_run_carries_on(site):
     assert "::notice::earlier results could not be read (HTTP 403)" in h.stdout
     assert "results_written=0" in h.stdout
     assert len(h.sent) == 1  # nothing known, so everything is emailed as before
+    assert "media-search.html" not in h.sent[0][1]
 
 
 def test_a_malformed_results_file_is_left_alone(site):

@@ -422,7 +422,9 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
 
     digest = render_digest(_site_label(admin_url, site_name), cfg.person.names[0], new_prs,
                            unconfirmed, would_open, review_link=admin_url and review_link,
-                           preview=mode != "live")
+                           preview=mode != "live",
+                           page_link=(admin_url.rstrip("/") + "/media-search.html"
+                                      if admin_url and results_written else ""))
     if digest is None:
         say("media-discovery: nothing new; no email")
     elif args.no_email:
