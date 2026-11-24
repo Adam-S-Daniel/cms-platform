@@ -79,7 +79,7 @@ test.describe("entry-status-model — which phrase links to the run", () => {
 
   test("no run URL means no link — the sentence stands alone", () => {
     const m = loadModel();
-    expect(m.derive(facts({ hasOpenPr: true, checksFailed: true }), { now: NOW }).detailLink).toBeNull();
+    expect(m.derive(facts({ hasOpenPr: true, armed: true, checksFailed: true }), { now: NOW }).detailLink).toBeNull();
     expect(
       m.derive(facts({ hasOpenPr: true, armed: true, waitingOn: "2 checks" }), { now: NOW }).detailLink,
     ).toBeNull();
@@ -96,7 +96,7 @@ test.describe("entry-status-model — which phrase links to the run", () => {
       "http://github.com/owner/repo/actions/runs/1",
       "https://github.com.example.com/x",
     ]) {
-      const got = m.derive(facts({ hasOpenPr: true, checksFailed: true, checksUrl: bad }), { now: NOW });
+      const got = m.derive(facts({ hasOpenPr: true, armed: true, checksFailed: true, checksUrl: bad }), { now: NOW });
       expect(got.detailLink, bad).toBeNull();
     }
   });

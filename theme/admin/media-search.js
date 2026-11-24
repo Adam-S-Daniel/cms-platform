@@ -393,6 +393,92 @@
     };
   }
 
+  // ── Where a new media item goes in its category ────────────────────
+  // A site lists each media category by `weight`, lowest first, and checks
+  // that a lower weight is never an older date (jodidaniel.com's
+  // test_media_lists_newest_first_within_each_category). The weekly search
+  // cannot pick the weight: the site changes between the search and the
+  // click. So the click places it: before the first item in its category
+  // that is strictly older, moving that item and everything after it down
+  // one, all in the draft's one commit. jodidaniel.com#572 was a May 2026
+  // talk given weight 1, above three October 2026 talks.
+  var FM_KEYS = ["category", "weight", "date_display"];
+
+  // The three scalar keys this needs, read off the front matter's top-level
+  // lines. Not a YAML parser: anything it cannot read is left unread, and an
+  // item with no readable weight is never moved.
+  function frontMatter(text) {
+    var m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(String(text || ""));
+    var out = {};
+    if (!m) return out;
+    m[1].split(/\r?\n/).forEach(function (line) {
+      var kv = /^([a-z_]+):[ \t]*(.*?)[ \t]*$/.exec(line);
+      if (!kv || FM_KEYS.indexOf(kv[1]) === -1 || kv[1] in out) return;
+      var v = kv[2];
+      if (v.charAt(0) === '"') {
+        try { v = JSON.parse(v); } catch (e) { return; }
+      } else if (v.charAt(0) === "'") {
+        if (v.length < 2 || v.charAt(v.length - 1) !== "'") return;
+        v = v.slice(1, -1).replace(/''/g, "'");
+      }
+      out[kv[1]] = v;
+    });
+    if ("weight" in out) {
+      out.weight = /^-?\d+$/.test(String(out.weight)) ? parseInt(out.weight, 10) : null;
+    }
+    return out;
+  }
+
+  // [year, month] for "May 2026", [year, null] for "2026", else null. The
+  // same keys the site's check uses.
+  function dateKey(display) {
+    var s = String(display || "").trim();
+    var y = /^(\d{4})$/.exec(s);
+    if (y) return [parseInt(y[1], 10), null];
+    var m = /^([A-Z][a-z]+) (\d{4})$/.exec(s);
+    var month = m ? MONTHS.indexOf(m[1]) : -1;
+    return month === -1 ? null : [parseInt(m[2], 10), month + 1];
+  }
+
+  // True when `a` is strictly older than `b`; a bare year compares on the year.
+  function olderThan(a, b) {
+    if (a[0] !== b[0]) return a[0] < b[0];
+    if (a[1] === null || b[1] === null) return false;
+    return a[1] < b[1];
+  }
+
+  function withWeight(text, weight) {
+    return String(text).replace(/^(---\r?\n[\s\S]*?^)weight:[^\r\n]*/m, "$1weight: " + weight);
+  }
+
+  // `content` is the new entry; `siblings` is [{ path, content }] for every
+  // item already in the folder. Returns the entry's content with its weight
+  // set, and [{ path, content }] for each item that moves down.
+  function placeMedia(content, siblings) {
+    var fm = frontMatter(content);
+    var key = dateKey(fm.date_display);
+    var peers = (siblings || [])
+      .map(function (f) { return { path: f.path, content: f.content, fm: frontMatter(f.content) }; })
+      .filter(function (f) { return f.fm.category === fm.category && typeof f.fm.weight === "number"; })
+      .sort(function (a, b) { return a.fm.weight - b.fm.weight; });
+    if (!peers.length || typeof fm.weight !== "number") return { content: content, moves: [] };
+    var weight = null;
+    if (key) {
+      for (var i = 0; i < peers.length; i++) {
+        var k = dateKey(peers[i].fm.date_display);
+        if (k && olderThan(k, key)) { weight = peers[i].fm.weight; break; }
+      }
+    }
+    if (weight === null) {
+      // Nothing older: it goes last.
+      return { content: withWeight(content, peers[peers.length - 1].fm.weight + 1), moves: [] };
+    }
+    var moves = peers
+      .filter(function (f) { return f.fm.weight >= weight; })
+      .map(function (f) { return { path: f.path, content: withWeight(f.content, f.fm.weight + 1) }; });
+    return { content: withWeight(content, weight), moves: moves };
+  }
+
   // ── Sign-in ──────────────────────────────────────────────────────────
   function readToken(storage) {
     try {
@@ -544,33 +630,85 @@
     }
 
     // The draft for one find. Resolves { draft: {number, branch}, already }.
-    // A draft branch that already exists means an earlier run or the editor
-    // got there first: it is reported as already added, never overwritten.
+    // The branch is created pointing at ONE commit that holds the entry and,
+    // for media, every item it moves down (see placeMedia), so a draft is
+    // never half made. A draft branch that already exists means an earlier
+    // run or the editor got there first: it is reported as already added,
+    // never overwritten.
     async function openDraft(finding) {
       var entry = finding.entry;
       var branchName = await productionBranch();
       var headRes = await call("GET", base + "/git/ref/heads/" + pathOf(branchName));
       must(headRes, "read site", [200]);
       var head = await json(headRes);
-      var reqs = buildDraftRequests(finding, branchName, head && head.object && head.object.sha,
-        adminOrigin + editorEntryPath(entry));
+      var headSha = head && head.object && head.object.sha;
+      var reqs = buildDraftRequests(finding, branchName, headSha, adminOrigin + editorEntryPath(entry));
 
-      var refRes = await call("POST", base + "/git/refs", reqs.ref);
-      must(refRes, "create draft", [201, 422]);
-      var existed = refRes.status === 422;
-      if (existed) {
-        var found = await findDraftPull(reqs.branch);
-        if (found) return { draft: { number: found, branch: reqs.branch }, already: true };
+      var branchRes = await call("GET", base + "/git/ref/heads/" + pathOf(reqs.branch));
+      must(branchRes, "read site", [200, 404]);
+      if (branchRes.status === 200) {
+        var existing = await findDraftPull(reqs.branch);
+        if (existing) return { draft: { number: existing, branch: reqs.branch }, already: true };
+        // A branch with no pull request (an earlier attempt stopped part way):
+        // open the pull request for what is there rather than touch it.
+        return openPull(reqs);
       }
 
-      var putRes = await call("PUT", base + "/contents/" + pathOf(entry.path), reqs.file);
-      must(putRes, "save draft", [200, 201, 422]);
-      if (putRes.status === 422 && !existed) {
-        // The entry is already on the live site. Remove the empty branch.
-        await call("DELETE", base + "/git/refs/heads/" + pathOf(reqs.branch));
+      var folder = entry.path.split("/").slice(0, -1).join("/");
+      var listRes = await call("GET", base + "/contents/" + pathOf(folder) + "?ref=" + encodeURIComponent(headSha));
+      must(listRes, "read site", [200, 404]);
+      var listing = listRes.status === 200 ? await json(listRes) : [];
+      listing = Array.isArray(listing) ? listing : [];
+      if (listing.some(function (f) { return f && f.path === entry.path; })) {
+        // The entry is already on the live site.
         return { draft: null, already: true };
       }
 
+      var placed = { content: entry.content, moves: [] };
+      if (entry.collection === "media") {
+        var files = listing.filter(function (f) {
+          return f && f.type === "file" && /\.md$/.test(f.name || "") && f.sha;
+        });
+        var siblings = await Promise.all(files.map(async function (f) {
+          var blobRes = await call("GET", base + "/git/blobs/" + encodeURIComponent(f.sha));
+          must(blobRes, "read site", [200]);
+          var blob = await json(blobRes);
+          return { path: f.path, content: fromBase64((blob && blob.content) || "") };
+        }));
+        placed = placeMedia(entry.content, siblings);
+      }
+
+      var commitRes = await call("GET", base + "/git/commits/" + encodeURIComponent(headSha));
+      must(commitRes, "read site", [200]);
+      var baseCommit = await json(commitRes);
+      var blobs = [{ path: entry.path, content: placed.content }].concat(placed.moves);
+      var treeRes = await call("POST", base + "/git/trees", {
+        base_tree: baseCommit && baseCommit.tree && baseCommit.tree.sha,
+        tree: blobs.map(function (b) {
+          return { path: b.path, mode: "100644", type: "blob", content: b.content };
+        }),
+      });
+      must(treeRes, "save draft", [201]);
+      var tree = await json(treeRes);
+      var newCommitRes = await call("POST", base + "/git/commits", {
+        message: reqs.file.message,
+        tree: tree && tree.sha,
+        parents: [headSha],
+      });
+      must(newCommitRes, "save draft", [201]);
+      var newCommit = await json(newCommitRes);
+
+      var refRes = await call("POST", base + "/git/refs", { ref: reqs.ref.ref, sha: newCommit && newCommit.sha });
+      must(refRes, "create draft", [201, 422]);
+      if (refRes.status === 422) {
+        var found = await findDraftPull(reqs.branch);
+        return { draft: found ? { number: found, branch: reqs.branch } : null, already: true };
+      }
+
+      return openPull(reqs);
+    }
+
+    async function openPull(reqs) {
       var prRes = await call("POST", base + "/pulls", reqs.pull);
       must(prRes, "open draft", [201]);
       var pr = await json(prRes);
@@ -630,6 +768,9 @@
     editorEntryPath: editorEntryPath,
     draftBody: draftBody,
     buildDraftRequests: buildDraftRequests,
+    frontMatter: frontMatter,
+    dateKey: dateKey,
+    placeMedia: placeMedia,
     readToken: readToken,
     createApi: createApi,
   };
