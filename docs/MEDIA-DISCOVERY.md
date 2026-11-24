@@ -46,7 +46,9 @@ Publish.
    reason per page (`corroborate.Problem`). Each URL sits alone on its own
    line, since mail clients take a colon right after a URL as part of it. No
    email is sent when there is nothing to list. A find the results file
-   (below) already holds is not listed again.
+   (below) already holds is not listed again. When this run wrote the
+   results file to the site repository, the email opens with a link to the New mentions page
+   (`<admin URL>/media-search.html`), where each find is added or skipped.
 7. **Record** every find in `findings.json` for the `/admin` "New mentions"
    page (see "Results file").
 
@@ -167,7 +169,7 @@ problem) instead of being ignored.
 | `MEDIA_DISCOVERY_MODE` | variable | `live` opens PRs | email-only |
 | `MEDIA_DISCOVERY_REVIEWERS` | variable | comma-separated GitHub logins requested on each PR | no reviewers requested |
 | `CMS_AUTOMATION_APP_ID` | variable | live mode (the PR-writing App) | email-only, with a `::notice::` |
-| `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode; the results file | email-only, with a `::notice::`; no results file |
+| `CMS_AUTOMATION_APP_PRIVATE_KEY` | secret (`app_private_key`) | live mode; the results file | email-only (a `::notice::` only in live mode); no results file, silently |
 | `MEDIA_DISCOVERY_RESULTS_REPO` | variable (`OWNER/NAME`) | optional: the repository that holds the results file. The New mentions admin page always reads the site repository, so set this only when that page is not used | the site repository |
 
 The SMTP host defaults to `smtp.fastmail.com` on port 587, upgraded with

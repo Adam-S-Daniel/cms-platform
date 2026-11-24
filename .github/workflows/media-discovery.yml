@@ -41,7 +41,7 @@
 # is a different repository of the same owner, the results repository. The CLI
 # gets it as MEDIA_DISCOVERY_RESULTS_TOKEN, separately from GITHUB_TOKEN, which
 # stays the PR-writing App token in live mode and the read-only token in
-# email-only mode. Without the App the run keeps no results file (a notice).
+# email-only mode. Without the App the run keeps no results file (no notice in email-only mode).
 #
 # PUBLIC LOGS. The CLI prints counts only. Nothing from `inputs`, `vars`,
 # `secrets` or `github.event` is interpolated into a `run:` body (it would be
