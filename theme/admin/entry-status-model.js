@@ -458,7 +458,7 @@
         waitingOn: "a person to approve the visual review",
       };
     }
-    if (f.checksFailed) {
+    if (f.checksFailed && f.armed) {
       return {
         detail:
           "One of the automatic safety checks did not pass, so this has not " + w.done +
@@ -552,10 +552,15 @@
     // it needed and did not happen, so believing `armed` past that point is
     // the "Going live… forever" defect #371 measured.
     var stalled = isStalled(f, now);
+    // A failed check stops a PUBLISH, not a draft. An unarmed draft (saved,
+    // never published: a Decap save, or a draft the New mentions page opened)
+    // with a red check is still a draft; saying "Needs attention" and "Try
+    // publishing again" there tells the editor a publish failed that nobody
+    // asked for. The red check is named in the draft's own sentence instead.
     var stopped =
       Boolean(f.mergeConflict) ||
       Boolean(f.awaitingReviewGate) ||
-      Boolean(f.checksFailed) ||
+      (Boolean(f.checksFailed) && Boolean(f.armed)) ||
       f.deployState === "failure" ||
       f.deployState === "error" ||
       stalled;
@@ -650,11 +655,19 @@
           : "This is saved, but it is not on " + dest.noun + " yet. Click Publish to " +
             "put it on " + dest.noun + "." + later;
       }
+      var draftLink = null;
+      if (f.checksFailed) {
+        draftDetail =
+          "This draft is saved. One of the automatic safety checks did not pass on it, so it " +
+          "cannot be published until that is fixed. Nothing you typed has been lost. Ask " +
+          (contact || "whoever looks after " + dest.canonical) + " to take a look.";
+        draftLink = checksLink(f.checksUrl, "did not pass");
+      }
       return {
         badge: BADGE.DRAFT,
         label: draftLabel,
         detail: draftDetail,
-        detailLink: null,
+        detailLink: draftLink,
         waitingOn: null,
         minutesLeft: null,
         modifiers: modifiers,

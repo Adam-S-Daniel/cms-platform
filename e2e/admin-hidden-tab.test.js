@@ -355,3 +355,18 @@ test.describe("#644 admin shims — a hidden tab does not wait for an animation 
     });
   }
 });
+
+test.describe("publish-button.js — the Publish label", () => {
+  // A draft nobody published whose check failed has no publish to retry
+  // (jodidaniel.com#572): "Try publishing again" there reads as a failure of
+  // something the editor never did.
+  test("says Try publishing again only after a publish was asked for", () => {
+    const { api } = loadEditor(openPrRoutes());
+    expect(api.publishLabel({ hasOpenPr: true, checksFailed: true }, false)).toBe("Publish");
+    expect(api.publishLabel({ hasOpenPr: true, armed: true, checksFailed: true }, false)).toBe(
+      "Try publishing again",
+    );
+    expect(api.publishLabel({ hasOpenPr: true, armed: true }, true)).toBe("Try publishing again");
+    expect(api.publishLabel({ hasOpenPr: true }, false)).toBe("Publish");
+  });
+});

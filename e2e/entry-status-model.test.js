@@ -173,13 +173,32 @@ test.describe("entry-status-model — the four badges", () => {
 
   test("the needs-attention copy names the site's contact when one is configured", () => {
     const m = loadModel();
-    const got = m.derive(facts({ hasOpenPr: true, checksFailed: true }), {
+    const got = m.derive(facts({ hasOpenPr: true, armed: true, checksFailed: true }), {
       now: NOW,
       contact: "Adam",
     });
     expect(got.detail).toContain("Adam");
-    const generic = m.derive(facts({ hasOpenPr: true, checksFailed: true }), { now: NOW });
+    const generic = m.derive(facts({ hasOpenPr: true, armed: true, checksFailed: true }), { now: NOW });
     expect(generic.detail).toMatch(/whoever looks after the published destination/i);
+  });
+
+  // A draft nobody has published (no cms/ready, no auto-merge) whose check
+  // went red is still a draft: "Needs attention" there reports a failed
+  // publish that was never asked for (jodidaniel.com#572, a draft the New
+  // mentions page opened). The red check is still named, in the draft's
+  // sentence, with the same contact and run link.
+  test("an unpublished draft with a failed check stays a Draft and says why it cannot publish", () => {
+    const m = loadModel();
+    const JOB = "https://github.com/o/r/actions/runs/1/job/2";
+    const got = m.derive(facts({ hasOpenPr: true, checksFailed: true, checksUrl: JOB }), {
+      now: NOW,
+      contact: "Adam",
+    });
+    expect(got.badge).toBe(m.BADGE.DRAFT);
+    expect(got.detail).toMatch(/safety checks did not pass/);
+    expect(got.detail).toContain("Adam");
+    expect(got.detail).not.toMatch(/Click Publish/);
+    expect(got.detailLink).toEqual({ text: "did not pass", href: JOB });
   });
 });
 

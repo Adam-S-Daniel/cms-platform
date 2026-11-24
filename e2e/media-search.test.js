@@ -221,6 +221,11 @@ function fakeGitHub(opts = {}) {
     if (key === "GET /user") return res(200, { login: "jodi" });
     if (key.startsWith("GET /contents/")) {
       const p = decodeURIComponent(u.pathname.split("/contents/")[1]);
+      const site = opts.site || {};
+      const inDir = Object.keys(site).filter((f) => f.startsWith(p + "/"));
+      if (inDir.length) {
+        return res(200, inDir.map((f) => ({ type: "file", name: f.split("/").pop(), path: f, sha: "blob:" + f })));
+      }
       if (!files.has(p)) return res(404, {});
       return res(200, { encoding: "base64", content: b64(files.get(p)), sha: "sha-" + (shas.get(p) || 0) });
     }
@@ -234,9 +239,19 @@ function fakeGitHub(opts = {}) {
         shas.set(p, (shas.get(p) || 0) + 1);
         return res(200, {});
       }
-      return res(opts.fileExistsOnMain ? 422 : 201, {});
+      return res(500, {});
     }
     if (key === "GET /git/ref/heads/main") return res(200, { object: { sha: "headsha" } });
+    if (key.startsWith("GET /git/ref/heads/")) {
+      return res(refs.has("refs/heads/" + decodeURIComponent(key.slice("GET /git/ref/heads/".length))) ? 200 : 404, {});
+    }
+    if (key.startsWith("GET /git/blobs/")) {
+      const f = decodeURIComponent(key.slice("GET /git/blobs/".length)).replace(/^blob:/, "");
+      return res(200, { encoding: "base64", content: b64(opts.site[f]) });
+    }
+    if (key === "GET /git/commits/headsha") return res(200, { tree: { sha: "basetree" } });
+    if (key === "POST /git/trees") return res(201, { sha: "newtree" });
+    if (key === "POST /git/commits") return res(201, { sha: "newcommit" });
     if (key === "POST /git/refs") {
       if (refs.has(body.ref)) return res(422, {});
       refs.add(body.ref);
@@ -310,35 +325,76 @@ test.describe("media-search: GitHub flow with a fake fetch", () => {
     expect(plain(out)).toEqual({ version: 1, decisions: {} });
   });
 
-  test("Add to site makes the branch, file, pull request and labels, in order", async () => {
+  test("Add to site makes one commit, then the branch, pull request and labels, in order", async () => {
     const gh = fakeGitHub();
     const got = await apiFor(gh).openDraft(FINDING);
     expect(got.already).toBe(false);
     expect(got.draft.branch).toBe("cms/media/1-health-policy-academy");
     expect(keys(gh)).toEqual([
       "GET /git/ref/heads/main",
+      "GET /git/ref/heads/cms/media/1-health-policy-academy",
+      "GET /contents/_media",
+      "GET /git/commits/headsha",
+      "POST /git/trees",
+      "POST /git/commits",
       "POST /git/refs",
-      "PUT /contents/_media/1-health-policy-academy.md",
       "POST /pulls",
       `POST /issues/${got.draft.number}/labels`,
     ]);
-    const pull = JSON.parse(gh.calls[3].init.body);
+    const tree = JSON.parse(gh.calls[4].init.body);
+    expect(tree.base_tree).toBe("basetree");
+    expect(tree.tree).toEqual([
+      { path: "_media/1-health-policy-academy.md", mode: "100644", type: "blob", content: FINDING.entry.content },
+    ]);
+    const commit = JSON.parse(gh.calls[5].init.body);
+    expect(commit).toEqual({ message: "Create Media “1-health-policy-academy”", tree: "newtree", parents: ["headsha"] });
+    expect(JSON.parse(gh.calls[6].init.body)).toEqual({
+      ref: "refs/heads/cms/media/1-health-policy-academy",
+      sha: "newcommit",
+    });
+    const pull = JSON.parse(gh.calls[7].init.body);
     expect(pull.title).toBe("Create Media “1-health-policy-academy”");
-    expect(JSON.parse(gh.calls[4].init.body).labels).toEqual(["decap-cms/pending_review", "media-discovery"]);
+    expect(JSON.parse(gh.calls[8].init.body).labels).toEqual(["decap-cms/pending_review", "media-discovery"]);
   });
 
   test("an existing draft branch counts as already added and is not touched", async () => {
     const gh = fakeGitHub({ refs: ["refs/heads/cms/media/1-health-policy-academy"], existingPull: true });
     const got = await apiFor(gh).openDraft(FINDING);
     expect(got).toEqual({ draft: { number: 9, branch: "cms/media/1-health-policy-academy" }, already: true });
-    expect(keys(gh).some((k) => k.startsWith("PUT") || k === "POST /pulls")).toBe(false);
+    expect(keys(gh).some((k) => k.startsWith("PUT") || k.startsWith("POST"))).toBe(false);
   });
 
-  test("an entry already on the live site removes the empty branch", async () => {
-    const gh = fakeGitHub({ fileExistsOnMain: true });
+  test("an entry already on the live site makes nothing", async () => {
+    const gh = fakeGitHub({ site: { "_media/1-health-policy-academy.md": "---\ntitle: x\n---\n" } });
     const got = await apiFor(gh).openDraft(FINDING);
     expect(got).toEqual({ draft: null, already: true });
-    expect(keys(gh)).toContain("DELETE /git/refs/heads/cms/media/1-health-policy-academy");
+    expect(keys(gh).some((k) => k.startsWith("POST") || k.startsWith("PUT"))).toBe(false);
+  });
+
+  // jodidaniel.com#572: the search gave a May 2026 talk weight 1, above three
+  // October 2026 talks, and the site's newest-first check failed the draft.
+  test("a media item is placed by date, moving older items down in the same commit", async () => {
+    const md = (cat, w, date) => `---\ncategory: "${cat}"\ntitle: "t"\ndate_display: "${date}"\nweight: ${w}\n---\n`;
+    const site = {
+      "_media/a.md": md("Talks & Panels", 1, "October 2026"),
+      "_media/b.md": md("Talks & Panels", 2, "October 2026"),
+      "_media/c.md": md("Talks & Panels", 3, "December 2025"),
+      "_media/d.md": md("Talks & Panels", 4, "2016"),
+      "_media/e.md": md("Press Coverage", 1, "2015"),
+      "_media/notes.txt": "not an item",
+    };
+    const finding = {
+      ...FINDING,
+      entry: { ...FINDING.entry, content: md("Talks & Panels", 1, "May 2026") },
+    };
+    const gh = fakeGitHub({ site });
+    await apiFor(gh).openDraft(finding);
+    const tree = JSON.parse(gh.calls.find((c) => c.key === "POST /git/trees").init.body).tree;
+    const byPath = Object.fromEntries(tree.map((t) => [t.path, t.content]));
+    expect(Object.keys(byPath).sort()).toEqual(["_media/1-health-policy-academy.md", "_media/c.md", "_media/d.md"]);
+    expect(byPath["_media/1-health-policy-academy.md"]).toBe(md("Talks & Panels", 3, "May 2026"));
+    expect(byPath["_media/c.md"]).toBe(md("Talks & Panels", 4, "December 2025"));
+    expect(byPath["_media/d.md"]).toBe(md("Talks & Panels", 5, "2016"));
   });
 
   test("a 401 surfaces with its status so the page can ask for sign-in", async () => {
@@ -420,5 +476,67 @@ test.describe("media-search: GitHub flow with a fake fetch", () => {
       expect(got.lead.endsWith("\u2026")).toBe(true);
       expect(MS.reasonParts({ url: "https://example.com/", title: "y".repeat(90), text: PRED }).lead).toHaveLength(90);
     });
+  });
+});
+
+test.describe("media-search: placeMedia keeps each category newest first", () => {
+  const md = (cat, w, date) => `---\ncategory: ${cat}\ndate_display: '${date}'\nweight: ${w}\n---\nbody\n`;
+  const sib = (p, cat, w, date) => ({ path: p, content: md(cat, w, date) });
+
+  test("reads quoted and plain front matter values", () => {
+    expect(plain(MS.frontMatter('---\ncategory: "A & B"\nweight: 7\ndate_display: \'It\'\'s\'\n---\n'))).toEqual({
+      category: "A & B",
+      weight: 7,
+      date_display: "It's",
+    });
+    expect(plain(MS.frontMatter("no front matter"))).toEqual({});
+    expect(MS.frontMatter("---\nweight: x\n---\n").weight).toBeNull();
+  });
+
+  test("date keys match the site's check", () => {
+    expect(plain(MS.dateKey("May 2026"))).toEqual([2026, 5]);
+    expect(plain(MS.dateKey("2016"))).toEqual([2016, null]);
+    expect(MS.dateKey("Ongoing")).toBeNull();
+    expect(MS.dateKey("")).toBeNull();
+  });
+
+  test("nothing older in the category: it goes last and nothing moves", () => {
+    const got = MS.placeMedia(md("X", 1, "May 2020"), [sib("a", "X", 1, "May 2026"), sib("b", "X", 2, "")]);
+    expect(got.content).toBe(md("X", 3, "May 2020"));
+    expect(plain(got.moves)).toEqual([]);
+  });
+
+  test("an empty category keeps the entry's own weight", () => {
+    const got = MS.placeMedia(md("X", 1, "May 2020"), [sib("a", "Y", 1, "May 2010")]);
+    expect(got.content).toBe(md("X", 1, "May 2020"));
+    expect(plain(got.moves)).toEqual([]);
+  });
+
+  test("the newest item goes first and every item moves down one", () => {
+    const got = MS.placeMedia(md("X", 5, "2027"), [sib("a", "X", 0, "May 2026"), sib("b", "X", 1, "2020")]);
+    expect(got.content).toBe(md("X", 0, "2027"));
+    expect(plain(got.moves)).toEqual([
+      { path: "a", content: md("X", 1, "May 2026") },
+      { path: "b", content: md("X", 2, "2020") },
+    ]);
+  });
+
+  test("a same-year bare year is not older, so the item goes after it", () => {
+    const got = MS.placeMedia(md("X", 1, "May 2026"), [sib("a", "X", 1, "2026"), sib("b", "X", 2, "2025")]);
+    expect(got.content).toBe(md("X", 2, "May 2026"));
+    expect(plain(got.moves)).toEqual([{ path: "b", content: md("X", 3, "2025") }]);
+  });
+
+  test("an undated new item goes last", () => {
+    const got = MS.placeMedia(md("X", 1, ""), [sib("a", "X", 1, "2026"), sib("b", "X", 2, "2025")]);
+    expect(got.content).toBe(md("X", 3, ""));
+    expect(plain(got.moves)).toEqual([]);
+  });
+
+  test("only the weight line in the front matter changes", () => {
+    const text = "---\ncategory: X\ndate_display: '2020'\nweight: 4\n---\nweight: 4 stays in the body\n";
+    const got = MS.placeMedia(text, [sib("a", "X", 4, "2019")]);
+    expect(got.content).toBe("---\ncategory: X\ndate_display: '2020'\nweight: 4\n---\nweight: 4 stays in the body\n");
+    expect(got.moves[0].content).toBe(md("X", 5, "2019"));
   });
 });

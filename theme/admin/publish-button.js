@@ -512,6 +512,7 @@
   // Same shape as one-door-publish.js's window.__oneDoorPublish.
   window.__publishButton = {
     doPublish: doPublish,
+    publishLabel: publishLabel,
     decapPublishMenuItem: decapPublishMenuItem,
     lastError: function () {
       return lastError;
@@ -759,13 +760,16 @@
       };
     }
 
-    return {
-      kind: "publish",
-      label:
-        facts.checksFailed || facts.awaitingReviewGate || stalled
-          ? "Try publishing again"
-          : "Publish",
-    };
+    return { kind: "publish", label: publishLabel(facts, stalled) };
+  }
+
+  // "Again" only after a publish was asked for (`armed`): a draft whose check
+  // failed before anyone pressed Publish has nothing to retry
+  // (jodidaniel.com#572).
+  function publishLabel(facts, stalled) {
+    return (facts.armed && facts.checksFailed) || facts.awaitingReviewGate || stalled
+      ? "Try publishing again"
+      : "Publish";
   }
 
   function render() {
