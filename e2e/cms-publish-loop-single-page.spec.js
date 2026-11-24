@@ -66,6 +66,7 @@ const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const {
   closeOpenPrsAddingFile,
+  closeStaleDecapPrOnBranch,
   readFileOnRef,
   removeFixtureViaPr,
   seedFixtureViaPr,
@@ -486,7 +487,7 @@ test.afterAll(async () => {
   const problems = [];
 
   if (pendingMedia) {
-    const { filePath, slug, runId } = pendingMedia;
+    const { filePath, slug, runId, branch } = pendingMedia;
     try {
       // Stop this run's in-flight create PR first (#689): it is armed, and a
       // main-only check would read "gone" and then watch it merge.
@@ -494,6 +495,9 @@ test.afterAll(async () => {
       if (closed.length > 0) {
         console.warn(`[cleanup-harness] closed in-flight PR(s) ${closed.join(", ")} adding ${filePath}`);
       }
+      // A delete PR Decap opened on the same branch (it only REMOVES the file, so the
+      // call above leaves it) would race the removal PR below and strand one of them.
+      await closeStaleDecapPrOnBranch({ branch });
       if ((await mainText(filePath)) === null) {
         console.log(`[cleanup-harness] ${filePath} is not on main; nothing to remove`);
       } else {
@@ -534,6 +538,12 @@ test.afterAll(async () => {
             body: JSON.stringify({ state: "closed" }),
           });
           console.warn(`[cleanup-harness] closed in-flight PR #${pr.number} editing ${filePath}`);
+          // A closed PR leaves its branch, which can make the owner's next Contact save fail.
+          try {
+            await gh(`/repos/${HOST_REPO}/git/refs/heads/${DATA_BRANCH}`, { method: "DELETE" });
+          } catch (e) {
+            problems.push(`branch ${DATA_BRANCH}: ${describeError(e)}`);
+          }
         }
       }
       const current = await mainText(filePath);

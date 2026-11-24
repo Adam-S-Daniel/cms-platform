@@ -25,7 +25,7 @@ const SINGLE_PAGE_SLUG_PREFIX = "e2e-publish-loop";
 
 // The `weight` the throw-away media item carries. Decap's media slug template
 // is `{{weight}}-{{slug}}`, so it is also the file name's prefix.
-const MEDIA_WEIGHT = 99;
+const MEDIA_WEIGHT = 0;
 
 // Month and year as the editor field's hint asks ("April 2025"). Far-future so
 // it can never read as a real appearance if the page ever shows it.

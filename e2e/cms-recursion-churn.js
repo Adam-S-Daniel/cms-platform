@@ -44,7 +44,7 @@ const SELF_CHURN = {
     "_e2e/canary-delete-*.md", //                    cms-delete-published.spec.js (throw-away)
     "_posts/2024-01-02-e2e-unpublish-canary.md", //  cms-unpublish-republish.spec.js
     "_tags/e2e-tags-canary-*.md", //                 cms-tags-lifecycle.spec.js (throw-away)
-    "_media/99-e2e-publish-loop-*.md", //            cms-publish-loop-single-page.spec.js (throw-away, #1068)
+    "_media/0-e2e-publish-loop-*.md", //            cms-publish-loop-single-page.spec.js (throw-away, #1068)
   ],
   // cms-media-roundtrip.yml runs cms-media-roundtrip.spec.js. Ephemeral
   // per-run post + throw-away upload, both segment-anchored prefix globs
