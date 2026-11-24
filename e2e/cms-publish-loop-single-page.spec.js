@@ -66,7 +66,6 @@ const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
 const {
   closeOpenPrsAddingFile,
-  closeStaleDecapPrOnBranch,
   readFileOnRef,
   removeFixtureViaPr,
   seedFixtureViaPr,
@@ -201,6 +200,37 @@ async function labelPrRemoving(filePath) {
   }
   // Not finding one is fine: Decap committed the delete straight to main.
   return null;
+}
+
+// Close (and drop the branch of) every open `cms/` PR into main that REMOVES filePath.
+async function closeOpenPrsRemovingFile(filePath) {
+  const closed = [];
+  const prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`);
+  for (const pr of (prs || []).filter(
+    (p) => p.head && typeof p.head.ref === "string" && p.head.ref.startsWith("cms/"),
+  )) {
+    const files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
+    if (!files.some((f) => f.filename === filePath && f.status === "removed")) continue;
+    await gh(`/repos/${HOST_REPO}/pulls/${pr.number}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: "closed" }),
+    });
+    await deleteBranch(pr.head.ref);
+    closed.push(`#${pr.number}`);
+  }
+  return closed;
+}
+
+// DELETE a branch ref. GitHub answers 204 with no body, which `gh` reports as a status-only
+// SyntaxError; an already-gone branch (404 or 422) is also fine.
+async function deleteBranch(branch) {
+  try {
+    await gh(`/repos/${HOST_REPO}/git/refs/heads/${branch}`, { method: "DELETE" });
+  } catch (e) {
+    const ok = (e instanceof SyntaxError && e.status === 204) || e.status === 404 || e.status === 422;
+    if (!ok) throw e;
+  }
 }
 
 test(
@@ -495,9 +525,13 @@ test.afterAll(async () => {
       if (closed.length > 0) {
         console.warn(`[cleanup-harness] closed in-flight PR(s) ${closed.join(", ")} adding ${filePath}`);
       }
-      // A delete PR Decap opened on the same branch (it only REMOVES the file, so the
-      // call above leaves it) would race the removal PR below and strand one of them.
-      await closeStaleDecapPrOnBranch({ branch });
+      // A delete PR the shim opened (branch `cms/posts/delete-...`, whatever the collection)
+      // only REMOVES the file, so the call above leaves it; close it before the removal PR
+      // below so the two do not race and strand one.
+      const closedRemovals = await closeOpenPrsRemovingFile(filePath);
+      if (closedRemovals.length > 0) {
+        console.warn(`[cleanup-harness] closed in-flight delete PR(s) ${closedRemovals.join(", ")}`);
+      }
       if ((await mainText(filePath)) === null) {
         console.log(`[cleanup-harness] ${filePath} is not on main; nothing to remove`);
       } else {
@@ -540,7 +574,7 @@ test.afterAll(async () => {
           console.warn(`[cleanup-harness] closed in-flight PR #${pr.number} editing ${filePath}`);
           // A closed PR leaves its branch, which can make the owner's next Contact save fail.
           try {
-            await gh(`/repos/${HOST_REPO}/git/refs/heads/${DATA_BRANCH}`, { method: "DELETE" });
+            await deleteBranch(DATA_BRANCH);
           } catch (e) {
             problems.push(`branch ${DATA_BRANCH}: ${describeError(e)}`);
           }

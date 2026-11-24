@@ -53,7 +53,8 @@ test.describe("single-page publish loop fixture (#1068)", () => {
 
   test("the item sorts before every real item (jodidaniel.com lists lower weight as newer)", () => {
     // test-content-copy.rb requires lower weight to mean newer within a category,
-    // and real items start at 1, so a disposable dated 2099 must carry weight 0.
+    // and real items in its category start at 1, so a disposable dated 2099 must carry
+    // a weight below them (another category may already use 0, which never ties here).
     const m = buildSinglePageMedia({ runId: 3 });
     expect(m.fields.weight).toBeLessThan(1);
     expect(m.filePath).toMatch(/^_media\/0-/);
