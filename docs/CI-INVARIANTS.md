@@ -2155,7 +2155,7 @@ publish pair per day on such a site, not four). It self-skips unless
 
 - **Leg A, a `media` folder entry:** create through the editor (title `E2E
   publish loop <runId>`, plain ASCII, a `date_display` of `December 2099`,
-  category, source, an `https://example.com/...` article URL, weight 99),
+  category, source, an `https://example.com/...` article URL, weight 0),
   stamped `test_fixture: true` before the first Save by a Decap `preSave`
   listener (`markEphemeralEntry`), Status Ready, Publish now, merge, deploy;
   then wait for the real merge, re-open as a published entry, Delete, merge,
@@ -2174,7 +2174,7 @@ publish pair per day on such a site, not four). It self-skips unless
   leftover `_media/` item, a restore PR (the original bytes) when main still
   carries the edit, both through `cms/ready` and skipped when there is nothing
   to repair.
-- **Resting state:** no `_media/99-e2e-publish-loop-*` file, no open PR, and
+- **Resting state:** no `_media/0-e2e-publish-loop-*` file, no open PR, and
   the contact heading as it was. Decap re-serializes a data file it saves
   (flow lists become block lists), so the first run may change the file's
   bytes; the loop judges the parsed data (`sameData`), never the bytes.
@@ -2182,8 +2182,8 @@ publish pair per day on such a site, not four). It self-skips unless
   `preSave` stamp), `single-page-detect.test.js` (the detector) and
   `single-page-loop-gating.test.js` (parses the three gated workflows, the
   host loop and the spec's own skip calls). The branch cleanup in the host loop
-  covers `cms/media/99-e2e-publish-loop-*`, and `cms-recursion-churn.js` lists
-  `_media/99-e2e-publish-loop-*.md` as the host loop's self-churn.
+  covers `cms/media/0-e2e-publish-loop-*`, and `cms-recursion-churn.js` lists
+  `_media/0-e2e-publish-loop-*.md` as the host loop's self-churn.
 - **The three skipped loops keep their required-check shape:** the detector
   step and the gates are step-level only; no job or workflow `if`, no new
   `concurrency` group, and the `prod-mutating-loop` lane block is untouched.

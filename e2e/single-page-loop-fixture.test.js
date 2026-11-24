@@ -25,10 +25,10 @@ test.describe("single-page publish loop fixture (#1068)", () => {
     expect(a.title).toBe("E2E publish loop 1790000000001");
     expect(a.slug).toBe("e2e-publish-loop-1790000000001");
     expect(a.fileSlug).toBe(`${MEDIA_WEIGHT}-e2e-publish-loop-1790000000001`);
-    expect(a.filePath).toBe("_media/99-e2e-publish-loop-1790000000001.md");
-    expect(a.branch).toBe("cms/media/99-e2e-publish-loop-1790000000001");
-    expect(a.publicPath).toBe("/media/99-e2e-publish-loop-1790000000001/");
-    expect(a.entryPath).toBe("/collections/media/entries/99-e2e-publish-loop-1790000000001");
+    expect(a.filePath).toBe("_media/0-e2e-publish-loop-1790000000001.md");
+    expect(a.branch).toBe("cms/media/0-e2e-publish-loop-1790000000001");
+    expect(a.publicPath).toBe("/media/0-e2e-publish-loop-1790000000001/");
+    expect(a.entryPath).toBe("/collections/media/entries/0-e2e-publish-loop-1790000000001");
     expect(buildSinglePageMedia({ runId: 2 }).filePath).not.toBe(a.filePath);
     expect(() => buildSinglePageMedia({})).toThrow(/runId/);
   });
@@ -49,6 +49,15 @@ test.describe("single-page publish loop fixture (#1068)", () => {
     expect(isPlainAscii("a — b")).toBe(false);
     expect(isPlainAscii("it’s")).toBe(false);
     expect(isPlainAscii(7)).toBe(false);
+  });
+
+  test("the item sorts before every real item (jodidaniel.com lists lower weight as newer)", () => {
+    // test-content-copy.rb requires lower weight to mean newer within a category,
+    // and real items in its category start at 1, so a disposable dated 2099 must carry
+    // a weight below them (another category may already use 0, which never ties here).
+    const m = buildSinglePageMedia({ runId: 3 });
+    expect(m.fields.weight).toBeLessThan(1);
+    expect(m.filePath).toMatch(/^_media\/0-/);
   });
 
   test("slugifyTitle lowercases and dashes", () => {

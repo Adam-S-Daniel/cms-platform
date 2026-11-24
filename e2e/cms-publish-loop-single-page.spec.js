@@ -202,6 +202,37 @@ async function labelPrRemoving(filePath) {
   return null;
 }
 
+// Close (and drop the branch of) every open `cms/` PR into main that REMOVES filePath.
+async function closeOpenPrsRemovingFile(filePath) {
+  const closed = [];
+  const prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`);
+  for (const pr of (prs || []).filter(
+    (p) => p.head && typeof p.head.ref === "string" && p.head.ref.startsWith("cms/"),
+  )) {
+    const files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
+    if (!files.some((f) => f.filename === filePath && f.status === "removed")) continue;
+    await gh(`/repos/${HOST_REPO}/pulls/${pr.number}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: "closed" }),
+    });
+    await deleteBranch(pr.head.ref);
+    closed.push(`#${pr.number}`);
+  }
+  return closed;
+}
+
+// DELETE a branch ref. GitHub answers 204 with no body, which `gh` reports as a status-only
+// SyntaxError; an already-gone branch (404 or 422) is also fine.
+async function deleteBranch(branch) {
+  try {
+    await gh(`/repos/${HOST_REPO}/git/refs/heads/${branch}`, { method: "DELETE" });
+  } catch (e) {
+    const ok = (e instanceof SyntaxError && e.status === 204) || e.status === 404 || e.status === 422;
+    if (!ok) throw e;
+  }
+}
+
 test(
   "single-page publish loop A — media folder entry: create, publish, delete",
   { tag: ["@admin-write"] },
@@ -486,13 +517,20 @@ test.afterAll(async () => {
   const problems = [];
 
   if (pendingMedia) {
-    const { filePath, slug, runId } = pendingMedia;
+    const { filePath, slug, runId, branch } = pendingMedia;
     try {
       // Stop this run's in-flight create PR first (#689): it is armed, and a
       // main-only check would read "gone" and then watch it merge.
       const { closed } = await closeOpenPrsAddingFile({ base: "main", filePath });
       if (closed.length > 0) {
         console.warn(`[cleanup-harness] closed in-flight PR(s) ${closed.join(", ")} adding ${filePath}`);
+      }
+      // A delete PR the shim opened (branch `cms/posts/delete-...`, whatever the collection)
+      // only REMOVES the file, so the call above leaves it; close it before the removal PR
+      // below so the two do not race and strand one.
+      const closedRemovals = await closeOpenPrsRemovingFile(filePath);
+      if (closedRemovals.length > 0) {
+        console.warn(`[cleanup-harness] closed in-flight delete PR(s) ${closedRemovals.join(", ")}`);
       }
       if ((await mainText(filePath)) === null) {
         console.log(`[cleanup-harness] ${filePath} is not on main; nothing to remove`);
@@ -534,6 +572,12 @@ test.afterAll(async () => {
             body: JSON.stringify({ state: "closed" }),
           });
           console.warn(`[cleanup-harness] closed in-flight PR #${pr.number} editing ${filePath}`);
+          // A closed PR leaves its branch, which can make the owner's next Contact save fail.
+          try {
+            await deleteBranch(DATA_BRANCH);
+          } catch (e) {
+            problems.push(`branch ${DATA_BRANCH}: ${describeError(e)}`);
+          }
         }
       }
       const current = await mainText(filePath);

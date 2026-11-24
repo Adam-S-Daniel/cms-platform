@@ -149,7 +149,7 @@ test.describe("single-page loop gating (#1068)", () => {
   test("the host loop's branch cleanup covers the single-page spec's media branches", () => {
     const job = loopJob("cms-publish-loop-host.yml", "host-loop");
     const cleanup = job.steps.find((s) => /clean ?up.*ephemeral/i.test(s.name || ""));
-    expect(cleanup.run).toContain("'cms/media/99-e2e-publish-loop-'");
+    expect(cleanup.run).toContain("'cms/media/0-e2e-publish-loop-'");
   });
 
   test.describe("cms-publish-loop-single-page.spec.js", () => {

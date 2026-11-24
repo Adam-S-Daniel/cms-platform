@@ -350,7 +350,7 @@ jobs:
           PREFIXES=(
             'cms/e2e/canary-'
             'cms/e2e-fixture/'
-            'cms/media/99-e2e-publish-loop-'
+            'cms/media/0-e2e-publish-loop-'
           )
           for prefix in "${PREFIXES[@]}"; do
             echo "::notice::Cleanup — deleting orphaned ${prefix}* branches with no open PR"
