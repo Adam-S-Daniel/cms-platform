@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 from .dedupe import urls_from_pr_bodies
+from .placement import place_media
 from .render import Entry
 
 API = "https://api.github.com"
@@ -114,21 +115,25 @@ class GitHub:
         (an earlier run or an editor got there first)."""
         r = self._repo(repo)
         base, sha = self.default_branch_sha(repo)
-        status, _ = self._call("POST", f"/repos/{r}/git/refs", "POST /repos/{repo}/git/refs",
-                               {"ref": f"refs/heads/{entry.branch}", "sha": sha},
-                               ok=(201, 422))
-        if status == 422:
-            return None
-        status, _ = self._call(
-            "PUT", f"/repos/{r}/contents/{quote(entry.path, safe='/')}",
-            "PUT /repos/{repo}/contents/{path}",
-            {"message": title, "branch": entry.branch,
-             "content": base64.b64encode(entry.content.encode("utf-8")).decode("ascii")},
-            ok=(200, 201, 422))
-        if status == 422:  # the file is already on the default branch
-            self._call("DELETE", f"/repos/{r}/git/refs/heads/{quote(entry.branch, safe='/')}",
-                       "DELETE /repos/{repo}/git/refs/heads/{branch}", ok=(204, 422))
-            return None
+        if entry.collection == "media":
+            if not self._create_media_branch(r, entry, title, sha):
+                return None
+        else:
+            status, _ = self._call("POST", f"/repos/{r}/git/refs", "POST /repos/{repo}/git/refs",
+                                   {"ref": f"refs/heads/{entry.branch}", "sha": sha},
+                                   ok=(201, 422))
+            if status == 422:
+                return None
+            status, _ = self._call(
+                "PUT", f"/repos/{r}/contents/{quote(entry.path, safe='/')}",
+                "PUT /repos/{repo}/contents/{path}",
+                {"message": title, "branch": entry.branch,
+                 "content": base64.b64encode(entry.content.encode("utf-8")).decode("ascii")},
+                ok=(200, 201, 422))
+            if status == 422:  # the file is already on the default branch
+                self._call("DELETE", f"/repos/{r}/git/refs/heads/{quote(entry.branch, safe='/')}",
+                           "DELETE /repos/{repo}/git/refs/heads/{branch}", ok=(204, 422))
+                return None
         _, pr = self._call("POST", f"/repos/{r}/pulls", "POST /repos/{repo}/pulls",
                            {"title": title, "body": body, "head": entry.branch, "base": base})
         number = pr["number"]
@@ -145,6 +150,44 @@ class GitHub:
                 {"reviewers": reviewers}, ok=(200, 201, 422))
             requested = status != 422
         return OpenedPR(number, pr["html_url"], requested)
+
+    def _create_media_branch(self, r: str, entry: Entry, title: str, sha: str) -> bool:
+        """Create `entry.branch` with one commit holding the new media item
+        placed newest first in its category, and every item it pushes down one
+        weight. False when the file or the branch already exists."""
+        folder = entry.path.rpartition("/")[0]
+        status, listing = self._call(
+            "GET", f"/repos/{r}/contents/{quote(folder, safe='/')}?ref={quote(sha, safe='')}",
+            "GET /repos/{repo}/contents/{path}", ok=(200, 404))
+        listing = listing if status == 200 and isinstance(listing, list) else []
+        files = [f for f in listing
+                 if isinstance(f, dict) and f.get("type") == "file" and f.get("sha")
+                 and str(f.get("name", "")).endswith(".md")]
+        if any(f.get("path") == entry.path for f in listing if isinstance(f, dict)):
+            return False
+        siblings = []
+        for f in files:
+            _, blob = self._call("GET", f"/repos/{r}/git/blobs/{quote(f['sha'], safe='')}",
+                                 "GET /repos/{repo}/git/blobs/{sha}")
+            try:
+                text = base64.b64decode((blob or {}).get("content") or "").decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                continue  # unreadable: left alone, so it is never moved
+            siblings.append((f["path"], text))
+        content, moves = place_media(entry.content, siblings)
+        _, commit = self._call("GET", f"/repos/{r}/git/commits/{quote(sha, safe='')}",
+                               "GET /repos/{repo}/git/commits/{sha}")
+        _, tree = self._call(
+            "POST", f"/repos/{r}/git/trees", "POST /repos/{repo}/git/trees",
+            {"base_tree": commit["tree"]["sha"],
+             "tree": [{"path": p, "mode": "100644", "type": "blob", "content": c}
+                      for p, c in [(entry.path, content), *moves]]})
+        _, new = self._call("POST", f"/repos/{r}/git/commits", "POST /repos/{repo}/git/commits",
+                            {"message": title, "tree": tree["sha"], "parents": [sha]})
+        status, _ = self._call("POST", f"/repos/{r}/git/refs", "POST /repos/{repo}/git/refs",
+                               {"ref": f"refs/heads/{entry.branch}", "sha": new["sha"]},
+                               ok=(201, 422))
+        return status == 201
 
     def read_json(self, repo: str, branch: str, path: str):
         """(parsed JSON, blob sha) of `path` on `branch`, or (None, None) when it
