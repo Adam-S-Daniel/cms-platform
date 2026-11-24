@@ -194,6 +194,9 @@ const HEAVY = new Set([
   "e2e/cms-publish-loop.spec.js",
   "e2e/cms-publish-loop-preview.spec.js",
   "e2e/cms-publish-loop-prod-mutate.spec.js",
+  // Single-page loop (#1068) — gated to RUN_HOST_REPO_PUBLISH_LOOP and to a
+  // site with cms.base_collections: [], so a PR-matrix pick is a no-op skip.
+  "e2e/cms-publish-loop-single-page.spec.js",
   // Scheduled-publish PR-flow loop — gated to RUN_SCHEDULED_PUBLISH_LOOP
   // (only cms-scheduled-publish-loop.yml sets it), so a PR-matrix pick
   // is a no-op skip; don't let it inflate the shard budget.
@@ -564,6 +567,18 @@ const SPEC_RULES = {
     /^\.github\/workflows\/cms-editorial-workflow\.yml$/,
     /^\.github\/workflows\/deploy-production\.yml$/,
     /^\.github\/workflows\/cms-publish-loop-prod\.yml$/,
+    /^e2e\/(decap-pat|github-actions-poll|cms-fixture-pr|cms-host)\.js$/,
+  ],
+  // Single-page publish loop (#1068). Self-skips on PR runs and on any site that
+  // keeps `posts`; selected on its own helpers, the editor helpers it drives and
+  // the host loop workflow that runs it, so a change to them refreshes PR-time
+  // coverage of the gating/skip path.
+  "e2e/cms-publish-loop-single-page.spec.js": [
+    /^(theme\/)?admin\//,
+    /^e2e\/(single-page-loop-fixture|cms-editor-ui|site-capabilities)\.js$/,
+    /^\.github\/workflows\/cms-editorial-workflow\.yml$/,
+    /^\.github\/workflows\/deploy-production\.yml$/,
+    /^\.github\/workflows\/cms-publish-loop-host\.yml$/,
     /^e2e\/(decap-pat|github-actions-poll|cms-fixture-pr|cms-host)\.js$/,
   ],
   // Scheduled-publish PR-flow loop. Self-skips on PR runs (gated on

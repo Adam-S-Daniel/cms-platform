@@ -76,6 +76,8 @@ function uploadRunsFor(condition, { canceled, failed }) {
       // e2e-tests.yml's content route: a `full` run is the one that has a
       // report to upload.
       route: { outputs: { route: "full" } },
+      // The loop reusables' single-page detector (#1068): a full site runs.
+      site_kind: { outputs: { single_page: "false" } },
     },
   };
   return Boolean(vm.runInNewContext(expression, context, { timeout: 1000 }));

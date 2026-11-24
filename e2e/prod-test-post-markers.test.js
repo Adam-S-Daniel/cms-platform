@@ -52,6 +52,8 @@ const GOTO_ALLOW = {
   "cms-publish-loop-preview.spec.js": { PREVIEW_ADMIN: ADMIN_ROOT },
   "cms-publish-loop-prod-mutate-preview.spec.js": { PREVIEW_ADMIN: ADMIN_ROOT },
   "cms-publish-loop-prod-mutate.spec.js": { PROD_ADMIN: ADMIN_ROOT },
+  // #1068 — the single-page loop creates a `media` item, never a post.
+  "cms-publish-loop-single-page.spec.js": { PROD_ADMIN: ADMIN_ROOT },
   "cms-publish-loop.spec.js": {
     PROD_ADMIN: ADMIN_ROOT,
     PUBLIC_URL: "loads the public page of the persistent canary post",

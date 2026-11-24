@@ -29,6 +29,13 @@
 #     scripts/diagnose-stuck-pr.js (+ auto-resolve-newline-conflict.js),
 #     CMS-PR-sweep tooling that is not part of the e2e harness scope.
 #
+# SINGLE-PAGE SITES (cms.base_collections: []): the four specs above self-skip
+# there (no posts, no e2e canaries). e2e/cms-publish-loop-single-page.spec.js
+# is the loop that runs instead: it publishes through the site's own `media`
+# folder collection and one `_data/*.yml` section, and self-skips on a site
+# that keeps `posts` (#1068). The prod / scheduled / media-roundtrip loops skip
+# their heavy steps on a single-page site and point here.
+#
 # Spec gating: e2e/cms-publish-loop.spec.js self-skips when
 # `RUN_HOST_REPO_PUBLISH_LOOP=1` is unset, so the spec only runs inside
 # this workflow.
@@ -155,7 +162,10 @@ jobs:
       CMS_PROD_URL: ${{ vars.CMS_PROD_URL }}
       CMS_APEX: ${{ vars.CMS_APEX }}
       CMS_REPO: ${{ github.repository }}
-    timeout-minutes: 150
+    # 180 min: on a single-page site (jodidaniel.com) the loop is
+    # cms-publish-loop-single-page.spec.js alone, two legs of up to 80 + 70 min
+    # (#1068); every other site's specs finish well inside it.
+    timeout-minutes: 180
     # Recursion guard delegated to the `recursion-gate` job above.
     if: ${{ needs.recursion-gate.outputs.run == 'true' }}
     steps:
@@ -227,8 +237,10 @@ jobs:
           # default (resolve __dirname/..) would point at the PLATFORM, not the
           # consumer; set it so keepsBaseCollection() reads the consumer's _config.yml
           # and a single-page bio (base_collections:[]) so the collection specs skip instead of timing out on a Posts
-          # sidebar link that never renders. --require-ran below then FAILS that run
-          # (#1068), unless CMS_E2E_PAT is empty on a fork or Dependabot run.
+          # sidebar link that never renders. cms-publish-loop-single-page.spec.js
+          # runs there instead, so --require-ran below passes on a single-page
+          # site (#1068); it FAILS a run where nothing executed, unless CMS_E2E_PAT
+          # is empty on a fork or Dependabot run.
           SITE_ROOT: ${{ github.workspace }}
           # Fine-grained PAT scoped to the host repo (contents r/w +
           # pull_requests r/w + metadata r).
@@ -256,6 +268,7 @@ jobs:
             cms-delete-published.spec.js \
             cms-unpublish-republish.spec.js \
             cms-tags-lifecycle.spec.js \
+            cms-publish-loop-single-page.spec.js \
             --project=chromium-desktop-3k \
             --reporter=list,html,json \
             --max-failures=1 \
@@ -337,6 +350,7 @@ jobs:
           PREFIXES=(
             'cms/e2e/canary-'
             'cms/e2e-fixture/'
+            'cms/media/99-e2e-publish-loop-'
           )
           for prefix in "${PREFIXES[@]}"; do
             echo "::notice::Cleanup — deleting orphaned ${prefix}* branches with no open PR"

@@ -406,6 +406,9 @@ const PLATFORM_META_SPECS = [
   "cms-host.test.js",
   "cms-label-contract.spec.js",
   "cms-recursion-churn.test.js",
+  // #1068 — parses the platform's OWN loop workflow definitions (the single-page
+  // detector gate) and the single-page spec's source; platform-internal.
+  "single-page-loop-gating.test.js",
   "cms-scheduled-post.spec.js",
   "cloudfront-preview-location-fixer.spec.js",
   "cloudfront-preview-router.spec.js",
