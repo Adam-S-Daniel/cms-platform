@@ -57,7 +57,12 @@ def test_default_branch_sha():
 
 
 def entry():
-    return render_entry(make_candidate(kind="podcast"), "podcast", CFG)
+    # An event: the plain branch-and-file path. Media takes the placement path.
+    return render_entry(make_candidate(kind="upcoming_talk"), "upcoming_talk", CFG)
+
+
+def media_entry(date="2026-03-12"):
+    return render_entry(make_candidate(kind="podcast", date=date), "podcast", CFG)
 
 
 def full_routes(over=None):
@@ -85,8 +90,8 @@ def test_open_entry_pr_creates_branch_file_pr_labels_reviewers():
     assert out == OpenedPR(7, "https://github.example.com/o/r/pull/7", True)
     calls = {(m, p): payload for m, p, _, payload in t.calls}
     assert calls[("POST", "/repos/o/r/git/refs")] == {
-        "ref": "refs/heads/cms/media/1-open-data-in-practice", "sha": "b" * 40}
-    put = calls[("PUT", "/repos/o/r/contents/_media/1-open-data-in-practice.md")]
+        "ref": "refs/heads/cms/events/2026-03-12-open-data-in-practice", "sha": "b" * 40}
+    put = calls[("PUT", "/repos/o/r/contents/_events/2026-03-12-open-data-in-practice.md")]
     assert put["branch"] == e.branch
     assert base64.b64decode(put["content"]).decode() == e.content
     assert calls[("POST", "/repos/o/r/pulls")] == {
@@ -149,3 +154,76 @@ def test_transport_exception_becomes_status_0_without_its_message():
 def test_bad_repo_is_rejected():
     with pytest.raises(ValueError):
         GitHub("t", transport=Transport({})).default_branch_sha("no-slash")
+
+
+def item(weight, date, category="Podcasts & Interviews"):
+    return f"---\ncategory: \"{category}\"\ndate_display: \"{date}\"\nweight: {weight}\n---\n"
+
+
+def media_routes(files, e):
+    """files: {name: content}. Routes for the placement path."""
+    listing = [{"type": "file", "name": n, "path": f"_media/{n}", "sha": f"sha-{n}"}
+               for n in files]
+    routes = {
+        ("GET", "/repos/o/r"): (200, {"default_branch": "main"}),
+        ("GET", "/repos/o/r/git/ref/heads/main"): (200, {"object": {"sha": "b" * 40}}),
+        ("GET", f"/repos/o/r/contents/_media?ref={'b' * 40}"): (200, listing),
+        ("GET", f"/repos/o/r/git/commits/{'b' * 40}"): (200, {"tree": {"sha": "t" * 40}}),
+        ("POST", "/repos/o/r/git/trees"): (201, {"sha": "n" * 40}),
+        ("POST", "/repos/o/r/git/commits"): (201, {"sha": "c" * 40}),
+        ("POST", "/repos/o/r/git/refs"): (201, {}),
+        ("POST", "/repos/o/r/pulls"): (201, {"number": 7,
+                                              "html_url": "https://github.example.com/o/r/pull/7"}),
+    }
+    for n, text in files.items():
+        routes[("GET", f"/repos/o/r/git/blobs/sha-{n}")] = (
+            200, {"content": base64.b64encode(text.encode()).decode()})
+    return routes
+
+
+def test_media_entry_is_placed_before_the_first_older_item_in_one_commit():
+    e = media_entry("2026-03-12")  # "March 2026"
+    files = {"1-new.md": item(1, "October 2026"), "2-old.md": item(2, "May 2025"),
+             "3-older.md": item(3, "2020"), "1-other.md": item(1, "May 2010", "Press Coverage")}
+    t = Transport(media_routes(files, e))
+    out = GitHub("t", transport=t).open_entry_pr("o/r", e, "T", "B", [], [])
+    assert out is not None and out.number == 7
+    calls = {(m, p): payload for m, p, _, payload in t.calls}
+    tree = calls[("POST", "/repos/o/r/git/trees")]
+    assert tree["base_tree"] == "t" * 40
+    got = {x["path"]: x["content"] for x in tree["tree"]}
+    assert set(got) == {e.path, "_media/2-old.md", "_media/3-older.md"}
+    assert "weight: 2\n" in got[e.path] and "weight: 1" not in got[e.path]
+    assert got["_media/2-old.md"] == item(3, "May 2025")
+    assert got["_media/3-older.md"] == item(4, "2020")
+    assert calls[("POST", "/repos/o/r/git/commits")] == {
+        "message": "T", "tree": "n" * 40, "parents": ["b" * 40]}
+    assert calls[("POST", "/repos/o/r/git/refs")] == {
+        "ref": f"refs/heads/{e.branch}", "sha": "c" * 40}
+    assert not any(m == "PUT" for m, *_ in t.calls)
+
+
+def test_media_entry_older_than_everything_goes_last_and_moves_nothing():
+    e = media_entry("2010-01-05")
+    files = {"1-a.md": item(1, "May 2026"), "2-b.md": item(2, "2020")}
+    t = Transport(media_routes(files, e))
+    GitHub("t", transport=t).open_entry_pr("o/r", e, "T", "B", [], [])
+    tree = next(p for m, path, _, p in t.calls if path == "/repos/o/r/git/trees")
+    assert [x["path"] for x in tree["tree"]] == [e.path]
+    assert "weight: 3\n" in tree["tree"][0]["content"]
+
+
+def test_media_file_already_on_the_default_branch_returns_none_without_a_commit():
+    e = media_entry()
+    t = Transport(media_routes({"1-open-data-in-practice.md": item(1, "March 2026")}, e))
+    assert GitHub("t", transport=t).open_entry_pr("o/r", e, "T", "B", [], []) is None
+    assert not any(p.endswith("/git/commits") and m == "POST" for m, p, *_ in t.calls)
+
+
+def test_media_existing_branch_returns_none():
+    e = media_entry()
+    routes = media_routes({"1-a.md": item(1, "May 2026")}, e)
+    routes[("POST", "/repos/o/r/git/refs")] = (422, {"message": "exists"})
+    t = Transport(routes)
+    assert GitHub("t", transport=t).open_entry_pr("o/r", e, "T", "B", [], []) is None
+    assert not any(p == "/repos/o/r/pulls" for _, p, *_ in t.calls)
