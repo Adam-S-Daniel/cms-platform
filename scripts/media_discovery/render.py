@@ -281,13 +281,15 @@ def _why(cand: Candidate, problems, person: str) -> list[str]:
 
 
 def render_digest(site_label: str, person_name: str, new_drafts, unconfirmed, would_add=(),
-                  *, review_link: str = "", preview: bool = False) -> tuple[str, str] | None:
+                  *, review_link: str = "", preview: bool = False,
+                  page_link: str = "") -> tuple[str, str] | None:
     """The run's email, in plain words for a non-technical reader.
 
     `new_drafts` is the candidate of each draft opened in the website editor (a
     normal run); `would_add` the candidate of each confirmed find in a preview
     (email-only) run, where nothing is written; `unconfirmed` is (candidate,
-    problems). Returns None, so no email is sent, when there is nothing to say."""
+    problems). `page_link`, when set, is the New mentions admin page, linked at the
+    top. Returns None, so no email is sent, when there is nothing to say."""
     ready = list(would_add if preview else new_drafts)
     if not ready and not unconfirmed:
         return None
@@ -301,6 +303,9 @@ def render_digest(site_label: str, person_name: str, new_drafts, unconfirmed, wo
     subject = f"{site} new mentions: {', '.join(parts)}" + (" (preview)" if preview else "")
 
     lines = [f"This is the regular search for new mentions of {person} to add to {site}.", ""]
+    if page_link:
+        lines += ["To add or skip each one, open the New mentions page in the website editor:",
+                  "", _plain_url(page_link), ""]
     if preview:
         lines += ["This was a preview run, so nothing on the website was changed.", ""]
     if ready:
