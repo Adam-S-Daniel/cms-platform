@@ -10,9 +10,12 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.189)
+## Version history (v0.1.0 → v0.1.190)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.190 — A media find added to the site, by hand or by live mode, goes in newest first within its category.**
+[#1121](https://github.com/Adam-S-Daniel/cms-platform/pull/1121) and [#1123](https://github.com/Adam-S-Daniel/cms-platform/pull/1123). Within each media category a site lists items by `weight`, lowest first, and its check fails if a lower weight goes to an older item. Before, a new item was given weight 1 (above everything, so a May 2026 talk landed above three October 2026 talks). Now a new item goes before the first strictly older item in its category, and that item and every later one move down one weight, all in the draft's one commit. #1121 does this for "Add to site" on /admin (`placeMedia` in `theme/admin/media-search.js`) and also keeps an unpublished draft a draft (`entry-status-model.js`, `publish-button.js`). #1123 does it for live mode of the weekly search (`scripts/media_discovery/placement.py`, used by `open_entry_pr`). **Consumer effect:** none until a site turns live mode on; no caller or pin other than the version changes.
 
 **v0.1.189 — A second open editor tab uses a renewed sign-in, a publish loop that runs no tests fails, and the publish watchdog counts commit statuses.**
 The first-parent range since v0.1.188 holds 22 merges; the ones a site sees:
