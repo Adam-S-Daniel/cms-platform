@@ -102,6 +102,11 @@ no backfill is planned; the file adds the fields git does not capture.
 
 ---
 
+## 2026-11-24 — cms-platform/cms-stuck-pr-triage — edit
+
+- Change: the two mentions of `cms-automerge-nudge.yml`'s `*/5` cron now say the cron lives in each site's thin caller, since the platform file is `workflow_call` only (Adam-S-Daniel/cms-platform#989)
+- Eval: wording-only: fixes a contradiction with the workflow files; no rule, command or trigger changed
+
 ## 2026-11-23 — cms-platform/code-quality — edit
 
 - Change: the `python-unit-tests` row now lists the same four pytest paths `self-ci.yml` runs, and two table rows regain their `> ` callout prefix (https://github.com/Adam-S-Daniel/cms-platform/issues/989)
