@@ -75,7 +75,6 @@ const {
   gh,
   getFileTextAtRef,
   getPullRequest,
-  waitForCmsPullRequest,
   waitForMerge,
   waitForWorkflowRun,
   makeDeployQueueExtender,
@@ -105,7 +104,11 @@ const {
   sameData,
 } = require("./single-page-loop-fixture");
 
-const { host: PROD_HOST, adminUrl: PROD_ADMIN, pillId: PILL_PROD } = prodTarget();
+const {
+  host: PROD_HOST,
+  adminUrl: PROD_ADMIN,
+  pillId: PILL_PROD,
+} = prodTarget();
 
 const MEDIA_NAV = /^Writing, talks & press$/i;
 const DATA_BRANCH = `cms/${DATA_TARGET.collection}/${DATA_TARGET.entry}`;
@@ -155,7 +158,10 @@ function preconditions() {
     "site keeps the base collections (cms.base_collections is not []) — the posts, e2e and media loops cover it; this loop is for a single-page site (#1068).",
   );
   if (!getPat()) {
-    loudBail(test, "CMS_E2E_PAT not set — the single-page publish loop cannot run.");
+    loudBail(
+      test,
+      "CMS_E2E_PAT not set — the single-page publish loop cannot run.",
+    );
     return false;
   }
   return true;
@@ -165,7 +171,9 @@ function preconditions() {
 async function openAdmin(page, navLinkName) {
   await seedDecapAuth(page);
   await page.goto(PROD_ADMIN, { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("link", { name: navLinkName })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("link", { name: navLinkName })).toBeVisible({
+    timeout: 60_000,
+  });
 }
 
 // Belt-and-braces `cms/ready` on a delete PR the shim opened for the file.
@@ -174,24 +182,35 @@ async function labelPrRemoving(filePath) {
   while (Date.now() < deadline) {
     let prs = [];
     try {
-      prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=50`);
+      prs = await gh(
+        `/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=50`,
+      );
     } catch (_) {
       /* transient — retry */
     }
     for (const pr of (prs || []).filter(
-      (p) => p.head && typeof p.head.ref === "string" && p.head.ref.startsWith("cms/"),
+      (p) =>
+        p.head &&
+        typeof p.head.ref === "string" &&
+        p.head.ref.startsWith("cms/"),
     )) {
       let files;
       try {
-        files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
+        files = await gh(
+          `/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`,
+        );
       } catch (_) {
         continue;
       }
-      if (files.some((f) => f.filename === filePath && f.status === "removed")) {
+      if (
+        files.some((f) => f.filename === filePath && f.status === "removed")
+      ) {
         try {
           await addLabel({ prNumber: pr.number, label: "cms/ready" });
         } catch (e) {
-          console.warn(`[single-page-loop] could not label PR #${pr.number}: ${describeError(e)}`);
+          console.warn(
+            `[single-page-loop] could not label PR #${pr.number}: ${describeError(e)}`,
+          );
         }
         return pr.number;
       }
@@ -202,15 +221,68 @@ async function labelPrRemoving(filePath) {
   return null;
 }
 
+// Find the `cms/` PR that carries this run's marker for `filePath`, open OR already merged.
+// On a content-route site a publish can merge within a minute, before the spec first looks
+// (jodidaniel.com run 45532549161: the create PR merged 63 seconds after it opened), so an
+// open-only search times out on a publish that worked. A closed, unmerged PR never counts.
+async function findCmsPr({ filePath, marker, timeoutMs, excludeNumbers = [] }) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const prs = await gh(
+      `/repos/${HOST_REPO}/pulls?state=all&base=main&per_page=30`,
+    );
+    for (const pr of (prs || []).filter(
+      (p) =>
+        p.head &&
+        typeof p.head.ref === "string" &&
+        p.head.ref.startsWith("cms/"),
+    )) {
+      if (excludeNumbers.includes(pr.number)) continue;
+      if (pr.state === "closed" && !pr.merged_at) continue;
+      const files = await gh(
+        `/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`,
+      );
+      if (
+        files.some(
+          (f) =>
+            f.filename === filePath &&
+            typeof f.patch === "string" &&
+            f.patch.includes(marker),
+        )
+      ) {
+        return pr;
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `No cms/ PR (open or merged) changed ${filePath} with marker ${marker} in time.`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+}
+
+// Belt-and-braces `cms/ready`, only while the PR is still open.
+async function labelIfOpen(pr) {
+  if (pr.state === "open" && !pr.merged_at)
+    await addLabel({ prNumber: pr.number, label: "cms/ready" });
+}
+
 // Close (and drop the branch of) every open `cms/` PR into main that REMOVES filePath.
 async function closeOpenPrsRemovingFile(filePath) {
   const closed = [];
-  const prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`);
+  const prs = await gh(
+    `/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`,
+  );
   for (const pr of (prs || []).filter(
-    (p) => p.head && typeof p.head.ref === "string" && p.head.ref.startsWith("cms/"),
+    (p) =>
+      p.head && typeof p.head.ref === "string" && p.head.ref.startsWith("cms/"),
   )) {
-    const files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
-    if (!files.some((f) => f.filename === filePath && f.status === "removed")) continue;
+    const files = await gh(
+      `/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`,
+    );
+    if (!files.some((f) => f.filename === filePath && f.status === "removed"))
+      continue;
     await gh(`/repos/${HOST_REPO}/pulls/${pr.number}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -226,9 +298,14 @@ async function closeOpenPrsRemovingFile(filePath) {
 // SyntaxError; an already-gone branch (404 or 422) is also fine.
 async function deleteBranch(branch) {
   try {
-    await gh(`/repos/${HOST_REPO}/git/refs/heads/${branch}`, { method: "DELETE" });
+    await gh(`/repos/${HOST_REPO}/git/refs/heads/${branch}`, {
+      method: "DELETE",
+    });
   } catch (e) {
-    const ok = (e instanceof SyntaxError && e.status === 204) || e.status === 404 || e.status === 422;
+    const ok =
+      (e instanceof SyntaxError && e.status === 204) ||
+      e.status === 404 ||
+      e.status === 422;
     if (!ok) throw e;
   }
 }
@@ -247,11 +324,16 @@ test(
     const media = buildSinglePageMedia({ runId });
     const publicUrl = `${PROD_HOST}${media.publicPath}`;
     pendingMedia = media;
-    test.info().annotations.push({ type: "fixture-path", description: media.filePath });
+    test
+      .info()
+      .annotations.push({ type: "fixture-path", description: media.filePath });
 
     await test.step("The item's public URL 404s before the run (unique per-run name)", async () => {
       const res = await fetch(publicUrl, { cache: "no-store" });
-      expect(res.status, `${publicUrl} must not exist yet — got ${res.status}`).toBe(404);
+      expect(
+        res.status,
+        `${publicUrl} must not exist yet — got ${res.status}`,
+      ).toBe(404);
     });
 
     await test.step("Load the production admin", async () => {
@@ -259,19 +341,27 @@ test(
     });
 
     await test.step("Open the new media entry form", async () => {
-      await page.goto(`${PROD_ADMIN}#/collections/media/new`, { waitUntil: "domcontentloaded" });
-      await expect(page.getByRole("textbox", { name: /^Title$/i })).toBeVisible({
-        timeout: 30_000,
+      await page.goto(`${PROD_ADMIN}#/collections/media/new`, {
+        waitUntil: "domcontentloaded",
       });
+      await expect(page.getByRole("textbox", { name: /^Title$/i })).toBeVisible(
+        {
+          timeout: 30_000,
+        },
+      );
     });
 
     await test.step("Fill category, title, source, date, article URL and order", async () => {
       await chooseSelectOption(page, /^Category$/, media.fields.category);
       await page.getByRole("textbox", { name: /^Title$/i }).fill(media.title);
       await page.getByLabel(/^Source$/).fill(media.fields.source);
-      await page.getByLabel(/^When \(month and year\)/).fill(media.fields.date_display);
+      await page
+        .getByLabel(/^When \(month and year\)/)
+        .fill(media.fields.date_display);
       await page.getByLabel(/^Article URL$/).fill(media.fields.article_url);
-      await page.getByLabel(/^Order within category/).fill(String(media.fields.weight));
+      await page
+        .getByLabel(/^Order within category/)
+        .fill(String(media.fields.weight));
     });
 
     await test.step("Mark it disposable (test_fixture) before the first Save", async () => {
@@ -292,16 +382,18 @@ test(
 
     let createPrNumber = null;
     await test.step("Find the create PR, label cms/ready, check the committed file", async () => {
-      const pr = await waitForCmsPullRequest({
-        base: "main",
+      const pr = await findCmsPr({
         filePath: media.filePath,
-        canaryMarker: media.slug,
+        marker: media.slug,
         timeoutMs: 5 * 60 * 1000,
       });
       expect(pr.number, "Decap create PR number").toBeGreaterThan(0);
       createPrNumber = pr.number;
-      await addLabel({ prNumber: pr.number, label: "cms/ready" });
-      const committed = await getFileTextAtRef({ filePath: media.filePath, ref: pr.head.sha });
+      await labelIfOpen(pr);
+      const committed = await getFileTextAtRef({
+        filePath: media.filePath,
+        ref: pr.head.sha,
+      });
       expect(
         missingMediaFields(committed, media),
         `${media.filePath} at the create PR head must carry the typed fields and test_fixture`,
@@ -313,7 +405,9 @@ test(
         page,
         pillId: PILL_PROD,
         urlCheck: async () => {
-          const res = await page.request.get(publicUrl, { failOnStatusCode: false });
+          const res = await page.request.get(publicUrl, {
+            failOnStatusCode: false,
+          });
           return res.status() === 200;
         },
         urlTimeoutMs: 15 * 60 * 1000,
@@ -341,7 +435,10 @@ test(
 
     await test.step("Wait for the create PR to merge for real", async () => {
       expect(createPrNumber, "create PR number").toBeTruthy();
-      await waitForMerge({ prNumber: createPrNumber, timeoutMs: 30 * 60 * 1000 });
+      await waitForMerge({
+        prNumber: createPrNumber,
+        timeoutMs: 30 * 60 * 1000,
+      });
     });
 
     await test.step("Re-open the entry as a published entry", async () => {
@@ -365,7 +462,9 @@ test(
         page,
         pillId: PILL_PROD,
         urlCheck: async () => {
-          const res = await page.request.get(publicUrl, { failOnStatusCode: false });
+          const res = await page.request.get(publicUrl, {
+            failOnStatusCode: false,
+          });
           return res.status() >= 400 && res.status() < 500;
         },
         urlTimeoutMs: 15 * 60 * 1000,
@@ -374,7 +473,10 @@ test(
     });
 
     await test.step("Nothing is left behind: the file is off main and the page 4xxs", async () => {
-      expect(await mainText(media.filePath), `${media.filePath} must be gone from main`).toBeNull();
+      expect(
+        await mainText(media.filePath),
+        `${media.filePath} must be gone from main`,
+      ).toBeNull();
       const res = await fetch(publicUrl, { cache: "no-store" });
       expect(res.status).toBeGreaterThanOrEqual(400);
       expect(res.status).toBeLessThan(500);
@@ -396,18 +498,25 @@ test(
     const originalText = await mainText(filePath);
     expect(originalText, `${filePath} must exist on main`).not.toBeNull();
     const original = readDataField(originalText, field);
-    expect(typeof original === "string" && original.length > 0, `${filePath} needs a ${field}`).toBe(
-      true,
-    );
+    expect(
+      typeof original === "string" && original.length > 0,
+      `${filePath} needs a ${field}`,
+    ).toBe(true);
     const edited = buildEditedValue({ original, runId });
     pendingData = { runId, originalText, original, edited };
-    test.info().annotations.push({ type: "fixture-path", description: filePath });
+    test
+      .info()
+      .annotations.push({ type: "fixture-path", description: filePath });
 
     await test.step("No editor already has this entry open as a draft", async () => {
       // The entry is the site owner's real content: refuse to run over, or
       // close, a draft that is hers.
-      const prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`);
-      const open = (prs || []).filter((p) => p.head && p.head.ref === DATA_BRANCH);
+      const prs = await gh(
+        `/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`,
+      );
+      const open = (prs || []).filter(
+        (p) => p.head && p.head.ref === DATA_BRANCH,
+      );
       expect(
         open.map((p) => p.number),
         `${DATA_BRANCH} already has an open PR; the loop will not touch an editor's draft`,
@@ -417,7 +526,9 @@ test(
     await test.step("Load the production admin and open the entry", async () => {
       await openAdmin(page, new RegExp(`^${DATA_TARGET.navLabel}$`, "i"));
       await page.goto(DATA_ENTRY_URL, { waitUntil: "domcontentloaded" });
-      await expect(page.getByLabel(/^Heading$/)).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByLabel(/^Heading$/)).toBeVisible({
+        timeout: 30_000,
+      });
       await expect(
         page.getByLabel(/^Heading$/),
         "the editor must show the value that is on main",
@@ -432,20 +543,31 @@ test(
 
     let editPr = null;
     await test.step("Find the edit PR, label cms/ready, check the committed value", async () => {
-      editPr = await waitForCmsPullRequest({
-        base: "main",
+      editPr = await findCmsPr({
         filePath,
-        canaryMarker: `e2e ${runId}`,
+        marker: `e2e ${runId}`,
         timeoutMs: 5 * 60 * 1000,
       });
-      await addLabel({ prNumber: editPr.number, label: "cms/ready" });
-      const committed = await getFileTextAtRef({ filePath, ref: editPr.head.sha });
-      expect(readDataField(committed, field), "the PR head carries the edited value").toBe(edited);
+      await labelIfOpen(editPr);
+      const committed = await getFileTextAtRef({
+        filePath,
+        ref: editPr.head.sha,
+      });
+      expect(
+        readDataField(committed, field),
+        "the PR head carries the edited value",
+      ).toBe(edited);
     });
 
     await test.step("Wait for the edit to merge and deploy", async () => {
-      const merged = await waitForMerge({ prNumber: editPr.number, timeoutMs: 30 * 60 * 1000 });
-      expect(readDataField(await mainText(filePath), field), "main carries the edit").toBe(edited);
+      const merged = await waitForMerge({
+        prNumber: editPr.number,
+        timeoutMs: 30 * 60 * 1000,
+      });
+      expect(
+        readDataField(await mainText(filePath), field),
+        "main carries the edit",
+      ).toBe(edited);
       await waitForWorkflowRun({
         workflow: "deploy-production.yml",
         branch: "main",
@@ -459,7 +581,8 @@ test(
         titleName: /^Heading$/i,
         navLinkName: new RegExp(`^${DATA_TARGET.navLabel}$`, "i"),
         requireDeleteButton: false,
-        crossCheck: async () => readDataField(await mainText(filePath), field) === edited,
+        crossCheck: async () =>
+          readDataField(await mainText(filePath), field) === edited,
         adminUrl: PROD_ADMIN,
       });
     });
@@ -472,17 +595,20 @@ test(
     });
 
     await test.step("Find the restore PR and label cms/ready", async () => {
-      restorePr = await waitForCmsPullRequest({
-        base: "main",
+      restorePr = await findCmsPr({
         filePath,
-        canaryMarker: `e2e ${runId}`, // the diff removes the edited line
+        marker: `e2e ${runId}`, // the diff removes the edited line
         timeoutMs: 5 * 60 * 1000,
+        excludeNumbers: [editPr.number], // the edit PR's diff carries the marker too
       });
-      await addLabel({ prNumber: restorePr.number, label: "cms/ready" });
+      await labelIfOpen(restorePr);
     });
 
     await test.step("Wait for the restore to merge and deploy", async () => {
-      const merged = await waitForMerge({ prNumber: restorePr.number, timeoutMs: 30 * 60 * 1000 });
+      const merged = await waitForMerge({
+        prNumber: restorePr.number,
+        timeoutMs: 30 * 60 * 1000,
+      });
       await waitForWorkflowRun({
         workflow: "deploy-production.yml",
         branch: "main",
@@ -493,11 +619,14 @@ test(
 
     await test.step("Nothing is left behind: the data is as it was", async () => {
       const finalText = await mainText(filePath);
-      expect(readDataField(finalText, field), "the heading is back").toBe(original);
-      // Decap re-serializes the file, so compare the data, not the bytes.
-      expect(sameData(finalText, originalText), `${filePath} must hold the original data`).toBe(
-        true,
+      expect(readDataField(finalText, field), "the heading is back").toBe(
+        original,
       );
+      // Decap re-serializes the file, so compare the data, not the bytes.
+      expect(
+        sameData(finalText, originalText),
+        `${filePath} must hold the original data`,
+      ).toBe(true);
     });
   },
 );
@@ -521,21 +650,32 @@ test.afterAll(async () => {
     try {
       // Stop this run's in-flight create PR first (#689): it is armed, and a
       // main-only check would read "gone" and then watch it merge.
-      const { closed } = await closeOpenPrsAddingFile({ base: "main", filePath });
+      const { closed } = await closeOpenPrsAddingFile({
+        base: "main",
+        filePath,
+      });
       if (closed.length > 0) {
-        console.warn(`[cleanup-harness] closed in-flight PR(s) ${closed.join(", ")} adding ${filePath}`);
+        console.warn(
+          `[cleanup-harness] closed in-flight PR(s) ${closed.join(", ")} adding ${filePath}`,
+        );
       }
       // A delete PR the shim opened (branch `cms/posts/delete-...`, whatever the collection)
       // only REMOVES the file, so the call above leaves it; close it before the removal PR
       // below so the two do not race and strand one.
       const closedRemovals = await closeOpenPrsRemovingFile(filePath);
       if (closedRemovals.length > 0) {
-        console.warn(`[cleanup-harness] closed in-flight delete PR(s) ${closedRemovals.join(", ")}`);
+        console.warn(
+          `[cleanup-harness] closed in-flight delete PR(s) ${closedRemovals.join(", ")}`,
+        );
       }
       if ((await mainText(filePath)) === null) {
-        console.log(`[cleanup-harness] ${filePath} is not on main; nothing to remove`);
+        console.log(
+          `[cleanup-harness] ${filePath} is not on main; nothing to remove`,
+        );
       } else {
-        console.warn(`[cleanup-harness] ${filePath} is still on main; opening a removal PR`);
+        console.warn(
+          `[cleanup-harness] ${filePath} is still on main; opening a removal PR`,
+        );
         await removeFixtureViaPr({
           slug,
           runId,
@@ -559,11 +699,20 @@ test.afterAll(async () => {
     try {
       // Close only THIS run's open PR (its diff carries the run marker), never
       // an editor's draft on the same branch.
-      const prs = await gh(`/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`);
-      for (const pr of (prs || []).filter((p) => p.head && p.head.ref === DATA_BRANCH)) {
-        const files = await gh(`/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`);
+      const prs = await gh(
+        `/repos/${HOST_REPO}/pulls?state=open&base=main&per_page=100`,
+      );
+      for (const pr of (prs || []).filter(
+        (p) => p.head && p.head.ref === DATA_BRANCH,
+      )) {
+        const files = await gh(
+          `/repos/${HOST_REPO}/pulls/${pr.number}/files?per_page=100`,
+        );
         const ours = files.some(
-          (f) => f.filename === filePath && typeof f.patch === "string" && f.patch.includes(`e2e ${runId}`),
+          (f) =>
+            f.filename === filePath &&
+            typeof f.patch === "string" &&
+            f.patch.includes(`e2e ${runId}`),
         );
         if (ours) {
           await gh(`/repos/${HOST_REPO}/pulls/${pr.number}`, {
@@ -571,7 +720,9 @@ test.afterAll(async () => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ state: "closed" }),
           });
-          console.warn(`[cleanup-harness] closed in-flight PR #${pr.number} editing ${filePath}`);
+          console.warn(
+            `[cleanup-harness] closed in-flight PR #${pr.number} editing ${filePath}`,
+          );
           // A closed PR leaves its branch, which can make the owner's next Contact save fail.
           try {
             await deleteBranch(DATA_BRANCH);
@@ -582,7 +733,9 @@ test.afterAll(async () => {
       }
       const current = await mainText(filePath);
       if (current !== null && readDataField(current, field) === edited) {
-        console.warn(`[cleanup-harness] ${filePath} still carries the edit; opening a restore PR`);
+        console.warn(
+          `[cleanup-harness] ${filePath} still carries the edit; opening a restore PR`,
+        );
         await seedFixtureViaPr({
           slug: `${SINGLE_PAGE_SLUG_PREFIX}-restore`,
           runId,
@@ -595,8 +748,13 @@ test.afterAll(async () => {
             `edit of \`${field}\` on main. Auto-merges via \`cms/ready\`.`,
           skipWaitForMerge: true,
         });
-      } else if (current !== null && readDataField(current, field) !== original) {
-        console.warn(`[cleanup-harness] ${filePath} ${field} is neither the edit nor the original; leaving it`);
+      } else if (
+        current !== null &&
+        readDataField(current, field) !== original
+      ) {
+        console.warn(
+          `[cleanup-harness] ${filePath} ${field} is neither the edit nor the original; leaving it`,
+        );
       }
     } catch (e) {
       problems.push(`data file ${filePath}: ${describeError(e)}`);
@@ -605,6 +763,8 @@ test.afterAll(async () => {
 
   if (problems.length > 0) {
     // Loud: something this run created may still be on main.
-    throw new Error(`[cleanup-harness] could not repair: ${problems.join("; ")}`);
+    throw new Error(
+      `[cleanup-harness] could not repair: ${problems.join("; ")}`,
+    );
   }
 });
