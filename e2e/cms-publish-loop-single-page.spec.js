@@ -384,7 +384,7 @@ test(
     await test.step("Find the create PR, label cms/ready, check the committed file", async () => {
       const pr = await findCmsPr({
         filePath: media.filePath,
-        marker: media.slug,
+        marker: media.title, // the slug lives only in the file name, never in the diff text
         timeoutMs: 5 * 60 * 1000,
       });
       expect(pr.number, "Decap create PR number").toBeGreaterThan(0);
