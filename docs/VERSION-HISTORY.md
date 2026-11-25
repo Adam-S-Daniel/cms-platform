@@ -10,9 +10,12 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.191)
+## Version history (v0.1.0 → v0.1.192)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.192 — The jodidaniel.com publish loop finds a create pull request that already merged.**
+[#1127](https://github.com/Adam-S-Daniel/cms-platform/pull/1127) ([#1068](https://github.com/Adam-S-Daniel/cms-platform/issues/1068)). The first live run of the v0.1.191 loop on jodidaniel.com published its media entry, but the spec searched only open pull requests and the create PR had merged 63 seconds after it opened, so the run timed out. `cms-publish-loop-single-page.spec.js` now matches an open or merged `cms/` PR carrying the run marker and labels `cms/ready` only while it is open. **Consumer effect:** jodidaniel.com's host loop (dispatch only) can now complete a run; adamdaniel.ai sees no change.
 
 **v0.1.191 — jodidaniel.com has a real publish loop of its own.**
 [#1119](https://github.com/Adam-S-Daniel/cms-platform/pull/1119) ([#1068](https://github.com/Adam-S-Daniel/cms-platform/issues/1068)). `cms-publish-loop-host` now also runs `cms-publish-loop-single-page.spec.js`, which on a site with no `posts` collection creates and deletes a disposable media entry and edits and restores one field of `_data/contact.yml`, all through the editor. The throw-away media item carries weight 0 so jodidaniel.com's newest-first check accepts it. **Consumer effect:** on jodidaniel.com the host loop can publish for real when it is dispatched (that site no longer schedules it); the prod, scheduled and media-roundtrip loops detect a single-page site and skip with a notice. adamdaniel.ai sees no change.
