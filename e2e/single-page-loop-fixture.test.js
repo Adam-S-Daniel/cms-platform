@@ -18,6 +18,8 @@ const {
   sameData,
 } = require("./single-page-loop-fixture");
 
+const YAML = require("yaml");
+
 test.describe("single-page publish loop fixture (#1068)", () => {
   test("buildSinglePageMedia is a pure function of runId", () => {
     const a = buildSinglePageMedia({ runId: 1790000000001 });
@@ -58,6 +60,16 @@ test.describe("single-page publish loop fixture (#1068)", () => {
     const m = buildSinglePageMedia({ runId: 3 });
     expect(m.fields.weight).toBeLessThan(1);
     expect(m.filePath).toMatch(/^_media\/0-/);
+  });
+
+  test("the title, used to find the create PR, appears in the committed front matter but the slug does not", () => {
+    // A PR's file patch holds only content lines, never the file name, so the spec must search
+    // for a string inside the file. Decap writes `title: <title>` (jodidaniel.com run
+    // 45532549161: the slug marker never matched).
+    const m = buildSinglePageMedia({ runId: 1795573442435 });
+    const written = `---\n${YAML.stringify({ category: m.fields.category, title: m.title, ...m.fields })}---\n`;
+    expect(written).toContain(m.title);
+    expect(written).not.toContain(m.slug);
   });
 
   test("slugifyTitle lowercases and dashes", () => {
