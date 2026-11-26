@@ -18,7 +18,13 @@
 # The consumer-side caller keeps the fleet's file name and job id, so the
 # context a site publishes is `agent-checks / agent-checks`.
 #
-# CONVENTION, NOT CONFIGURATION. No inputs, no secrets. If the caller's tree
+# CONVENTION, NOT CONFIGURATION. No inputs, and one optional secret: the
+# fleet's PRIVACY_DENYLIST (_agent-guidance#652, #653), which the runner's
+# privacy rule reads from its environment to scan the PR's added lines, paths,
+# commit messages, branch and description. A secret reaches a reusable only
+# when the caller passes it, so the dictated caller names it. Unset (a fork's
+# PR, or a site without the secret), the runner warns and skips that rule. Its
+# output names a place and a pattern number, never the matched text. If the caller's tree
 # has `.githooks/agent-checks`, this runs `ci <base> <head>` over the PR's
 # commits exactly as the fleet template does; otherwise it prints a notice and
 # succeeds. The runner reads GITHUB_EVENT_NAME / GITHUB_EVENT_PATH itself for
@@ -56,6 +62,10 @@ name: Site agent-checks (reusable)
 
 on:
   workflow_call:
+    secrets:
+      privacy_denylist:
+        description: "The fleet's PRIVACY_DENYLIST secret (optional: unset skips the privacy rule)."
+        required: false
 
 permissions:
   contents: read
@@ -87,6 +97,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          PRIVACY_DENYLIST: ${{ secrets.privacy_denylist }}
         run: |
           set -euo pipefail
           if [ ! -f .githooks/agent-checks ]; then

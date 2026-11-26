@@ -1,0 +1,42 @@
+# Thin caller — copied into a site repo as
+# `.github/workflows/privacy-comment-alert.yml`. Owns the triggers and run-name;
+# delegates to the platform's reusable, which scans an issue, comment or review
+# for a term on the fleet's privacy denylist and emails the owner on a match
+# through the self-alert route. It alerts only; it never edits or deletes text
+# (_agent-guidance#636, #653).
+#
+# The file name matches the fleet's own privacy-comment-alert workflow, so the
+# _agent-guidance sync (which skips a `platform.lock` repo's copy) sees it as
+# present.
+#
+# Optional repository settings, all read by the reusable: the PRIVACY_DENYLIST
+# secret (unset: nothing is scanned), and the SELF_ALERT_APP_PRIVATE_KEY secret
+# with the SELF_ALERT_APP_ID and SELF_ALERT_REPO variables (unset: a match is
+# not alerted, and every scanned run warns so).
+#
+# NOT a required check and not path-filtered: these events never report on a
+# pull request's head, and they always run the default branch's copy.
+name: privacy-comment-alert
+run-name: "${{ github.event_name }} ${{ github.event.action }}"
+
+on:
+  issue_comment:
+    types: [created, edited]
+  issues:
+    types: [opened, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  # NOT `scan`: `scan / scan` is the secrets scan's required context, and a
+  # second publisher of that name would be read as it.
+  privacy-comment-alert:
+    uses: Adam-S-Daniel/cms-platform/.github/workflows/site-privacy-comment-alert.yml@v0.1.193
+    secrets:
+      privacy_denylist: ${{ secrets.PRIVACY_DENYLIST }}
+      self_alert_app_private_key: ${{ secrets.SELF_ALERT_APP_PRIVATE_KEY }}

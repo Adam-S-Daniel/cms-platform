@@ -1898,6 +1898,32 @@ seeds on the next bump (#315). Locked by `e2e/site-agent-checks.test.js`.
   `required_contexts` add it. Each consumer's own nudge list follows at its next `platform-bump`
   (#315); until then GitHub's merge refusal covers the gap (#284).
 
+- **The privacy denylist is the one secret it takes** (_agent-guidance#653):
+  the caller passes `PRIVACY_DENYLIST` by name as the reusable's optional
+  `privacy_denylist`, and only the runner step's `env:` reads it. A fork's
+  pull request, or a site without the secret, gets the runner's
+  warn-and-skip.
+
+## A consumer's privacy comment alert runs through `site-privacy-comment-alert.yml` (_agent-guidance#653)
+
+The sync delivers `.githooks/privacy-comment-scan.py` to both consumers but
+skips the fleet's `privacy-comment-alert.yml` on a `platform.lock` repo, for
+the same workflow-set reason as agent-checks. So it is the
+`site-privacy-comment-alert.yml` reusable plus the dictated caller
+`examples/site/.github/workflows/privacy-comment-alert.yml`, which keeps the
+fleet's file name so the sync sees it as present. Locked by
+`e2e/site-privacy-comment-alert.test.js`.
+
+- **The job is the fleet template's, step for step**, plus a pinned
+  `setup-python` (`e2e/workflow-runtime-pinned.test.js`). Keep the two in step.
+- **Nothing a stranger can read may differ between a match and a clean
+  text**: both sites are public, so no `if:` reads the result, and the alert
+  step prints the same either way. The spec executes the steps to prove it.
+- **The caller job is `privacy-comment-alert`, not the template's `scan`**:
+  `scan / scan` is the secrets scan's required context.
+- **Not required, not path-filtered**: it runs on comment events, never on a
+  pull request's head, and always runs the default branch's caller.
+
 ## `secrets.*` is not allowed in a step-level `if:` (startup failure, not a flake)
 
 GitHub rejects `if: secrets.X == ''` (and `!=`) on a step at parse time with

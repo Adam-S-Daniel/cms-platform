@@ -22,7 +22,10 @@
 //     non-Decap PR keeps the runner's exit code — executed, not pattern-matched;
 //   - the `cms/` prefix is the one label-non-decap-prs.yml derives from
 //     e2e/cms-fixture-pr.js's FIXTURE_BRANCH_PREFIX;
-//   - the context is NOT required yet (#371 sequencing).
+//   - the fleet's PRIVACY_DENYLIST secret (_agent-guidance#653) is the ONE
+//     thing that crosses: an optional reusable secret, passed by the caller,
+//     reaching only the runner step's env;
+//   - the context is required (#371 sequencing, done).
 //
 // PLATFORM-INTERNAL, registered in PLATFORM_META_SPECS: it reads this repo's
 // own workflow definitions and the examples/site templates.
@@ -54,6 +57,10 @@ const GATE_JOB = "agent-checks";
 const CALLER_JOB = "agent-checks";
 const CONTEXT = `${CALLER_JOB} / ${GATE_JOB}`;
 const RUN_STEP = "Run the commit-time checks over this change";
+// _agent-guidance#653: the reusable's secret name, and the env name the runner
+// reads (templates/agent-checks/agent-checks' privacy rule).
+const PRIVACY_SECRET = "privacy_denylist";
+const PRIVACY_ENV = "PRIVACY_DENYLIST";
 // label-non-decap-prs.yml's derivation, verbatim: the first segment of the
 // fixture prefix, plus a slash.
 const DECAP_BRANCH_PREFIX = `${FIXTURE_BRANCH_PREFIX.split("/")[0]}/`;
@@ -123,12 +130,14 @@ function decide({ headRef, authorType, fakeExit, cwd = fakeTree() }) {
 }
 
 test.describe("site-agent-checks — the reusable's contract", () => {
-  test("exists, is workflow_call-only, and takes NO inputs and NO secrets", () => {
+  test("exists, is workflow_call-only, takes NO inputs and ONE optional secret", () => {
     expect(listWorkflows().map((f) => path.basename(f))).toContain(REUSABLE);
     const on = reusable().on || {};
     expect(Object.keys(on)).toEqual(["workflow_call"]);
     expect((on.workflow_call || {}).inputs, "convention, not configuration").toBeUndefined();
-    expect((on.workflow_call || {}).secrets).toBeUndefined();
+    const secrets = (on.workflow_call || {}).secrets || {};
+    expect(Object.keys(secrets), "the privacy denylist, and nothing else").toEqual([PRIVACY_SECRET]);
+    expect(secrets[PRIVACY_SECRET].required, "a site without it still runs every other rule").toBe(false);
     expect(reusable().permissions).toEqual({ contents: "read" });
     expect(reusable().concurrency, "no workflow-level group").toBeUndefined();
   });
@@ -208,6 +217,7 @@ test.describe("site-agent-checks — the reusable's contract", () => {
       HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
       HEAD_REF: "${{ github.event.pull_request.head.ref }}",
       AUTHOR_TYPE: "${{ github.event.pull_request.user.type }}",
+      [PRIVACY_ENV]: `\${{ secrets.${PRIVACY_SECRET} }}`,
     });
     expect(steps.length, "checkout, setup-node, run — nothing else").toBe(3);
   });
@@ -280,7 +290,7 @@ test.describe("site-agent-checks — the decision script BEHAVES (fake runner)",
 });
 
 test.describe("site-agent-checks — the dictated thin caller", () => {
-  test("exists, calls the reusable on a release tag, and passes NOTHING", () => {
+  test("exists, calls the reusable on a release tag, and passes only the privacy denylist", () => {
     expect(fs.existsSync(CALLER_PATH)).toBe(true);
     const jobs = caller().jobs || {};
     expect(Object.keys(jobs), `one job, so the context is exactly \`${CONTEXT}\``).toEqual([CALLER_JOB]);
@@ -290,7 +300,8 @@ test.describe("site-agent-checks — the dictated thin caller", () => {
       /^Adam-S-Daniel\/cms-platform\/\.github\/workflows\/site-agent-checks\.yml@v\d+\.\d+\.\d+$/,
     );
     expect(job.with).toBeUndefined();
-    expect(job.secrets).toBeUndefined();
+    // Named, never `secrets: inherit`: the reusable gets the one secret it uses.
+    expect(job.secrets).toEqual({ [PRIVACY_SECRET]: `\${{ secrets.${PRIVACY_ENV} }}` });
     expect(job.if, "#222: the caller job must never skip on `edited`").toBeUndefined();
     expect(job.concurrency).toBeUndefined();
     expect(caller().concurrency).toBeUndefined();

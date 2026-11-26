@@ -3,7 +3,9 @@
 # runs the fleet's `.githooks/agent-checks` runner over the PR's commits when
 # the site has one, and prints a notice and succeeds when it does not
 # (_agent-guidance#313). A Decap CMS PR (`cms/` head branch) or a bot's PR only
-# warns. There is nothing to configure: no inputs, no secrets.
+# warns. Nothing to configure but one optional repository secret,
+# PRIVACY_DENYLIST, which the runner's privacy rule scans the PR against
+# (_agent-guidance#653); unset, that rule warns and skips.
 #
 # The file name and job id match the fleet's own agent-checks workflow, so the
 # published context is `agent-checks / agent-checks`, and the _agent-guidance
@@ -34,3 +36,5 @@ jobs:
   # `agent-checks / agent-checks` — so it must stay `agent-checks`.
   agent-checks:
     uses: Adam-S-Daniel/cms-platform/.github/workflows/site-agent-checks.yml@v0.1.193
+    secrets:
+      privacy_denylist: ${{ secrets.PRIVACY_DENYLIST }}
