@@ -10,9 +10,12 @@ single biggest section moved out of AGENTS.md — read it when investigating
 regressions, before re-deriving a root cause AGENTS.md warns not to
 re-derive, or when reconciling a consumer to the latest release.
 
-## Version history (v0.1.0 → v0.1.192)
+## Version history (v0.1.0 → v0.1.193)
 
 All are tagged GitHub releases (release via `gh workflow run release.yml -f version=vX.Y.Z`).
+
+**v0.1.193 — The media digest shows each page's author and the passage around the person's name.**
+[#1132](https://github.com/Adam-S-Daniel/cms-platform/pull/1132). The media-discovery email and the /admin New mentions page now show, under each URL, the page's listed author and the passage around the person's name, and email-only is described as the normal mode (no "preview run" wording). A namesake's page is never excerpted. `findings.json` gains an optional `sources` list per finding; older findings have none. **Consumer effect:** the next `media-discovery.yml` run on either site produces the new digest; nothing else changes. Internal, no effect on a site: [#1129](https://github.com/Adam-S-Daniel/cms-platform/pull/1129) (synced git hooks).
 
 **v0.1.192 — The jodidaniel.com publish loop can find its own create pull request.**
 [#1127](https://github.com/Adam-S-Daniel/cms-platform/pull/1127) ([#1068](https://github.com/Adam-S-Daniel/cms-platform/issues/1068)). The first live run of the v0.1.191 loop on jodidaniel.com published its media entry, but the spec could not find the create PR: it searched for the item's slug, which is in the file name and never in the diff text, and it searched only open pull requests while the PR merged 63 seconds after it opened. `cms-publish-loop-single-page.spec.js` now searches for the item's title and matches an open or merged `cms/` PR, labeling `cms/ready` only while it is open. **Consumer effect:** jodidaniel.com's host loop (dispatch only) can now complete a run; adamdaniel.ai sees no change.
