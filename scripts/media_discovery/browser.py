@@ -16,7 +16,7 @@ without the retry.
 
 from . import fetch as fetch_mod
 from .corroborate import FetchedPage
-from .text import clean_title
+from .text import clean_title, html_author
 
 NAV_TIMEOUT_MS = 25_000
 IDLE_TIMEOUT_MS = 5_000
@@ -107,7 +107,11 @@ class BrowserSession:
                 title = clean_title(page.title())
             except Exception:  # noqa: BLE001 - a page without a readable title has none
                 title = ""
-            return FetchedPage(url, page.url, status, text, title=title)
+            try:
+                author = html_author(page.content()[:fetch_mod.MAX_BYTES])
+            except Exception:  # noqa: BLE001 - a page without a readable byline has none
+                author = ""
+            return FetchedPage(url, page.url, status, text, title=title, author=author)
         except Exception:  # noqa: BLE001 - a browser failure is data, not a crash
             return FetchedPage(url, url, 0, "")
         finally:

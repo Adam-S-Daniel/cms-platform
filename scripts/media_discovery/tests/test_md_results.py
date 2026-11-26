@@ -11,7 +11,7 @@ from md_fixtures import CFG, make_candidate, page
 from test_md_cli import (CONFIRMED, ENV, MONTH_ONLY_EVENT, PAGES, UNCONFIRMED, FakeGitHub,
                          Harness, main)
 
-from media_discovery.corroborate import Problem
+from media_discovery.corroborate import Problem, SourceNote
 from media_discovery.github_api import GitHub, GitHubError
 from media_discovery.render import render_entry
 from media_discovery.results import build_finding, finding_id, merge_results
@@ -43,7 +43,8 @@ def test_a_confirmed_finding_has_the_pages_shape_and_no_reasons():
     assert f == {
         "id": finding_id(cand.primary_url), "status": "confirmed", "kind": "past_talk",
         "title": cand.title, "outlet": cand.outlet, "date": cand.date, "end_date": None,
-        "primary_url": cand.primary_url, "other_urls": cand.supporting_urls, "reasons": [],
+        "primary_url": cand.primary_url, "other_urls": cand.supporting_urls, "sources": [],
+        "reasons": [],
         "entry": {"collection": "media", "slug": entry.slug, "path": entry.path,
                   "content": entry.content}}
 
@@ -434,7 +435,7 @@ def test_an_unconfirmed_find_that_now_checks_out_is_upgraded_and_emailed(site):
     assert f["status"] == "confirmed" and f["reasons"] == [] and f["entry"]
     assert f["first_seen"] == NOW1 and f["last_seen"] == NOW2
     [(subject, body, _)] = h.sent
-    assert subject == "site.example.com new mentions: 1 to add (preview)"
+    assert subject == "site.example.com new mentions: 1 to add"
     assert "Lonely Claim" in body and "COULDN'T CONFIRM" not in body
 
 
@@ -538,4 +539,46 @@ def test_page_titles_reach_other_page_reasons_and_never_the_log(site):
     reasons = {r["url"]: r for r in f["reasons"] if r["url"]}
     assert reasons[other]["title"] == "Other Page Secret" and reasons[other]["main"] is False
     assert "Secret" not in h.stdout and "t.example" not in h.stdout
+    h.assert_counts_only()
+
+
+# ── sources: author and the passage naming the person ──────────────────────
+
+def test_build_finding_lists_each_source_with_an_author_or_excerpt_main_first():
+    cand = make_candidate()
+    other = cand.supporting_urls[0]
+    notes = {other: SourceNote("", "…Pat Rivera, Northwind Legal…"),
+             cand.primary_url: SourceNote("Sam Writer", ""),
+             "https://unrelated.example.net/": SourceNote("Nobody", "x")}
+    f = build_finding(cand, "past_talk", "confirmed", [], None, {}, PERSON, notes)
+    assert f["sources"] == [{"url": cand.primary_url, "author": "Sam Writer"},
+                            {"url": other, "excerpt": "…Pat Rivera, Northwind Legal…"}]
+
+
+def test_merge_refreshes_the_sources_of_a_find_still_being_checked():
+    cand = make_candidate()
+    old = {**build_finding(cand, "past_talk", "unconfirmed", [], None, {}, PERSON),
+           "first_seen": NOW1, "last_seen": NOW1}
+    run = build_finding(cand, "past_talk", "unconfirmed", [], None, {}, PERSON,
+                        {cand.primary_url: SourceNote("Sam Writer", "")})
+    doc, new = merge_results({"findings": [old]}, None, [run], now=NOW2, person=PERSON)
+    assert doc["findings"][0]["sources"] == [{"url": cand.primary_url, "author": "Sam Writer"}]
+    assert new == []
+
+
+def test_a_run_records_the_passage_only_where_the_name_is_tied_to_the_person(site):
+    """The passage comes from the name the identity check accepted. A page that
+    names someone else with the same name (no marker nearby) is never quoted."""
+    stranger = "https://other.example.org/namesake"
+    cand = {**UNCONFIRMED, "supporting_urls": [stranger]}
+    extra = {stranger: "Lonely Claim 2026: Pat Rivera, a baker in Springfield. " + "golf " * 30}
+    h = ResultsHarness(site, candidates=[CONFIRMED, cand], extra_pages=extra).run()
+    confirmed = h.by_url()[CONFIRMED["primary_url"]]
+    assert [s["url"] for s in confirmed["sources"]] == [CONFIRMED["primary_url"],
+                                                       *CONFIRMED["supporting_urls"]]
+    assert "Pat Rivera of Northwind Legal" in confirmed["sources"][0]["excerpt"]
+    lonely = h.by_url()[UNCONFIRMED["primary_url"]]
+    assert [s["url"] for s in lonely["sources"]] == [UNCONFIRMED["primary_url"]]
+    body = h.sent[0][1]
+    assert "baker" not in body and "baker" not in json.dumps(h.doc)
     h.assert_counts_only()

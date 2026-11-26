@@ -220,9 +220,31 @@ def _when(cand: Candidate) -> str:
         return _clean(cand.date, 20)
 
 
-def _heading(cand: Candidate) -> list[str]:
+EXCERPT_MAX = 400
+AUTHOR_MAX = 120
+
+
+def _note_lines(url: str, notes) -> list[str]:
+    """The author and the passage naming the person, under a URL in the email.
+    Plain text, so _clean is the encoding: one line, no control or format
+    characters. A "://" in the page's own words gets a word joiner, so a mail
+    client cannot turn the passage into a second link."""
+    note = (notes or {}).get(url)
+    if note is None:
+        return []
+    out = []
+    author = _clean(note.author, AUTHOR_MAX)
+    excerpt = _clean(note.excerpt, EXCERPT_MAX).replace("://", ":/" + WORD_JOINER + "/")
+    if author:
+        out.append(f"By {author.replace('://', ':/' + WORD_JOINER + '/')}")
+    if excerpt:
+        out.append(f"“{excerpt}”")
+    return out
+
+
+def _heading(cand: Candidate, notes=None) -> list[str]:
     return [_clean(cand.title, 200), f"{_clean(cand.outlet, 100)} · {_when(cand)}", "",
-            _plain_url(cand.primary_url)]
+            _plain_url(cand.primary_url), *_note_lines(cand.primary_url, notes)]
 
 
 def problem_text(problem: Problem, person: str) -> str | None:
@@ -262,7 +284,7 @@ WHOLE_PROBLEMS = {
 }
 
 
-def _why(cand: Candidate, problems, person: str) -> list[str]:
+def _why(cand: Candidate, problems, person: str, notes=None) -> list[str]:
     lines = []
     for prob in problems:
         if prob.url:
@@ -272,7 +294,8 @@ def _why(cand: Candidate, problems, person: str) -> list[str]:
             if prob.url == cand.primary_url:
                 lines += [f"• The main link {text}", ""]
             else:
-                lines += [f"• This other page {text}", "", _plain_url(prob.url), ""]
+                lines += [f"• This other page {text}", "", _plain_url(prob.url),
+                          *_note_lines(prob.url, notes), ""]
         else:
             lines += [f"• {WHOLE_PROBLEMS.get(prob.code, 'It could not be confirmed.')}", ""]
     if not lines:
@@ -282,14 +305,18 @@ def _why(cand: Candidate, problems, person: str) -> list[str]:
 
 def render_digest(site_label: str, person_name: str, new_drafts, unconfirmed, would_add=(),
                   *, review_link: str = "", preview: bool = False,
-                  page_link: str = "") -> tuple[str, str] | None:
+                  page_link: str = "", notes=None) -> tuple[str, str] | None:
     """The run's email, in plain words for a non-technical reader.
 
-    `new_drafts` is the candidate of each draft opened in the website editor (a
-    normal run); `would_add` the candidate of each confirmed find in a preview
-    (email-only) run, where nothing is written; `unconfirmed` is (candidate,
-    problems). `page_link`, when set, is the New mentions admin page, linked at the
-    top. Returns None, so no email is sent, when there is nothing to say."""
+    `preview` is the default (email-only) mode, which writes nothing: `would_add`
+    holds the candidate of each confirmed find. Otherwise (live mode)
+    `new_drafts` holds the candidate of each draft opened in the website editor.
+    The default mode is the normal case, so the email never calls it a preview
+    or compares it with live mode. `unconfirmed` is (candidate, problems).
+    `page_link`, when set, is the New mentions admin page, linked at the top.
+    `notes` maps a source URL to its corroborate.SourceNote (author, passage
+    naming the person), shown under that URL. Returns None, so no email is
+    sent, when there is nothing to say."""
     ready = list(would_add if preview else new_drafts)
     if not ready and not unconfirmed:
         return None
@@ -300,14 +327,12 @@ def render_digest(site_label: str, person_name: str, new_drafts, unconfirmed, wo
         parts.append(f"{len(ready)} to add")
     if unconfirmed:
         parts.append(f"{len(unconfirmed)} to double-check")
-    subject = f"{site} new mentions: {', '.join(parts)}" + (" (preview)" if preview else "")
+    subject = f"{site} new mentions: {', '.join(parts)}"
 
     lines = [f"This is the regular search for new mentions of {person} to add to {site}.", ""]
     if page_link:
         lines += ["To add or skip each one, open the New mentions page in the website editor:",
                   "", _plain_url(page_link), ""]
-    if preview:
-        lines += ["This was a preview run, so nothing on the website was changed.", ""]
     if ready:
         lines += ["", RULE, "", f"READY TO ADD ({len(ready)})", ""]
         lines += ["Two separate websites confirmed "
@@ -320,31 +345,20 @@ def render_digest(site_label: str, person_name: str, new_drafts, unconfirmed, wo
                        "Publish or delete each one there:"), ""]
             if review_link:
                 lines += [_plain_url(review_link), ""]
-        for cand in ready:
-            lines += ["", *_heading(cand), ""]
-        if preview:
-            lines += [("In a normal run, this would be waiting for you as a draft addition "
-                       "in the website editor. You'd publish or delete it there."
+        elif not page_link:
+            lines += [("Nothing has been added to the website yet. If you want it there, add "
+                       "it in the website editor."
                        if len(ready) == 1 else
-                       "In a normal run, these would be waiting for you as draft additions "
-                       "in the website editor. You'd publish or delete each one there."), ""]
+                       "Nothing has been added to the website yet. Add the ones you want in "
+                       "the website editor."), ""]
+        for cand in ready:
+            lines += ["", *_heading(cand, notes), ""]
     if unconfirmed:
         lines += ["", RULE, "", f"COULDN'T CONFIRM ({len(unconfirmed)})", "",
-                  "These may be real, but the search couldn't verify them on its own, so "
-                  "nothing was drafted. Open a link if you'd like to check yourself.", ""]
+                  "These may be real, but the search couldn't verify them on its own. "
+                  "Open a link if you'd like to check yourself.", ""]
         for n, (cand, problems) in enumerate(unconfirmed, 1):
-            head = _heading(cand)
-            lines += ["", f"{n}. {head[0]}", *head[1:], "", *_why(cand, problems, person)]
-    if preview:
-        lines += ["", RULE, "", "PREVIEW RUN VS. NORMAL RUN", "",
-                  "Only in this preview run:",
-                  "  • Nothing on the website is added or changed.",
-                  "  • Items ready to add are described in full here, since there's no draft "
-                  "to open.", "",
-                  "Only in a normal run:",
-                  "  • Each item ready to add becomes a draft addition in the website editor.",
-                  "  • This email links straight to the drafts, so you can publish or delete "
-                  "each one.", "",
-                  "The same in both:",
-                  "  • The \"Couldn't confirm\" list.", ""]
+            head = _heading(cand, notes)
+            lines += ["", f"{n}. {head[0]}", *head[1:], "",
+                      *_why(cand, problems, person, notes)]
     return subject, "\n".join(lines).rstrip("\n") + "\n"

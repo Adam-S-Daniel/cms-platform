@@ -40,12 +40,23 @@ Publish.
    (email-only mode).
 6. **Email** one digest, written for a non-technical reader
    (`render.render_digest`): the subject starts with the site's host and
-   "new mentions", the body lists each confirmed find as a draft addition in
-   the website editor (or, in email-only mode, a "preview run", as what would
-   be drafted), then every find that did not check out with a plain-English
-   reason per page (`corroborate.Problem`). Each URL sits alone on its own
-   line, since mail clients take a colon right after a URL as part of it. No
-   email is sent when there is nothing to list. A find the results file
+   "new mentions", the body lists each confirmed find (in live mode, as a
+   draft addition waiting in the website editor), then every find that did
+   not check out with a plain-English reason per page (`corroborate.Problem`).
+   Email-only is the default and the normal case, so the email never calls it
+   a preview or describes what live mode would have done. Each URL sits alone
+   on its own line, since mail clients take a colon right after a URL as part
+   of it. Under each URL go the page's listed author ("By ...", from its
+   byline `<meta>` tags, else its JSON-LD, else PDF metadata) and the passage
+   around the person's name (`corroborate.SourceNote`). The passage is the
+   identity check's own snippet, so it is quoted only from a name occurrence
+   that has an identity marker nearby and no exclusion marker: a page about
+   someone else with the same name is never excerpted (it can still show its
+   author). A blocked page or one that did not answer 2xx gets neither. The
+   email is plain text, so both are written through `_clean` (one line, no
+   control or format characters, capped) and a `://` inside them gets a word
+   joiner so it cannot become a second link. No email is sent when there is
+   nothing to list. A find the results file
    (below) already holds is not listed again. When this run wrote the
    results file to the site repository, the email opens with a link to the New mentions page
    (`<admin URL>/media-search.html`), where each find is added or skipped.
@@ -240,10 +251,12 @@ before this existed. The summary line ends `repeats=N results_written=0|1`.
 
 ## Modes
 
-- **email-only** (the default): no draft or pull request is written (only the
-  results file, above). The digest lists
-  each confirmed find under "Ready to add" and calls the run a preview, with a
-  section on what a normal run does differently. Use it to judge the quality of the finds before turning PRs on. It
+- **email-only** (the default, and the expected setting): no draft or pull
+  request is written (only the results file, above). The digest lists each
+  confirmed find under "Ready to add"; with the results file on, the New
+  mentions page in `/admin` is where each one is added or skipped. That page
+  shows the same author and passage under each source, from the finding's
+  `sources` list, printed with `textContent`. It
   lists earlier discovery PRs with the job's read-only `GITHUB_TOKEN`; if that
   token cannot, the run continues without that duplicate check (a notice, not
   a failure).

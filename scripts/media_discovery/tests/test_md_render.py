@@ -7,7 +7,7 @@ import yaml
 from md_fixtures import CFG, PAGE_A, PAGE_B, make_candidate, page
 
 from media_discovery.config import load_config
-from media_discovery.corroborate import Problem, verify
+from media_discovery.corroborate import Problem, SourceNote, verify
 from media_discovery.render import (WORD_JOINER, _clean, render_digest, render_entry, render_pr,
                                     safe_md, slugify)
 
@@ -246,8 +246,7 @@ def test_digest_subject_starts_with_the_site_and_counts():
     assert one == "site.example.com new mentions: 1 to add, 1 to double-check"
     assert render_digest("s", "p", [c, c, c], [])[0] == "s new mentions: 3 to add"
     assert render_digest("s", "p", [], [(c, [])] * 2)[0] == "s new mentions: 2 to double-check"
-    assert render_digest("s", "p", [], [], [c], preview=True)[0] == \
-        "s new mentions: 1 to add (preview)"
+    assert render_digest("s", "p", [], [], [c], preview=True)[0] == "s new mentions: 1 to add"
 
 
 def test_digest_normal_run_points_at_the_editor_in_plain_words():
@@ -274,13 +273,50 @@ def test_digest_links_the_new_mentions_page_near_the_top_on_its_own_line():
     assert "New mentions page" not in without
 
 
-def test_digest_preview_run_says_what_differs_from_a_normal_run():
+def test_digest_default_mode_reads_as_the_normal_case():
+    """Email-only is the default, so the email never calls it a preview or
+    describes what live mode would have done."""
     c = make_candidate()
     _, text = render_digest("s", "Pat Rivera", [], [], [c], preview=True)
-    assert "nothing on the website was changed" in text
-    assert "PREVIEW RUN VS. NORMAL RUN" in text
-    assert "Only in this preview run:" in text and "Only in a normal run:" in text
-    assert "In a normal run, this would be waiting for you" in text
+    for gone in ("preview", "normal run", "would be waiting", "draft addition"):
+        assert gone not in text.lower()
+    assert "Nothing has been added to the website yet. If you want it there, add it in " \
+           "the website editor." in text
+    _, two = render_digest("s", "Pat Rivera", [], [], [c, c], preview=True)
+    assert "Add the ones you want in the website editor." in two
+    # With the New mentions page linked, that page is the way to add them.
+    _, paged = render_digest("s", "Pat Rivera", [], [], [c], preview=True,
+                             page_link="https://s.example.com/admin/media-search.html")
+    assert "Nothing has been added" not in paged and "New mentions page" in paged
+
+
+def test_digest_shows_the_author_and_the_passage_under_each_url():
+    c = make_candidate()
+    other = "https://news.example.org/summit-recap"
+    notes = {c.primary_url: SourceNote("Sam Writer", "…Speaker Pat Rivera of Northwind Legal…"),
+             other: SourceNote("", "Pat Rivera, Northwind Legal, argued")}
+    _, text = render_digest("s", "Pat Rivera", [], [(c, _problems(("no-match", other)))], [c],
+                            preview=True, notes=notes)
+    lines = text.splitlines()
+    first = lines.index(c.primary_url)
+    assert lines[first + 1:first + 3] == ["By Sam Writer",
+                                          "“…Speaker Pat Rivera of Northwind Legal…”"]
+    i = lines.index(other)
+    assert lines[i + 1] == "“Pat Rivera, Northwind Legal, argued”"
+    # A URL with no note gets nothing extra.
+    _, bare = render_digest("s", "Pat Rivera", [], [], [c], preview=True)
+    assert "By " not in bare and "“" not in bare
+
+
+def test_digest_notes_are_one_clean_line_and_cannot_add_a_link():
+    c = make_candidate()
+    notes = {c.primary_url: SourceNote("Eve\n‮Mallory https://evil.example.net/x",
+                                       "see https://evil.example.net/y\r\nnow ​Pat Rivera")}
+    _, text = render_digest("s", "p", [], [], [c], preview=True, notes=notes)
+    assert "‮" not in text and "​" not in text
+    assert "By Eve Mallory https:/" in text and "“see https:/" in text
+    url_lines = [line for line in text.splitlines() if "://" in line]
+    assert url_lines == [c.primary_url]
 
 
 @pytest.mark.parametrize("problem,expected", [
