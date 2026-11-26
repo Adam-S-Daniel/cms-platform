@@ -1,0 +1,143 @@
+# Site privacy comment alert (reusable) — alert the owner when an issue, a
+# comment or a review on a consumer site holds a term on the fleet's privacy
+# denylist (_agent-guidance#636, #653).
+#
+# THE GAP. The _agent-guidance sync delivers `privacy-comment-alert.yml` to
+# every fleet repo, but not to a `platform.lock` repo: a consumer may carry only
+# the workflows this platform dictates (check-platform-pin-consistency.js's
+# workflow-SET parity), so on adamdaniel.ai and jodidaniel.com the scan script
+# (`.githooks/privacy-comment-scan.py`, which the sync DOES deliver) shipped and
+# nothing ran it. Same remedy as `site-agent-checks.yml`: this reusable plus a
+# dictated thin caller, `examples/site/.github/workflows/privacy-comment-alert.yml`,
+# which `platform-bump.yml` seeds into every consumer on the next bump (#315).
+# The caller keeps the fleet's file name, so the sync sees it as present.
+#
+# NAMED `site-privacy-comment-alert.yml` so it can never collide with the
+# fleet's own `privacy-comment-alert.yml` if the sync delivers one here.
+#
+# THE JOB IS THE FLEET TEMPLATE'S, step for step
+# (_agent-guidance templates/privacy-comment-alert/privacy-comment-alert.yml),
+# with its two secrets passed in by the caller. Keep them in step: the
+# template's header carries the reasoning, and e2e/site-privacy-comment-alert.test.js
+# locks the parts that keep a match unreadable from outside.
+#
+# It ALERTS ONLY: it never edits or deletes the text, because an edit leaves
+# history and a delete could remove the evidence. The scan reads the text from
+# $GITHUB_EVENT_PATH and prints one word, which only a step output holds. It
+# scans text written by a trusted author only (owner, member, collaborator, or
+# a Bot); anything else is "skipped". Both sites are PUBLIC, so anyone can open
+# an issue and read this run's log and step graph: neither may differ between a
+# match and a clean text. No step has an `if:` that reads the result, no log
+# line or warning appears on one outcome only, and the alert step decides
+# internally and prints the same on both. Without that, a stranger could test
+# guesses against the denylist.
+#
+# The alert is the fleet's self-alert route, the same one the publish watchdog
+# uses (docs/CONSUMER-PROVISIONING.md, "Stuck-publish email"): the optional
+# SELF_ALERT_APP_ID and SELF_ALERT_REPO repository variables and the
+# SELF_ALERT_APP_PRIVATE_KEY secret dispatch send-self-alert.yml in the alert
+# repository. Its inputs are public run metadata, so they name only this
+# repository and this run, never the text, a pattern, or a link to the comment.
+#
+# NOT a required check, and not path-filtered: it runs on comment events, not
+# on pull_request code, so it never reports on a pull request's head. Workflows
+# for these events run the DEFAULT branch's caller.
+name: Site privacy comment alert (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      privacy_denylist:
+        description: "The fleet's PRIVACY_DENYLIST secret (optional: unset scans nothing)."
+        required: false
+      self_alert_app_private_key:
+        description: "The self-alert GitHub App's private key (optional: unset sends no alert)."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The CALLER's tree: the scan script and the matcher it imports are the
+      # sync-delivered copies in the site's own .githooks/.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          sparse-checkout: .githooks
+          persist-credentials: false
+      # The scan is Python; pin it rather than inherit the runner image's
+      # (e2e/workflow-runtime-pinned.test.js). The fleet template does not.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Scan the event text for a denylisted term
+        id: scan
+        env:
+          PRIVACY_DENYLIST: ${{ secrets.privacy_denylist }}
+        run: |
+          result=$(python3 .githooks/privacy-comment-scan.py) || result=error
+          case "$result" in
+            match | clean)
+              echo "scanned=true" >> "$GITHUB_OUTPUT"
+              echo "result=$result" >> "$GITHUB_OUTPUT"
+              echo "The scan finished." ;;
+            skipped) echo "The text's author is not trusted; nothing was scanned." ;;
+            no-denylist) echo "No denylist is configured here; nothing was scanned." ;;
+            *) echo "::error::The scan could not run."; exit 1 ;;
+          esac
+      - name: Check the self-alert route
+        id: route
+        env:
+          SELF_ALERT_APP_ID: ${{ vars.SELF_ALERT_APP_ID }}
+          SELF_ALERT_REPO: ${{ vars.SELF_ALERT_REPO }}
+          SELF_ALERT_APP_PRIVATE_KEY: ${{ secrets.self_alert_app_private_key }}
+          SCANNED: ${{ steps.scan.outputs.scanned }}
+        run: |
+          if [[ -n "$SELF_ALERT_APP_ID" && -n "$SELF_ALERT_APP_PRIVATE_KEY" \
+                && "$SELF_ALERT_REPO" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]]; then
+            {
+              echo "configured=true"
+              echo "owner=${SELF_ALERT_REPO%%/*}"
+              echo "name=${SELF_ALERT_REPO#*/}"
+            } >> "$GITHUB_OUTPUT"
+          elif [[ "$SCANNED" == true ]]; then
+            # Only when text was scanned (a trusted author), which does not
+            # depend on what the text holds, so the warning reveals nothing.
+            echo "::warning::No self-alert route is configured here, so a denylisted term would not be alerted."
+          fi
+      - name: Mint a token for the alert repository
+        id: token
+        if: steps.scan.outputs.scanned == 'true' && steps.route.outputs.configured == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.SELF_ALERT_APP_ID }}
+          private-key: ${{ secrets.self_alert_app_private_key }}
+          owner: ${{ steps.route.outputs.owner }}
+          repositories: ${{ steps.route.outputs.name }}
+          permission-actions: write
+      - name: Send the self-alert when the scan matched
+        if: steps.scan.outputs.scanned == 'true' && steps.route.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SELF_ALERT_REPO: ${{ vars.SELF_ALERT_REPO }}
+          SCAN_RESULT: ${{ steps.scan.outputs.result }}
+        run: |
+          # Prints the same on a match and on clean, and never fails on a
+          # dispatch error: a different log would tell a stranger which it was.
+          if [[ "$SCAN_RESULT" == match ]]; then
+            # Fixed text only: the inputs are public run metadata.
+            run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            subject="Denylisted term posted in $GITHUB_REPOSITORY"
+            body="A denylisted term was found in an issue, comment or review in $GITHUB_REPOSITORY. Scanning run: $run_url"
+            branch=$(gh api "repos/$SELF_ALERT_REPO" --jq .default_branch 2>/dev/null) || branch=""
+            if [[ -n "$branch" ]]; then
+              gh api -X POST \
+                "repos/$SELF_ALERT_REPO/actions/workflows/send-self-alert.yml/dispatches" \
+                -f ref="$branch" -f "inputs[subject]=$subject" -f "inputs[body]=$body" \
+                >/dev/null 2>&1 || true
+            fi
+          fi
+          echo "The alert step finished."

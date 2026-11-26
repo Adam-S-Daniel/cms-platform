@@ -569,6 +569,11 @@ const PLATFORM_META_SPECS = [
   // EXECUTES the reusable's decision script against a fake runner. Platform
   // tree only; a consumer ships none of it.
   "site-agent-checks.test.js",
+  // _agent-guidance#653 — the site privacy comment alert lint: asserts the
+  // shape of the site-privacy-comment-alert.yml reusable and its dictated
+  // examples/site caller, and EXECUTES the reusable's step scripts against
+  // fakes. Platform tree only; a consumer ships none of it.
+  "site-privacy-comment-alert.test.js",
   // #518 — the OAuth proxy build probe: runs scripts/probe-oauth-proxy-build.js
   // against canned answers, reads oauth-proxy/lambda.py's digest, and lints the
   // oauth-proxy-build.yml reusable + its examples/site caller. Platform tree only.
