@@ -559,8 +559,16 @@ jobs:
             // already achieved, so swallow that specific error and exit
             // success rather than failing the run and tripping the
             // stuck-PR triage path.
+            // A transient GitHub-side 5xx ("503 no healthy upstream") on the
+            // enable call used to fail the run and strand the PR until the
+            // throttled nudge. Retry it with backoff; every other error falls
+            // through to the handling below unchanged (cms-platform#1130).
+            const TRANSIENT_5XX = /\b50[0-4]\b|no healthy upstream|bad gateway|service unavailable|gateway time-?out/i;
+            const ENABLE_ATTEMPTS = 4;
             try {
-              await github.graphql(`
+              for (let attempt = 1; ; attempt++) {
+                try {
+                  await github.graphql(`
                 mutation($pullRequestId: ID!) {
                   enablePullRequestAutoMerge(input: {
                     pullRequestId: $pullRequestId,
@@ -573,6 +581,14 @@ jobs:
                   }
                 }
               `, { pullRequestId: context.payload.pull_request.node_id });
+                  break;
+                } catch (retryErr) {
+                  const retryMsg = String((retryErr && retryErr.message) || retryErr);
+                  if (attempt >= ENABLE_ATTEMPTS || !TRANSIENT_5XX.test(retryMsg)) throw retryErr;
+                  core.warning(`enablePullRequestAutoMerge attempt ${attempt} hit a transient error; retrying.`);
+                  await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
+                }
+              }
             } catch (err) {
               const msg = String(err && err.message || err);
               if (/pull request is already merged/i.test(msg)) {

@@ -101,3 +101,16 @@ test("unstable-status fallback polls per-check readiness (self-excluding) and la
   expect(code).toMatch(/pulls\.merge/);
   expect(code).toMatch(/merge_method:\s*['"]squash['"]/);
 });
+
+test("enablePullRequestAutoMerge retries a transient 5xx with backoff and rethrows anything else (cms-platform#1130)", () => {
+  // A `503 no healthy upstream` on the enable call used to fail the run and
+  // strand the publish PR until the throttled nudge. The call is retried a
+  // bounded number of times, only for a gateway-style error; every other
+  // error still reaches the existing already-merged / clean / unstable
+  // handling.
+  const code = scripts(readWorkflow("cms-editorial-workflow.yml"));
+  expect(code).toMatch(/ENABLE_ATTEMPTS\s*=\s*4/);
+  expect(code).toMatch(/TRANSIENT_5XX\s*=.*no healthy upstream/);
+  expect(code).toMatch(/attempt >= ENABLE_ATTEMPTS \|\| !TRANSIENT_5XX\.test\(retryMsg\)\) throw retryErr/);
+  expect(code).toMatch(/setTimeout\(resolve, 5000 \* attempt\)/);
+});
