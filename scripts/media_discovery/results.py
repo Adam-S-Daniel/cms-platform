@@ -8,6 +8,7 @@ Schema (theme/admin/media-search.js reads it, decisions.json beside it):
     {"version": 1, "searched_at": ISO, "person": str, "findings": [
       {"id", "status": "confirmed"|"unconfirmed", "kind", "title", "outlet",
        "date", "end_date", "primary_url", "other_urls": [...],
+       "sources": [{"url", "author"?, "excerpt"?}],
        "reasons": [{"url", "main", "code", "detail", "text", "title"?, "whole"?}],
        "entry": {"collection", "slug", "path", "content"} | null,
        "first_seen": ISO, "last_seen": ISO}]}
@@ -52,10 +53,29 @@ def _reasons(candidate, problems, titles, person: str) -> list[dict]:
     return out
 
 
-def build_finding(candidate, kind: str, status: str, problems, entry, titles, person: str) -> dict:
+def _sources(candidate, notes) -> list[dict]:
+    """Each source URL, main one first, that has an author or an excerpt."""
+    out = []
+    for url in dict.fromkeys([candidate.primary_url, *candidate.supporting_urls]):
+        note = (notes or {}).get(url)
+        if note is None:
+            continue
+        item = {"url": url}
+        if note.author:
+            item["author"] = note.author
+        if note.excerpt:
+            item["excerpt"] = note.excerpt
+        if len(item) > 1:
+            out.append(item)
+    return out
+
+
+def build_finding(candidate, kind: str, status: str, problems, entry, titles, person: str,
+                  notes=None) -> dict:
     """One finding, without its first_seen/last_seen (merge_results stamps them).
-    `titles` maps a source URL to its page title; `entry` is a render.Entry or
-    None. A confirmed find carries no reasons."""
+    `titles` maps a source URL to its page title and `notes` to its
+    corroborate.SourceNote; `entry` is a render.Entry or None. A confirmed find
+    carries no reasons."""
     return {
         "id": finding_id(candidate.primary_url),
         "status": status,
@@ -66,6 +86,7 @@ def build_finding(candidate, kind: str, status: str, problems, entry, titles, pe
         "end_date": candidate.end_date,
         "primary_url": candidate.primary_url,
         "other_urls": list(candidate.supporting_urls),
+        "sources": _sources(candidate, notes),
         "reasons": [] if status == "confirmed" else _reasons(candidate, problems, titles, person),
         "entry": None if entry is None else {
             "collection": entry.collection, "slug": entry.slug, "path": entry.path,
@@ -120,10 +141,10 @@ def merge_results(prior, decisions_doc, run_findings, *, now: str, person: str,
             continue
         if f["status"] == "confirmed":
             have.update(status="confirmed", entry=f["entry"], reasons=f["reasons"],
-                        kind=f["kind"])
+                        kind=f["kind"], sources=f["sources"])
             new.append(have)
         else:
-            have.update(reasons=f["reasons"], entry=f["entry"])
+            have.update(reasons=f["reasons"], entry=f["entry"], sources=f["sources"])
 
     doc = {"version": VERSION, "searched_at": now, "person": person, "findings": findings}
     return doc, new

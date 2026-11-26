@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 from . import llm
 from .browser import BrowserSession
 from .config import ConfigError, load_config
-from .corroborate import Problem, effective_kind, verify
+from .corroborate import Problem, effective_kind, source_notes, verify
 from .dedupe import is_duplicate, load_existing
 from .domains import normalize_url
 from .fetch import fetch
@@ -311,13 +311,20 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
     new_prs, would_open, unconfirmed = [], [], []
     failure = None
     reviewer_misses = 0
-    def record(cand, kind, status, problems, entry, pages):
+    notes = {}  # source URL -> SourceNote, for the digest
+
+    def record(cand, kind, status, problems, entry, pages, verdict=None):
+        try:
+            found = source_notes(verdict, pages)
+        except Exception:  # noqa: BLE001 - a find without notes is still listed
+            found = {}
+        notes.update(found)
         if results is None:
             return
         titles = {u: p.title for u, p in (pages or {}).items() if getattr(p, "title", "")}
         try:
             results.run_findings.append(build_finding(
-                cand, kind, status, problems, entry, titles, cfg.person.names[0]))
+                cand, kind, status, problems, entry, titles, cfg.person.names[0], found))
         except Exception:  # noqa: BLE001 - a find that cannot be recorded is not a failure
             results.unrecorded += 1
 
@@ -336,7 +343,7 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
             if is_duplicate(cand, existing, seen):
                 counts["duplicates"] += 1
                 continue
-            kind, final_pages = cand.kind, {}
+            kind, final_pages, verdict = cand.kind, {}, None
             try:
                 kind = effective_kind(cand, today)
                 urls = list(dict.fromkeys([cand.primary_url, *cand.supporting_urls]))
@@ -360,24 +367,25 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
                 if not verdict.confirmed:
                     unconfirmed.append((cand, verdict.problems))
                     record(cand, kind, "unconfirmed", verdict.problems,
-                           unconfirmed_entry(cand, kind), final_pages)
+                           unconfirmed_entry(cand, kind), final_pages, verdict)
                     continue
                 try:
                     entry = render_entry(cand, kind, cfg)
                 except ValueError as exc:
                     problems = [Problem("no-entry", detail=str(exc))]
                     unconfirmed.append((cand, problems))
-                    record(cand, kind, "unconfirmed", problems, None, final_pages)
+                    record(cand, kind, "unconfirmed", problems, None, final_pages, verdict)
                     continue
             except Exception:  # noqa: BLE001 - one bad candidate must not end the run; no text logged
                 unconfirmed.append((cand, [Problem("internal-error")]))
-                record(cand, kind, "unconfirmed", [Problem("internal-error")], None, final_pages)
+                record(cand, kind, "unconfirmed", [Problem("internal-error")], None, final_pages,
+                       verdict)
                 continue
             seen |= _urls(cand)
             counts["confirmed"] += 1
             if mode != "live":
                 would_open.append(cand)
-                record(cand, kind, "confirmed", [], entry, final_pages)
+                record(cand, kind, "confirmed", [], entry, final_pages, verdict)
                 continue
             title, body = render_pr(cand, kind, entry, verdict, review_link)
             try:
@@ -386,7 +394,7 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
                 failure = failure or str(exc)
                 problems = [Problem("draft-failed", detail=str(exc.status))]
                 unconfirmed.append((cand, problems))
-                record(cand, kind, "unconfirmed", problems, entry, final_pages)
+                record(cand, kind, "unconfirmed", problems, entry, final_pages, verdict)
                 continue
             if opened is None:
                 counts["duplicates"] += 1
@@ -394,7 +402,7 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
             counts["prs_opened"] += 1
             reviewer_misses += not opened.reviewers_requested
             new_prs.append(cand)
-            record(cand, kind, "confirmed", [], entry, final_pages)
+            record(cand, kind, "confirmed", [], entry, final_pages, verdict)
     finally:
         browser.close()
     counts["unconfirmed"] = len(unconfirmed)
@@ -422,7 +430,7 @@ def main(argv=None, *, env=None, client_factory=llm.default_client, fetcher=fetc
 
     digest = render_digest(_site_label(admin_url, site_name), cfg.person.names[0], new_prs,
                            unconfirmed, would_open, review_link=admin_url and review_link,
-                           preview=mode != "live",
+                           preview=mode != "live", notes=notes,
                            page_link=(admin_url.rstrip("/") + "/media-search.html"
                                       if admin_url and results_written
                                       and results.repo.lower() == args.repo.lower() else ""))

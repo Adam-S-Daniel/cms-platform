@@ -39,9 +39,22 @@ def _first_near(span, hits, window):
 
 
 def _snippet(text: str, span: tuple[int, int], width: int = 240) -> str:
+    """About `width` characters of the page around the name, cut at whole words,
+    with an ellipsis where the page goes on."""
     pad = max(0, (width - (span[1] - span[0])) // 2)
-    chunk = text[max(0, span[0] - pad):span[1] + pad]
-    return " ".join(chunk.split())
+    start, end = max(0, span[0] - pad), min(len(text), span[1] + pad)
+    if start > 0 and not text[start - 1].isspace():
+        cut = re.search(r"\s", text[start:span[0]])  # drop a word cut in half,
+        start = start + cut.end() if cut else start  # never the name itself
+    if end < len(text) and not text[end].isspace():
+        cut = re.search(r"\s\S*$", text[span[1]:end])
+        end = span[1] + cut.start() if cut else end
+    out = " ".join(text[start:end].split())
+    if start > 0:
+        out = "\u2026" + out
+    if end < len(text):
+        out += "\u2026"
+    return out
 
 
 def check_identity(page_text: str, cfg: PersonConfig) -> IdentityResult:

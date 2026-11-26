@@ -22,6 +22,7 @@ class FetchedPage:
     text: str
     unreadable_type: bool = False  # fetched, but not a page type the checks can read
     title: str = ""  # the page's own title (HTML <title> or PDF metadata), "" when unknown
+    author: str = ""  # the page's listed author(s) (byline meta, JSON-LD or PDF metadata)
 
 
 @dataclass
@@ -42,6 +43,17 @@ class Problem:
     code: str
     url: str = ""
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class SourceNote:
+    """What the digest and the New mentions page show under one source URL:
+    the page's listed author, and the passage around the person's name. The
+    passage comes only from a name the identity check tied to the person (a
+    marker nearby, no exclusion), so a page about someone else with the same
+    name is never quoted. Both are untrusted web text, escaped at each output."""
+    author: str = ""
+    excerpt: str = ""
 
 
 @dataclass
@@ -214,3 +226,18 @@ def verify(candidate: Candidate, pages: dict[str, FetchedPage], cfg: Config) -> 
             reasons.append("no independent second source")
             problems.append(Problem("no-second-source"))
     return Verdict(confirmed, reasons, sources, problems)
+
+
+def source_notes(verdict: Verdict | None, pages: dict[str, FetchedPage]) -> dict[str, SourceNote]:
+    """The SourceNote of each source URL that has an author or a passage. A
+    blocked page or one that did not answer 2xx gets none."""
+    out: dict[str, SourceNote] = {}
+    for src in (verdict.sources if verdict else []):
+        page = (pages or {}).get(src.url)
+        if src.blocked or page is None or not 200 <= page.status < 300:
+            continue
+        excerpt = src.identity.snippet if src.identity and src.identity.ok else ""
+        note = SourceNote(page.author or "", excerpt or "")
+        if note.author or note.excerpt:
+            out[src.url] = note
+    return out

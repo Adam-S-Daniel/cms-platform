@@ -215,10 +215,16 @@ def test_email_only_lists_would_open_and_opens_nothing(site):
     assert "mode=email-only" in h.stdout and "prs_opened=0" in h.stdout
     assert h.gh.opened == []
     [(subject, body, _)] = h.sent
-    assert subject == ("site.example.com new mentions: 1 to add, "
-                       "2 to double-check (preview)")
-    assert "nothing on the website was changed" in body and "PREVIEW RUN VS. NORMAL RUN" in body
+    assert subject == "site.example.com new mentions: 1 to add, 2 to double-check"
+    # The default mode is the normal case: never called a preview or compared with live.
+    for word in ("preview", "normal run", "would be waiting"):
+        assert word not in body.lower()
+    assert "Nothing has been added to the website yet" in body
     assert "Open Data in Practice" in body
+    # The passage naming the person sits under the main link and the other page.
+    lines = body.splitlines()
+    i = lines.index(CONFIRMED["primary_url"])
+    assert lines[i + 1].startswith("“") and "Pat Rivera of Northwind Legal" in lines[i + 1]
     h.assert_counts_only()
 
 
@@ -227,7 +233,7 @@ def test_live_without_a_token_falls_back_to_email_only(site):
     h = Harness(site, env=env).run()
     assert h.code == 0 and h.gh is None
     assert "live mode needs GITHUB_TOKEN" in h.stdout and "mode=email-only" in h.stdout
-    assert h.sent[0][0].endswith("(preview)")
+    assert "preview" not in h.sent[0][0] and "preview" not in h.sent[0][1].lower()
 
 
 def test_unconfigured_site_is_a_no_op(tmp_path):

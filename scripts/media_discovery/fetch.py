@@ -20,7 +20,7 @@ import urllib.request
 from urllib.parse import urljoin, urlsplit
 
 from .corroborate import FetchedPage
-from .text import clean_title, html_title, html_to_text
+from .text import clean_author, clean_title, html_author, html_title, html_to_text
 
 TIMEOUT_SECONDS = 20
 MAX_BYTES = 3 * 1024 * 1024
@@ -78,11 +78,11 @@ def _allowed(url: str, resolver) -> bool:
     return _host_is_public(parts.hostname, port, resolver)
 
 
-def _read_pdf(raw: bytes) -> tuple[str, str] | None:
-    """(text of the first MAX_PDF_PAGES pages, metadata title), or None when
+def _read_pdf(raw: bytes) -> tuple[str, str, str] | None:
+    """(text of the first MAX_PDF_PAGES pages, metadata title, metadata author), or None when
     this is not a readable PDF (no %PDF- header, encrypted, malformed, or pypdf
     missing). The bytes come from the open web, so any parser failure is data,
-    not a crash; a missing or unreadable title is just ""."""
+    not a crash; a missing or unreadable title or author is just ""."""
     if not raw.startswith(b"%PDF-"):
         return None
     try:
@@ -97,7 +97,11 @@ def _read_pdf(raw: bytes) -> tuple[str, str] | None:
         title = clean_title(reader.metadata.title if reader.metadata else "")
     except Exception:  # noqa: BLE001 - no usable title is not a failure
         title = ""
-    return "\n".join(parts), title
+    try:
+        author = clean_author(reader.metadata.author if reader.metadata else "")
+    except Exception:  # noqa: BLE001 - no usable author is not a failure
+        author = ""
+    return "\n".join(parts), title, author
 
 
 def pdf_to_text(raw: bytes) -> str | None:
@@ -115,7 +119,7 @@ def _body(resp, final_url: str, url: str) -> FetchedPage:
         read = _read_pdf(raw) if len(raw) <= MAX_PDF_BYTES else None
         if read is None:
             return FetchedPage(url, final_url, 415, "", unreadable_type=True)
-        return FetchedPage(url, final_url, status, read[0], title=read[1])
+        return FetchedPage(url, final_url, status, read[0], title=read[1], author=read[2])
     if content_type not in ACCEPTED_TYPES:
         return FetchedPage(url, final_url, 415, "", unreadable_type=True)
     raw = resp.read(MAX_BYTES)
@@ -124,11 +128,11 @@ def _body(resp, final_url: str, url: str) -> FetchedPage:
         text = raw.decode(charset, errors="replace")
     except LookupError:
         text = raw.decode("utf-8", errors="replace")
-    title = ""
+    title = author = ""
     if content_type != "text/plain":
-        title = html_title(text)
+        title, author = html_title(text), html_author(text)
         text = html_to_text(text)
-    return FetchedPage(url, final_url, status, text, title=title)
+    return FetchedPage(url, final_url, status, text, title=title, author=author)
 
 
 def fetch(url: str, *, opener=None, resolver=None) -> FetchedPage:

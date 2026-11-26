@@ -80,6 +80,39 @@ test.describe("media-search: safe links", () => {
   });
 });
 
+test.describe("media-search: what each page says", () => {
+  const F = {
+    primary_url: "https://www.example.com/talk",
+    sources: [
+      { url: "https://www.example.com/talk", author: "Sam  Writer", excerpt: "\u2026Pat Rivera of Northwind Legal\u2026" },
+      { url: "https://news.example.org/recap", excerpt: "Pat Rivera, Northwind Legal" },
+      { url: "javascript:alert(1)", author: "<img src=x onerror=alert(1)>" },
+      { url: "https://empty.example.net/", author: "", excerpt: "   " },
+    ],
+  };
+
+  test("lists each page with an author or a passage, main page first, links only http(s)", () => {
+    expect(plain(MS.sourceNotes(F))).toEqual([
+      { href: "https://www.example.com/talk", site: "example.com", main: true, author: "Sam Writer",
+        excerpt: "\u2026Pat Rivera of Northwind Legal\u2026" },
+      { href: "https://news.example.org/recap", site: "news.example.org", main: false, author: "",
+        excerpt: "Pat Rivera, Northwind Legal" },
+      // Untrusted text is kept as text (the page prints it with textContent); no link.
+      { href: null, site: "", main: false, author: "<img src=x onerror=alert(1)>", excerpt: "" },
+    ]);
+  });
+
+  test("caps long text and tolerates an older finding without sources", () => {
+    const long = MS.sourceNotes({ sources: [{ url: "https://a.example.com/", excerpt: "w".repeat(900), author: "a".repeat(300) }] })[0];
+    expect(long.excerpt.length).toBe(400);
+    expect(long.author.length).toBe(120);
+    expect(long.excerpt.endsWith("\u2026")).toBe(true);
+    expect(plain(MS.sourceNotes({}))).toEqual([]);
+    expect(plain(MS.sourceNotes({ sources: "nope" }))).toEqual([]);
+    expect(plain(MS.sourceNotes(null))).toEqual([]);
+  });
+});
+
 test.describe("media-search: grouping and decisions", () => {
   const mk = (id, status, date, title) => ({ id, status, date, title: title || id, kind: "press" });
   const findings = [

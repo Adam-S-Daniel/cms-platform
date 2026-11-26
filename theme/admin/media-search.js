@@ -153,6 +153,33 @@
     return out;
   }
 
+  // ── What each page says ─────────────────────────────────────────────
+  // The finding's `sources` (results.py `_sources`): for each page, main one
+  // first, its listed author and the passage around the person's name. The
+  // search quotes a passage only where the name sits next to one of the
+  // person's markers, so a page about someone else with the same name shows
+  // at most its author. Each piece is untrusted: capped here, printed with
+  // textContent, and the link must pass safeUrl (else no link).
+  var EXCERPT_MAX = 400;
+  var AUTHOR_MAX = 120;
+  function oneLine(s, cap) {
+    var text = typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "";
+    return text.length > cap ? text.slice(0, cap - 1).trimEnd() + "\u2026" : text;
+  }
+  function sourceNotes(f) {
+    var main = f && f.primary_url;
+    return (f && Array.isArray(f.sources) ? f.sources : []).map(function (s) {
+      var href = safeUrl(s && s.url);
+      return {
+        href: href,
+        site: href ? new URL(href).hostname.replace(/^www\./i, "") : "",
+        main: !!s && s.url === main,
+        author: oneLine(s && s.author, AUTHOR_MAX),
+        excerpt: oneLine(s && s.excerpt, EXCERPT_MAX),
+      };
+    }).filter(function (n) { return n.author || n.excerpt; });
+  }
+
   // Only a find that came with a ready-made entry can become a draft; one
   // without (say, an event with no exact date) has to be added by hand.
   var NO_ENTRY_NOTE = "Add it by hand in the website editor if it\u2019s yours.";
@@ -754,6 +781,7 @@
     reasonParts: reasonParts,
     reasonSegments: reasonSegments,
     canAdd: canAdd,
+    sourceNotes: sourceNotes,
     NO_ENTRY_NOTE: NO_ENTRY_NOTE,
     normalizeDecisions: normalizeDecisions,
     mergeDecision: mergeDecision,
@@ -882,6 +910,27 @@
     ]);
   }
 
+  // "What the pages say": per page, the passage (quoted) and a line naming the
+  // author and the page, linked. Built with textContent only.
+  function notesBlock(f) {
+    var items = sourceNotes(f).map(function (n) {
+      var li = el("li", {});
+      if (n.excerpt) li.appendChild(el("p", { class: "ms-excerpt", text: "\u201c" + n.excerpt + "\u201d" }));
+      var cite = el("p", { class: "ms-cite" });
+      if (n.author) cite.appendChild(document.createTextNode("By " + n.author + " \u00b7 "));
+      var label = n.main ? "Main page" : n.site || "Another page";
+      var link = n.href ? extLink(n.href, label) : null;
+      cite.appendChild(link || document.createTextNode(label));
+      li.appendChild(cite);
+      return li;
+    });
+    if (!items.length) return null;
+    return el("div", { class: "ms-notes" }, [
+      el("p", { class: "ms-why-title", text: "What the pages say" }),
+      el("ul", {}, items),
+    ]);
+  }
+
   function newCard(f) {
     var sure = f.status === "confirmed";
     var busy = !!state.busy[f.id];
@@ -891,6 +940,8 @@
     card.appendChild(el("p", { class: "ms-when", text: whenLine(f) }));
     var open = extLink(f.primary_url, "Open the page");
     if (open) card.appendChild(el("p", { class: "ms-open" }, [open]));
+    var notes = notesBlock(f);
+    if (notes) card.appendChild(notes);
     if (!sure) card.appendChild(reasonList(f));
     var skipBtn = button(sure ? "Not for the site" : "Not me / skip", "ms-secondary",
       function () { decide(f, "skipped", card); });
