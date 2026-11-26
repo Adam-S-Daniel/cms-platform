@@ -310,10 +310,10 @@ def test_digest_shows_the_author_and_the_passage_under_each_url():
 
 def test_digest_notes_are_one_clean_line_and_cannot_add_a_link():
     c = make_candidate()
-    notes = {c.primary_url: SourceNote("Eve\n‮Mallory https://evil.example.net/x",
-                                       "see https://evil.example.net/y\r\nnow ​Pat Rivera")}
+    notes = {c.primary_url: SourceNote("Eve\n\u202eMallory https://evil.example.net/x",
+                                       "see https://evil.example.net/y\r\nnow \u200bPat Rivera")}
     _, text = render_digest("s", "p", [], [], [c], preview=True, notes=notes)
-    assert "‮" not in text and "​" not in text
+    assert "\u202e" not in text and "\u200b" not in text
     assert "By Eve Mallory https:/" in text and "“see https:/" in text
     url_lines = [line for line in text.splitlines() if "://" in line]
     assert url_lines == [c.primary_url]
