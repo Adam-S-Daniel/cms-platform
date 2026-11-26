@@ -319,6 +319,25 @@ cms-platform#238.
 > `enablePullRequestAutoMerge` **from the schedule context** — the discriminator
 > there is the EVENT CONTEXT, not the token class.
 
+## `PRIVACY_DENYLIST` — the fleet's privacy denylist (optional, _agent-guidance#653)
+
+The same repository secret every fleet repo holds (_agent-guidance ADR 0021):
+one pattern per line, in the format `.githooks/privacy-denylist.py` reads. Two
+dictated callers pass it by name:
+
+- `agent-checks.yml` → `site-agent-checks.yml`, whose runner scans each pull
+  request's added lines, paths, commit messages, branch and description and
+  refuses a match (a Decap or bot pull request only warns, like every other
+  agent-checks rule);
+- `privacy-comment-alert.yml` → `site-privacy-comment-alert.yml`, which scans
+  each issue, comment and review by a trusted author and, on a match, sends the
+  stuck-publish email route's alert (the three `SELF_ALERT_*` values above).
+  It alerts only; it never edits or deletes the text.
+
+Set it with `gh secret set PRIVACY_DENYLIST -R <site> < <the list>`. Unset, the
+agent-checks privacy rule warns and skips, and the comment scan scans nothing.
+Neither run ever prints the matched text or a pattern: both sites are public.
+
 ## AWS deploy secrets (from the bootstrap stack outputs)
 
 `AWS_ROLE_ARN` (OIDC deploy role), `PRODUCTION_CLOUDFRONT_ID`,
@@ -444,4 +463,5 @@ that consumer gets no bump until someone dispatches it by hand
 - [ ] `AWS_ROLE_ARN`, `PRODUCTION_CLOUDFRONT_ID`, `PREVIEW_CLOUDFRONT_ID` — from the bootstrap outputs
 - [ ] Repo **variables** — `bash <cms-platform>/scripts/set-repo-variables.sh` (sets `CMS_APEX`/`CMS_PROD_URL`/`PREVIEW_BUCKET`/`AWS_REGION` from `site-params.env`; `PROD_PLAYGROUND_MODE` + `CMS_AUTOMATION_APP_ID` when `site-params.env` sets them)
 - [ ] Optional: `SELF_ALERT_REPO` + `SELF_ALERT_APP_ID` (variables) + `SELF_ALERT_APP_PRIVATE_KEY` (secret) — a stuck publish also sends an email ("Stuck-publish email" above)
+- [ ] Optional: `PRIVACY_DENYLIST` (secret) — the privacy scan on pull requests and comments ("`PRIVACY_DENYLIST`" above)
 - [ ] Settings → General → **Allow auto-merge** = ON
