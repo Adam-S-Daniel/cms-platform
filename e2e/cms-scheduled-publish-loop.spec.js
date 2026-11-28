@@ -122,10 +122,9 @@ const SCHEDULER_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 // never straddle the boundary.
 const DEADLINE_MARGIN_MS = 5 * 60 * 1000;
 // See "THE DEADLINE WINDOW" in the header — spans worst-case seed merge
-// + the pre-deadline scheduler leg + margin (40 min).
-// DISPATCH_WORST_CASE_MS: the run budget starts only once the dispatch
-// returns, and that call can now spend about two minutes riding out a 5xx
-// burst (#1130 item 4).
+// + the pre-deadline dispatch and scheduler leg + margin (about 42 min).
+// DISPATCH_WORST_CASE_MS is in it because the run budget starts only once
+// the dispatch returns, which can take about two minutes of 5xx retries.
 const DEADLINE_WINDOW_MS =
   SEED_MERGE_TIMEOUT_MS + DISPATCH_WORST_CASE_MS + SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS;
 // Wait this far PAST the deadline before the at/after dispatch so
@@ -143,13 +142,14 @@ const PUBLISH_MERGE_TIMEOUT_MS = 25 * 60 * 1000;
 // prod-mutate reflect legs, which start pre-merge and need the 30-min
 // auto-merge floor, #1815): this only spans deploy-production + CDN.
 const REFLECT_TIMEOUT_MS = 20 * 60 * 1000;
-// Worst-case sum: 25 (seed) + 10 (leg 2) + 40-window remainder + 10
-// (leg 4 run) + 5 (PR appear) + 25 (publish merge) + 20 (reflect) + 25
-// (remove merge) + 20 (404 reflect) ≈ 146 min → 150. Fits the 165-min
+// Worst-case sum: 25 (seed) + 10 (leg 2) + ~42-window remainder + ~2
+// (leg 4 dispatch retries) + 10 (leg 4 run) + 5 (PR appear) + 25 (publish
+// merge) + 20 (reflect) + 25 (remove merge) + 20 (404 reflect) ≈ 150 min
+// → 155. Fits the 165-min
 // job timeout in cms-scheduled-publish-loop.yml (alignment locked by
 // e2e/publish-scheduled-posts-flow.test.js). Retries disabled — this
 // mutates real prod; a retry re-runs the same broken chain.
-const TEST_TIMEOUT_MS = 150 * 60 * 1000;
+const TEST_TIMEOUT_MS = 155 * 60 * 1000;
 
 test.describe.configure({
   mode: "serial",
@@ -414,7 +414,7 @@ test("scheduled-publish loop — draft seeds, scheduler flips it live via PR + a
   await test.step("Wait out the remaining seconds of the deadline window", async () => {
     // A wall-clock wait is inherent to testing a wall-clock scheduler:
     // publish_date was fixed in the seed's front matter, so the spec
-    // must genuinely cross it. Bounded by the window (≤40 min; typically
+    // must genuinely cross it. Bounded by the window (≤42 min; typically
     // far less — the seed + leg 2 already consumed most of it).
     const remaining = publishDateMs + POST_DEADLINE_SKEW_MS - Date.now();
     if (remaining > 0) {
