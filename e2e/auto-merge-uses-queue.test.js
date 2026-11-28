@@ -114,3 +114,93 @@ test("enablePullRequestAutoMerge retries a transient 5xx with backoff and rethro
   expect(code).toMatch(/attempt >= ENABLE_ATTEMPTS \|\| !TRANSIENT_5XX\.test\(retryMsg\)\) throw retryErr/);
   expect(code).toMatch(/setTimeout\(resolve, 5000 \* attempt\)/);
 });
+
+// ── Re-arm when GitHub disables auto-merge (cms-platform#1130 item 2) ──────
+// Parsed, not grepped: the job's `if:` and the site caller's `types:` come off
+// the YAML tree, and the guard's shape comes off an acorn AST of the script.
+const fs = require("node:fs");
+const path = require("node:path");
+const acorn = require("acorn");
+const walk = require("acorn-walk");
+
+function autoMergeJob() {
+  return parseYaml(readWorkflow("cms-editorial-workflow.yml")).jobs["auto-merge-when-ready"];
+}
+
+function autoMergeScriptAst() {
+  const step = autoMergeJob().steps.find((s) => s.with && typeof s.with.script === "string");
+  const src = `(async function () {\n${step.with.script}\n})`;
+  return { src, ast: acorn.parse(src, { ecmaVersion: "latest" }) };
+}
+
+function isActionCheck(node) {
+  return (
+    node.type === "BinaryExpression" &&
+    node.operator === "===" &&
+    node.right.type === "Literal" &&
+    node.right.value === "auto_merge_disabled"
+  );
+}
+
+test("auto-merge-when-ready also runs on auto_merge_disabled while a ready label is on the PR", () => {
+  const cond = autoMergeJob().if;
+  expect(cond).toMatch(/github\.event\.action == 'auto_merge_disabled'/);
+  expect(cond).toMatch(/github\.event\.pull_request\.state == 'open'/);
+  for (const label of ["cms/ready", "decap-cms/ready", "decap-cms/pending_publish"]) {
+    expect(cond).toContain(`contains(github.event.pull_request.labels.*.name, '${label}')`);
+  }
+});
+
+test("the example site caller triggers the editorial workflow on auto_merge_disabled", () => {
+  const caller = parseYaml(
+    fs.readFileSync(
+      path.resolve(__dirname, "..", "examples", "site", ".github", "workflows", "cms-editorial-workflow.yml"),
+      "utf8",
+    ),
+  );
+  expect(caller.on.pull_request.types).toEqual(
+    expect.arrayContaining(["opened", "synchronize", "labeled", "auto_merge_disabled"]),
+  );
+});
+
+test("the re-arm guard runs before the enable call, skips a reasonless disable, is capped, and never fails the run", () => {
+  const { src, ast } = autoMergeScriptAst();
+  let guard = null;
+  walk.simple(ast, {
+    IfStatement(node) {
+      if (!guard && isActionCheck(node.test)) guard = node;
+    },
+  });
+  expect(guard, "no `if (… === 'auto_merge_disabled')` guard in the script").not.toBeNull();
+
+  const enableAt = src.indexOf("enablePullRequestAutoMerge(input");
+  expect(enableAt).toBeGreaterThan(-1);
+  expect(guard.end).toBeLessThan(enableAt);
+
+  let cap = null;
+  let reasonlessReturn = false;
+  let failsRun = false;
+  walk.full(guard.consequent, (node) => {
+    if (node.type === "VariableDeclarator" && node.id.name === "MAX_REARMS") cap = node.init.value;
+    if (
+      node.type === "IfStatement" &&
+      node.test.type === "UnaryExpression" &&
+      node.test.operator === "!" &&
+      node.test.argument.type === "Identifier" &&
+      node.test.argument.name === "reason"
+    ) {
+      walk.simple(node.consequent, { ReturnStatement() { reasonlessReturn = true; } });
+    }
+    if (node.type === "ThrowStatement") failsRun = true;
+    if (
+      node.type === "CallExpression" &&
+      node.callee.type === "MemberExpression" &&
+      node.callee.property.name === "setFailed"
+    ) {
+      failsRun = true;
+    }
+  });
+  expect(cap).toBe(3);
+  expect(reasonlessReturn).toBe(true);
+  expect(failsRun).toBe(false);
+});

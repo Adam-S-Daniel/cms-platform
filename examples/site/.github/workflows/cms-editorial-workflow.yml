@@ -2,7 +2,9 @@ name: CMS Editorial Workflow
 run-name: "${{ format('PR #{0} — {1}', github.event.pull_request.number, github.event.pull_request.title) }}"
 on:
   pull_request:
-    types: [opened, synchronize, labeled]
+    # auto_merge_disabled: re-arm when GitHub turns auto-merge off by itself
+    # (cms-platform#1130); see the reusable's auto-merge-when-ready job.
+    types: [opened, synchronize, labeled, auto_merge_disabled]
 permissions:
   contents: write
   pull-requests: write

@@ -493,11 +493,27 @@ jobs:
     # list. It means "submitted for review" — the entry isn't yet
     # approved, so auto-merging at that point would skip the human-
     # review step that the editorial workflow exists to support.
+    #
+    # RE-ARM (cms-platform#1130 item 2): GitHub sometimes turns auto-merge OFF
+    # on a ready PR by itself, e.g. "Repository rule violations found" as the
+    # checks go green (adamdaniel.ai run 45286314474). Nothing re-armed it: no
+    # further `labeled` event arrives, and cms-automerge-nudge.yml skips PRs
+    # whose auto-merge is off and touches only `automated-test` PRs, so a real
+    # editor's publish stranded for good. The site caller now also triggers on
+    # `auto_merge_disabled`; this job re-runs for it when the PR still carries
+    # a ready label, and the script's re-arm guard (top of the script) decides
+    # whether to act. An owner who wants it to STAY off removes the ready
+    # label, which makes this `if:` false.
     if: >
-      github.event.action == 'labeled' &&
-      (github.event.label.name == 'cms/ready' ||
-       github.event.label.name == 'decap-cms/ready' ||
-       github.event.label.name == 'decap-cms/pending_publish')
+      (github.event.action == 'labeled' &&
+       (github.event.label.name == 'cms/ready' ||
+        github.event.label.name == 'decap-cms/ready' ||
+        github.event.label.name == 'decap-cms/pending_publish')) ||
+      (github.event.action == 'auto_merge_disabled' &&
+       github.event.pull_request.state == 'open' &&
+       (contains(github.event.pull_request.labels.*.name, 'cms/ready') ||
+        contains(github.event.pull_request.labels.*.name, 'decap-cms/ready') ||
+        contains(github.event.pull_request.labels.*.name, 'decap-cms/pending_publish')))
     # Per-job concurrency with cancel-in-progress:false so multiple
     # rapid label toggles queue rather than cancel each other.
     # `enablePullRequestAutoMerge` is idempotent — re-running it on
@@ -563,6 +579,42 @@ jobs:
             // enable call used to fail the run and strand the PR until the
             // throttled nudge. Retry it with backoff; every other error falls
             // through to the handling below unchanged (cms-platform#1130).
+            // Re-arm guard (cms-platform#1130 item 2). On `auto_merge_disabled`
+            // act only when GitHub gave a reason for turning it off: a manual
+            // disable is assumed to carry none (UNVERIFIED against a live
+            // event; the reason is logged so the first real one settles it),
+            // and acting on a manual disable is the one outcome to avoid.
+            // Bounded: after MAX_REARMS disables on one PR, stop and leave it
+            // for a human, so a PR GitHub keeps refusing can't loop forever.
+            // Never fail the run here: a red job poisons the PR's rollup.
+            if (context.payload.action === 'auto_merge_disabled') {
+              const MAX_REARMS = 3;
+              const prNumber = context.payload.pull_request.number;
+              const reason = String(context.payload.reason || '').trim();
+              core.info(`PR #${prNumber}: auto-merge was disabled; reason ${JSON.stringify(reason)}.`);
+              if (!reason) {
+                core.info(`PR #${prNumber}: no reason given (treated as a manual disable); leaving auto-merge off.`);
+                return;
+              }
+              let disables = 0;
+              try {
+                const events = await github.paginate(github.rest.issues.listEventsForTimeline, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  per_page: 100,
+                });
+                disables = events.filter((e) => e.event === 'auto_merge_disabled').length;
+              } catch (tErr) {
+                core.warning(`PR #${prNumber}: could not count earlier disables (HTTP ${Number(tErr && tErr.status) || 'unknown'}); leaving auto-merge off.`);
+                return;
+              }
+              if (disables > MAX_REARMS) {
+                core.warning(`PR #${prNumber}: GitHub has disabled auto-merge ${disables} times; not re-arming again. Needs a human.`);
+                return;
+              }
+              core.info(`PR #${prNumber}: re-arming auto-merge (disable ${disables} of at most ${MAX_REARMS}).`);
+            }
             const TRANSIENT_5XX = /\b50[0-4]\b|no healthy upstream|bad gateway|service unavailable|gateway time-?out/i;
             const ENABLE_ATTEMPTS = 4;
             try {
