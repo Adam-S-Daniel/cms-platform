@@ -84,7 +84,13 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { getPat, HOST_REPO } = require("./decap-pat");
 const { seedFixtureViaPr, removeFixtureViaPr } = require("./cms-fixture-pr");
-const { gh, waitForMerge, fetchPublicUrl, describeError } = require("./github-actions-poll");
+const {
+  dispatchWorkflow,
+  gh,
+  waitForMerge,
+  fetchPublicUrl,
+  describeError,
+} = require("./github-actions-poll");
 const { prodTarget } = require("./cms-host");
 const { loudBail } = require("./fixture-baseline");
 const { EPHEMERAL_DATE } = require("./prod-mutate-fixture");
@@ -233,18 +239,10 @@ async function dispatchSchedulerAndAwait(label) {
   const before = await gh(`${runsUrl}?per_page=1`);
   const maxSeenId = ((before.workflow_runs || [])[0] || {}).id || 0;
 
-  // POST .../dispatches answers 204 No Content; gh() unconditionally
-  // res.json()s, which rejects on the empty body — treat that specific
-  // SyntaxError as the success it is (GitHub accepted the dispatch).
-  await gh(`${wfBase}/dispatches`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: "main" }),
-    retries: 2,
-  }).catch((err) => {
-    if (err instanceof SyntaxError) return null;
-    throw err;
-  });
+  // dispatchWorkflow retries a 5xx burst with a long backoff (#1130 item 4)
+  // and treats the endpoint's empty 204 as success. A 5xx that GitHub
+  // accepted anyway is harmless here: the wait below takes the first new run.
+  await dispatchWorkflow({ repo: HOST_REPO, workflow: SCHEDULER_WORKFLOW, ref: "main" });
 
   const deadline = Date.now() + SCHEDULER_RUN_TIMEOUT_MS;
   let run = null;

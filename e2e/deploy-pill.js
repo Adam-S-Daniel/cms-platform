@@ -226,9 +226,20 @@ async function waitForChangeReflected({
         `Waited ${elapsedS}s. Your deploy-production run for this merge DID complete, but the ` +
         `URL never served the marker — this is an S3 sync / CloudFront / cache problem in the ` +
         `serve layer, NOT a deploy-trigger miss (the publish→merge→deploy chain fired fine).`;
+    } else if (verdict && verdict.kind === "no-deploy-fired" && verdict.mergeConfirmed !== true) {
+      // #1130 item 3: the lane is idle, but nothing confirmed the cms PR
+      // merged (a call site with no getPr / mergedAt, or no PR found). Saying
+      // "no deploy fired for your merge" here blamed the deploy trigger for a
+      // PR that never merged (adamdaniel.ai run 45494556461: auto-merge was
+      // never armed). Name both possible legs instead of asserting a merge.
+      detail =
+        `Waited ${elapsedS}s and no deploy-production run was in flight or recent, but this ` +
+        `check could not confirm the cms PR ever merged — so the failing leg is either the ` +
+        `merge (auto-merge never armed or never landed) or the deploy trigger. Check whether ` +
+        `the cms PR is still open before blaming the deploy chain.`;
     } else if (verdict && verdict.kind === "no-deploy-fired") {
-      // The other #21 leg: NO deploy-production run fired for this merge —
-      // a trigger problem (auto-merge / editorial-workflow / deploy
+      // The other #21 leg: the cms PR merged and NO deploy-production run
+      // fired for it — a trigger problem (editorial-workflow / deploy
       // dispatch miss), the chain never fired.
       detail =
         `Waited ${elapsedS}s and NO deploy-production run fired for your merge — the chain never ` +

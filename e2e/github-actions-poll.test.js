@@ -9,8 +9,10 @@ const { test, expect } = require("./base");
 const {
   addLabel,
   describeError,
+  dispatchWorkflow,
   gh,
   getFileTextAtRef,
+  getLatestPrForBranch,
   makeDeployQueueExtender,
   deployLaneActivity,
   headChecksTrulyGreen,
@@ -186,6 +188,156 @@ test.describe("gh() bounded transient-retry (#1771 step 1)", () => {
     expect(result).toEqual({ ok: true });
     expect(calls.count).toBe(1);
     expect(slept).toBe(false);
+  });
+});
+
+// ── #1130 item 4: a workflow dispatch rides out a longer 5xx burst ─────
+//
+// adamdaniel.ai run 45642923359 lost its scheduler dispatch to three 500s
+// in a row under retries:2 on the default 1s/2s backoff. dispatchWorkflow
+// retries four times on a 5s base capped at 30s per attempt.
+test.describe("dispatchWorkflow retries a 5xx burst (#1130 item 4)", () => {
+  test.describe.configure({ mode: "serial" });
+  let originalFetch;
+  test.beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  test.afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  // The real endpoint answers 204 with an empty body, so res.json() throws.
+  const accepted204 = () => ({
+    ok: true,
+    status: 204,
+    statusText: "No Content",
+    headers: { get: () => null },
+    text: async () => "",
+    json: async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    },
+  });
+
+  test("three 500s then a 204 resolves, with backoff ceilings of 5s, 10s, 20s", async () => {
+    const requests = [];
+    const responses = [
+      fakeResponse({ status: 500, body: "boom" }),
+      fakeResponse({ status: 500, body: "boom" }),
+      fakeResponse({ status: 500, body: "boom" }),
+      accepted204(),
+    ];
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url: String(url), init });
+      return responses[requests.length - 1];
+    };
+    const sleeps = [];
+    const originalRandom = Math.random;
+    Math.random = () => 1; // the top of each jitter range, so the ceilings show
+    try {
+      await dispatchWorkflow({
+        repo: "o/r",
+        workflow: "publish-scheduled-posts.yml",
+        ref: "main",
+        _sleep: async (ms) => sleeps.push(ms),
+      });
+    } finally {
+      Math.random = originalRandom;
+    }
+    expect(requests).toHaveLength(4);
+    expect(sleeps).toEqual([5000, 10_000, 20_000]);
+    expect(requests[0].url).toMatch(/\/repos\/o\/r\/actions\/workflows\/publish-scheduled-posts\.yml\/dispatches$/);
+    expect(requests[0].init.method).toBe("POST");
+    expect(JSON.parse(requests[0].init.body)).toEqual({ ref: "main" });
+  });
+
+  test("gives up after four retries (five attempts), with the 30s cap on the last", async () => {
+    const { fn, calls } = scriptFetch([fakeResponse({ status: 503, body: "no healthy upstream" })]);
+    globalThis.fetch = fn;
+    const sleeps = [];
+    const originalRandom = Math.random;
+    Math.random = () => 1;
+    let threw;
+    try {
+      await dispatchWorkflow({ repo: "o/r", workflow: "w.yml", _sleep: async (ms) => sleeps.push(ms) });
+    } catch (e) {
+      threw = e;
+    } finally {
+      Math.random = originalRandom;
+    }
+    expect(threw && threw.status).toBe(503);
+    expect(calls.count).toBe(5);
+    expect(sleeps).toEqual([5000, 10_000, 20_000, 30_000]);
+  });
+
+  test("a 404 is not retried", async () => {
+    const { fn, calls } = scriptFetch([fakeResponse({ status: 404, body: "Not Found" })]);
+    globalThis.fetch = fn;
+    let threw;
+    try {
+      await dispatchWorkflow({ repo: "o/r", workflow: "w.yml", _sleep: async () => {} });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw && threw.status).toBe(404);
+    expect(calls.count).toBe(1);
+  });
+
+  test("passes inputs through when given", async () => {
+    let sent;
+    globalThis.fetch = async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return accepted204();
+    };
+    await dispatchWorkflow({ repo: "o/r", workflow: "w.yml", ref: "main", inputs: { dry: "true" } });
+    expect(sent).toEqual({ ref: "main", inputs: { dry: "true" } });
+  });
+});
+
+// ── #1130 item 3: find a Decap PR by branch so a timeout can say "unmerged" ──
+test.describe("getLatestPrForBranch (#1130 item 3)", () => {
+  const listAndGet = (list) => {
+    const paths = [];
+    const fn = async (pathname) => {
+      paths.push(pathname);
+      if (pathname.includes("/pulls?")) return list;
+      const n = Number(pathname.split("/pulls/")[1]);
+      return { number: n, merged: false, merged_at: null, head: { sha: `sha-${n}` } };
+    };
+    return { fn, paths };
+  };
+
+  test("returns the newest PR created after the leg started, as the single-PR GET", async () => {
+    const { fn, paths } = listAndGet([
+      { number: 12, created_at: "2026-11-20T10:05:00Z" },
+      { number: 11, created_at: "2026-11-20T09:00:00Z" },
+    ]);
+    const pr = await getLatestPrForBranch({
+      repo: "o/r",
+      branch: "cms/posts/2024-01-02-e2e-unpublish-canary",
+      createdAfter: "2026-11-20T10:00:00Z",
+      _gh: fn,
+    });
+    expect(pr.number).toBe(12);
+    expect(paths[0]).toContain(`head=${encodeURIComponent("o:cms/posts/2024-01-02-e2e-unpublish-canary")}`);
+    expect(paths[0]).toContain("state=all");
+    expect(paths[1]).toBe("/repos/o/r/pulls/12");
+  });
+
+  test("a PR older than the leg (an earlier run's) is not this leg's: null", async () => {
+    const { fn, paths } = listAndGet([{ number: 11, created_at: "2026-11-20T09:00:00Z" }]);
+    const pr = await getLatestPrForBranch({
+      repo: "o/r",
+      branch: "cms/posts/x",
+      createdAfter: Date.parse("2026-11-20T10:00:00Z"),
+      _gh: fn,
+    });
+    expect(pr).toBeNull();
+    expect(paths).toHaveLength(1);
+  });
+
+  test("no PR on the branch: null", async () => {
+    const { fn } = listAndGet([]);
+    expect(await getLatestPrForBranch({ repo: "o/r", branch: "cms/posts/x", createdAfter: 0, _gh: fn })).toBeNull();
   });
 });
 
@@ -388,6 +540,36 @@ test.describe("makeDeployQueueExtender PR-state verdicts (#215)", () => {
     expect(grant, "a merged PR with no deploy is a real miss ⇒ give up").toBe(0);
     expect(ext.verdict.kind).toBe("no-deploy-fired");
     expect(ext.verdict.realMiss).toBe(true);
+    // #1130 item 3: a merge was seen, so the message may say "your merge".
+    expect(ext.verdict.mergeConfirmed).toBe(true);
+  });
+
+  test("(5b) #1130: no merge seen (bare call site) ⇒ no-deploy-fired with mergeConfirmed false", async () => {
+    const ext = makeDeployQueueExtender({ activity: idleLane });
+    const grant = await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(grant).toBe(0);
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+    expect(ext.verdict.mergeConfirmed).toBe(false);
+  });
+
+  test("(5c) #1130: getPr finds no PR ⇒ mergeConfirmed false", async () => {
+    const ext = makeDeployQueueExtender({ getPr: async () => null, activity: idleLane, _gh: checkRunsGh([]) });
+    await ext({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(ext.verdict.kind).toBe("no-deploy-fired");
+    expect(ext.verdict.mergeConfirmed).toBe(false);
+  });
+
+  test("(5d) #1130: at the extension ceiling, mergeConfirmed still reflects the merge", async () => {
+    const merged = makeDeployQueueExtender({
+      mergedAt: "2026-08-08T00:00:00Z",
+      maxTotalExtendMs: 0,
+      activity: idleLane,
+    });
+    expect(await merged({ elapsedMs: 20 * MIN, extensionCount: 0 })).toBe(0);
+    expect(merged.verdict).toMatchObject({ kind: "no-deploy-fired", mergeConfirmed: true });
+    const unknown = makeDeployQueueExtender({ maxTotalExtendMs: 0, activity: idleLane });
+    await unknown({ elapsedMs: 20 * MIN, extensionCount: 0 });
+    expect(unknown.verdict).toMatchObject({ kind: "no-deploy-fired", mergeConfirmed: false });
   });
 
   test("(6) a check-run probe error never upgrades to a real miss", async () => {
