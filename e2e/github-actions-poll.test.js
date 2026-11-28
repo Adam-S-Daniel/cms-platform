@@ -9,6 +9,7 @@ const { test, expect } = require("./base");
 const {
   addLabel,
   describeError,
+  DISPATCH_WORST_CASE_MS,
   dispatchWorkflow,
   gh,
   getFileTextAtRef,
@@ -267,6 +268,10 @@ test.describe("dispatchWorkflow retries a 5xx burst (#1130 item 4)", () => {
     expect(threw && threw.status).toBe(503);
     expect(calls.count).toBe(5);
     expect(sleeps).toEqual([5000, 10_000, 20_000, 30_000]);
+  });
+
+  test("DISPATCH_WORST_CASE_MS covers the backoff ceilings (65s) plus request time", () => {
+    expect(DISPATCH_WORST_CASE_MS).toBe(65_000 + 60_000);
   });
 
   test("a 404 is not retried", async () => {

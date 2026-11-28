@@ -365,6 +365,14 @@ async function getPullRequest({ repo = HOST_REPO, prNumber }) {
 const DISPATCH_RETRIES = 4;
 const DISPATCH_RETRY_BASE_MS = 5000;
 const DISPATCH_RETRY_MAX_MS = 30_000;
+// Worst case a dispatchWorkflow call can spend before returning: the sum of
+// the backoff ceilings plus a generous allowance for the five requests. A
+// caller that must finish before a deadline budgets for this.
+const DISPATCH_WORST_CASE_MS =
+  Array.from({ length: DISPATCH_RETRIES }, (_, i) =>
+    Math.min(DISPATCH_RETRY_BASE_MS * 2 ** i, DISPATCH_RETRY_MAX_MS),
+  ).reduce((a, b) => a + b, 0) +
+  60_000;
 async function dispatchWorkflow({ repo = HOST_REPO, workflow, ref = "main", inputs, _sleep } = {}) {
   if (!workflow) throw new Error("dispatchWorkflow needs a workflow file name.");
   const body = inputs ? { ref, inputs } : { ref };
@@ -1187,6 +1195,7 @@ module.exports = {
   addLabel,
   deployLaneActivity,
   describeError,
+  DISPATCH_WORST_CASE_MS,
   dispatchWorkflow,
   fetchPublicUrl,
   getDefaultBranchHeadSha,

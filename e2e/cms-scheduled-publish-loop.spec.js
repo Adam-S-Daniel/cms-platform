@@ -64,7 +64,8 @@
  * worst-case seed merge PLUS the leg-2 scheduler run PLUS a safety
  * margin — otherwise leg 2 races the deadline and the changed=false
  * assertion flakes. Hence DEADLINE_WINDOW_MS = SEED_MERGE_TIMEOUT_MS +
- * SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS (40 min): long enough
+ * DISPATCH_WORST_CASE_MS + SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS
+ * (about 42 min): long enough
  * that leg 2 PROVABLY runs pre-deadline (each budget throws before the
  * window can be overrun), short enough that the whole loop still fits
  * the job budget.
@@ -85,6 +86,7 @@ const { test, expect } = require("./base");
 const { getPat, HOST_REPO } = require("./decap-pat");
 const { seedFixtureViaPr, removeFixtureViaPr } = require("./cms-fixture-pr");
 const {
+  DISPATCH_WORST_CASE_MS,
   dispatchWorkflow,
   gh,
   waitForMerge,
@@ -121,7 +123,11 @@ const SCHEDULER_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 const DEADLINE_MARGIN_MS = 5 * 60 * 1000;
 // See "THE DEADLINE WINDOW" in the header — spans worst-case seed merge
 // + the pre-deadline scheduler leg + margin (40 min).
-const DEADLINE_WINDOW_MS = SEED_MERGE_TIMEOUT_MS + SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS;
+// DISPATCH_WORST_CASE_MS: the run budget starts only once the dispatch
+// returns, and that call can now spend about two minutes riding out a 5xx
+// burst (#1130 item 4).
+const DEADLINE_WINDOW_MS =
+  SEED_MERGE_TIMEOUT_MS + DISPATCH_WORST_CASE_MS + SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS;
 // Wait this far PAST the deadline before the at/after dispatch so
 // runner-vs-harness clock skew can't make the scheduler still read the
 // post as "due in ~0h".
@@ -241,7 +247,9 @@ async function dispatchSchedulerAndAwait(label) {
 
   // dispatchWorkflow retries a 5xx burst with a long backoff (#1130 item 4)
   // and treats the endpoint's empty 204 as success. A 5xx that GitHub
-  // accepted anyway is harmless here: the wait below takes the first new run.
+  // accepted anyway can start a second scheduler run; the wait below takes
+  // the first new run, and the workflow's stacking guard normally stops the
+  // second from opening another PR.
   await dispatchWorkflow({ repo: HOST_REPO, workflow: SCHEDULER_WORKFLOW, ref: "main" });
 
   const deadline = Date.now() + SCHEDULER_RUN_TIMEOUT_MS;
@@ -378,9 +386,9 @@ test("scheduled-publish loop — draft seeds, scheduler flips it live via PR + a
     // earlier budgets held (see the header); assert it so a budget edit
     // that breaks the derivation fails HERE, not as a flaky changed=true.
     expect(
-      Date.now() + SCHEDULER_RUN_TIMEOUT_MS,
+      Date.now() + DISPATCH_WORST_CASE_MS + SCHEDULER_RUN_TIMEOUT_MS,
       "leg 2 no longer provably runs pre-deadline — DEADLINE_WINDOW_MS must cover " +
-        "the seed merge budget + the scheduler run budget + margin (see the header)",
+        "the seed merge budget + the dispatch retries + the scheduler run budget + margin (see the header)",
     ).toBeLessThan(publishDateMs);
 
     prsBeforeDeadline = await openScheduledPublishPrs();
