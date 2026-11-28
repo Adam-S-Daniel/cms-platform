@@ -264,7 +264,11 @@ test.describe("waitForChangeReflected self-reports the failure leg (#21)", () =>
   });
 
   test("no deploy fired for the merge ⇒ trigger-problem (chain-never-fired) message", async () => {
-    const onBudgetExhausted = extenderWithVerdict({ kind: "no-deploy-fired", realMiss: true });
+    const onBudgetExhausted = extenderWithVerdict({
+      kind: "no-deploy-fired",
+      realMiss: true,
+      mergeConfirmed: true,
+    });
     let threw;
     try {
       await waitForChangeReflected({
@@ -282,6 +286,34 @@ test.describe("waitForChangeReflected self-reports the failure leg (#21)", () =>
     expect(threw.message).toMatch(/NO deploy.*fired|never fired the chain|trigger/i);
     // The trigger-problem leg must NOT claim the deploy completed.
     expect(threw.message).not.toMatch(/S3 sync \/ CloudFront/i);
+  });
+
+  // #1130 item 3: adamdaniel.ai run 45494556461 said "NO deploy-production
+  // run fired for your merge" about a PR that never merged. Without a
+  // confirmed merge the message must not assert one.
+  test("no deploy fired and NO merge confirmed ⇒ does not claim a merge, names the merge leg", async () => {
+    for (const verdict of [
+      { kind: "no-deploy-fired", realMiss: true, mergeConfirmed: false },
+      { kind: "no-deploy-fired", realMiss: true }, // a recoverer that never sets it
+    ]) {
+      let threw;
+      try {
+        await waitForChangeReflected({
+          page: makeFakePage(),
+          pillId: "x",
+          urlCheck: async () => false,
+          urlTimeoutMs: 20,
+          urlPollMs: 8,
+          onBudgetExhausted: extenderWithVerdict(verdict),
+        });
+      } catch (e) {
+        threw = e;
+      }
+      expect(threw).toBeTruthy();
+      expect(threw.message).not.toMatch(/for your merge/i);
+      expect(threw.message).toMatch(/could not confirm the cms PR ever merged/);
+      expect(threw.message).toMatch(/auto-merge never armed or never landed/);
+    }
   });
 
   // #215: the PR simply hadn't merged. No deploy run can exist for an

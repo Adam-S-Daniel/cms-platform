@@ -64,8 +64,8 @@ function parseRetryAfterMs(headerValue) {
 // matches the budget the issue calls out.
 const RETRY_BASE_MS = 1000;
 const RETRY_MAX_PER_ATTEMPT_MS = 16_000;
-function backoffDelayMs(attempt) {
-  const ceiling = Math.min(RETRY_BASE_MS * 2 ** attempt, RETRY_MAX_PER_ATTEMPT_MS);
+function backoffDelayMs(attempt, baseMs = RETRY_BASE_MS, maxMs = RETRY_MAX_PER_ATTEMPT_MS) {
+  const ceiling = Math.min(baseMs * 2 ** attempt, maxMs);
   // Full jitter: a uniform sample in [0, ceiling] de-synchronises
   // concurrent retriers so they don't re-collide on the same tick.
   return Math.round(Math.random() * ceiling);
@@ -87,7 +87,15 @@ async function gh(pathname, init = {}) {
   // Pull our own options out of `init` BEFORE spreading the rest into
   // fetch — `retries` and `_sleep` are not valid fetch options and must
   // not leak through.
-  const { retries = 0, _sleep = sleep, ...fetchInit } = init;
+  // `retryBaseMs` / `retryMaxMs` stretch the backoff for a call where a
+  // longer GitHub outage is worth riding out (a workflow dispatch, #1130).
+  const {
+    retries = 0,
+    retryBaseMs = RETRY_BASE_MS,
+    retryMaxMs = RETRY_MAX_PER_ATTEMPT_MS,
+    _sleep = sleep,
+    ...fetchInit
+  } = init;
   const maxRetries = Number.isInteger(retries) && retries > 0 ? retries : 0;
 
   let attempt = 0;
@@ -136,8 +144,8 @@ async function gh(pathname, init = {}) {
     const retryAfterMs = parseRetryAfterMs(res.headers && res.headers.get("retry-after"));
     const delayMs =
       retryAfterMs != null
-        ? Math.min(retryAfterMs, RETRY_MAX_PER_ATTEMPT_MS)
-        : backoffDelayMs(attempt);
+        ? Math.min(retryAfterMs, retryMaxMs)
+        : backoffDelayMs(attempt, retryBaseMs, retryMaxMs);
     attempt += 1;
     console.warn(
       `[gh] transient ${res.status} on ${url}; retry ${attempt}/${maxRetries} after ${delayMs}ms`,
@@ -344,6 +352,69 @@ async function addLabel({
 
 async function getPullRequest({ repo = HOST_REPO, prNumber }) {
   return gh(`/repos/${repo}/pulls/${prNumber}`);
+}
+
+// POST a workflow_dispatch for `workflow` on `ref`, riding out a burst of
+// GitHub 5xx. adamdaniel.ai run 45642923359 got three 500s in a row with
+// the old retries:2 on gh()'s 1s/2s backoff (about 3s in all), so this
+// retries four times on a 5s base capped at 30s per attempt: up to 65s of
+// backoff (5, 10, 20, 30s ceilings, full jitter). A 5xx can still have
+// been accepted, so a caller must identify its run by id ordering, not
+// count runs. The endpoint answers 204 with an empty body; gh() surfaces
+// that as a SyntaxError, which here is the success it is (#1130 item 4).
+const DISPATCH_RETRIES = 4;
+const DISPATCH_RETRY_BASE_MS = 5000;
+const DISPATCH_RETRY_MAX_MS = 30_000;
+// Worst case a dispatchWorkflow call can spend before returning: the sum of
+// the backoff ceilings plus a generous allowance for the five requests. A
+// caller that must finish before a deadline budgets for this.
+const DISPATCH_WORST_CASE_MS =
+  Array.from({ length: DISPATCH_RETRIES }, (_, i) =>
+    Math.min(DISPATCH_RETRY_BASE_MS * 2 ** i, DISPATCH_RETRY_MAX_MS),
+  ).reduce((a, b) => a + b, 0) +
+  60_000;
+async function dispatchWorkflow({ repo = HOST_REPO, workflow, ref = "main", inputs, _sleep } = {}) {
+  if (!workflow) throw new Error("dispatchWorkflow needs a workflow file name.");
+  const body = inputs ? { ref, inputs } : { ref };
+  try {
+    await gh(`/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      retries: DISPATCH_RETRIES,
+      retryBaseMs: DISPATCH_RETRY_BASE_MS,
+      retryMaxMs: DISPATCH_RETRY_MAX_MS,
+      ...(_sleep ? { _sleep } : {}),
+    });
+  } catch (err) {
+    if (err instanceof SyntaxError) return;
+    throw err;
+  }
+}
+
+// The newest PR (any state) whose head is `branch` and that was created at or
+// after `createdAfter` (epoch ms or ISO), as the single-PR GET response, or
+// null when there is none. For a spec that publishes through Decap without
+// learning the PR number: it gives makeDeployQueueExtender a `getPr`, so a
+// timeout can say "the PR never merged" instead of blaming the deploy chain
+// (#1130 item 3). `createdAfter` keeps a stale PR from an earlier run on the
+// same `cms/<collection>/<slug>` branch from being mistaken for this one.
+async function getLatestPrForBranch({ repo = HOST_REPO, branch, createdAfter, _gh = gh }) {
+  if (!branch) throw new Error("getLatestPrForBranch needs a branch.");
+  const owner = repo.split("/")[0];
+  const prs = await _gh(
+    `/repos/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=all&sort=created&direction=desc&per_page=10`,
+  );
+  const since = typeof createdAfter === "number" ? createdAfter : Date.parse(createdAfter || "");
+  const match = (Array.isArray(prs) ? prs : []).find((pr) => {
+    if (!Number.isFinite(since)) return true;
+    const created = Date.parse((pr && pr.created_at) || "");
+    return Number.isFinite(created) && created >= since;
+  });
+  if (!match) return null;
+  // The list response lacks `merged`; the single-PR GET carries it (and
+  // merged_at, labels, auto_merge, head.sha), which is what the extender reads.
+  return _gh(`/repos/${repo}/pulls/${match.number}`);
 }
 
 // A file's text as it exists at `ref` (a branch, or the head sha of a PR),
@@ -803,6 +874,15 @@ function makeDeployQueueExtender({
   const extender = async ({ elapsedMs = 0, extensionCount = 0 } = {}) => {
     const remaining = maxTotalExtendMs - extendedTotal;
     const pr = await resolvePr();
+    // Resolved before the ceiling check so a 'no-deploy-fired' verdict on
+    // either path can say whether a merge was actually seen (#1130 item 3).
+    const ma = await resolveMergedAt(pr);
+    const anchored = ma != null && ma !== "";
+    // #1130 item 3: `mergeConfirmed` is false when nothing proved the cms PR
+    // merged (a bare call site, or getPr found no PR). deploy-pill.js then
+    // must not say "no deploy fired for your merge" about a PR that may
+    // never have merged (adamdaniel.ai run 45494556461).
+    const noDeployFired = () => ({ kind: "no-deploy-fired", realMiss: true, mergeConfirmed: anchored });
     if (remaining <= 0) {
       console.warn(
         `[deploy-queue] hit the ${Math.round(maxTotalExtendMs / 1000)}s extension ceiling for the ${workflow} lane; failing as a real miss.`,
@@ -813,11 +893,10 @@ function makeDeployQueueExtender({
       // budget is spent either way, so we still return 0). #215.
       if (!extender.verdict) {
         extender.verdict =
-          (await unmergedPrVerdict(pr)) || { kind: "no-deploy-fired", realMiss: true };
+          (await unmergedPrVerdict(pr)) || noDeployFired();
       }
       return 0;
     }
-    const ma = await resolveMergedAt(pr);
     let act;
     try {
       act = activity ? await activity() : await deployLaneActivity({ repo, workflow, recentWindowMs, mergedAt: ma });
@@ -833,7 +912,6 @@ function makeDeployQueueExtender({
     const recent = (act && Number.isFinite(act.recent) && act.recent) || 0;
     const runsSinceMerge = (act && Number.isFinite(act.runsSinceMerge) && act.runsSinceMerge) || 0;
     const deployCompletedSinceMerge = Boolean(act && act.deployCompletedSinceMerge);
-    const anchored = ma != null && ma !== "";
 
     // (1) CONCLUSIVE — the spec's own deploy fired + finished. The failure
     // is URL-not-served, NOT a chain miss. This is the #21 self-diagnosis.
@@ -892,7 +970,7 @@ function makeDeployQueueExtender({
       // idle lane and no deploy for it IS the genuine chain miss. This path
       // MUST stay reachable — if 'no-deploy-fired' became unreachable a
       // real miss would turn into silence, the opposite of #215's intent.
-      extender.verdict = { kind: "no-deploy-fired", realMiss: true };
+      extender.verdict = noDeployFired();
       console.warn(
         `[deploy-queue] URL still not reflected after ${Math.round(elapsedMs / 1000)}s and ${
           anchored
@@ -1117,9 +1195,12 @@ module.exports = {
   addLabel,
   deployLaneActivity,
   describeError,
+  DISPATCH_WORST_CASE_MS,
+  dispatchWorkflow,
   fetchPublicUrl,
   getDefaultBranchHeadSha,
   getFileTextAtRef,
+  getLatestPrForBranch,
   getPullRequest,
   gh,
   headChecksTrulyGreen,

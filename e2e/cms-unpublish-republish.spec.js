@@ -60,7 +60,12 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { test, expect } = require("./base");
 const { seedDecapAuth, getPat, HOST_REPO } = require("./decap-pat");
-const { gh, makeDeployQueueExtender, describeError } = require("./github-actions-poll");
+const {
+  gh,
+  getLatestPrForBranch,
+  makeDeployQueueExtender,
+  describeError,
+} = require("./github-actions-poll");
 const { waitForChangeReflected } = require("./deploy-pill");
 const { prodTarget } = require("./cms-host");
 const { guard } = require("./base-collections-guards");
@@ -92,6 +97,21 @@ const PROD_CANARY = process.env.PROD_CANARY === "1";
 // (cms/posts/<slug>). The self-heal closes any lingering PR on it so the
 // unpublish leg later opens a FRESH cms/posts/<slug> PR.
 const CANARY_BRANCH = `cms/posts/${path.basename(FIXTURE_PATH, ".md")}`;
+
+// #1130 item 3: this spec publishes through Decap and never learns its PR
+// number, so a timed-out leg used to report "NO deploy-production run fired
+// for your merge" for a PR that never merged (adamdaniel.ai run 45494556461).
+// Hand the extender the leg's own PR, found by branch and creation time, so
+// it can say the PR is unmerged and why. The two-minute slack absorbs clock
+// skew between this runner and GitHub; the branch is deleted on merge, so an
+// earlier leg's PR is older than that.
+const PR_CLOCK_SLACK_MS = 2 * 60 * 1000;
+function legPrExtender(legStartedAt) {
+  return makeDeployQueueExtender({
+    getPr: () =>
+      getLatestPrForBranch({ branch: CANARY_BRANCH, createdAfter: legStartedAt - PR_CLOCK_SLACK_MS }),
+  });
+}
 
 async function fetchFixtureFromMain() {
   return gh(`/repos/${HOST_REPO}/contents/${FIXTURE_PATH}?ref=main`);
@@ -304,7 +324,9 @@ test(
       await setPublished(page, true);
     });
 
+    let republishStartedAt = Date.now();
     await test.step("Save → Status:Ready → Publish Now (re-publish)", async () => {
+      republishStartedAt = Date.now();
       await saveEntry(page);
       await publishViaUi(page);
     });
@@ -315,7 +337,7 @@ test(
         pillId: PILL_PROD,
         urlCheck: async () => urlServesPost(page),
         urlTimeoutMs: 15 * 60 * 1000,
-        onBudgetExhausted: makeDeployQueueExtender(),
+        onBudgetExhausted: legPrExtender(republishStartedAt),
       });
     });
 
@@ -385,7 +407,9 @@ test(
       await setPublished(page, false);
     });
 
+    let unpublishStartedAt = Date.now();
     await test.step("Save → Status:Ready → Publish Now (unpublish)", async () => {
+      unpublishStartedAt = Date.now();
       await saveEntry(page);
       await publishViaUi(page);
     });
@@ -396,7 +420,7 @@ test(
         pillId: PILL_PROD,
         urlCheck: async () => url404s(page),
         urlTimeoutMs: 15 * 60 * 1000,
-        onBudgetExhausted: makeDeployQueueExtender(),
+        onBudgetExhausted: legPrExtender(unpublishStartedAt),
       });
     });
   },

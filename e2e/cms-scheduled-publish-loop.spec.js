@@ -64,7 +64,8 @@
  * worst-case seed merge PLUS the leg-2 scheduler run PLUS a safety
  * margin — otherwise leg 2 races the deadline and the changed=false
  * assertion flakes. Hence DEADLINE_WINDOW_MS = SEED_MERGE_TIMEOUT_MS +
- * SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS (40 min): long enough
+ * DISPATCH_WORST_CASE_MS + SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS
+ * (about 42 min): long enough
  * that leg 2 PROVABLY runs pre-deadline (each budget throws before the
  * window can be overrun), short enough that the whole loop still fits
  * the job budget.
@@ -84,7 +85,14 @@ const SITE_ROOT = process.env.SITE_ROOT || path.resolve(__dirname, "..");
 const { test, expect } = require("./base");
 const { getPat, HOST_REPO } = require("./decap-pat");
 const { seedFixtureViaPr, removeFixtureViaPr } = require("./cms-fixture-pr");
-const { gh, waitForMerge, fetchPublicUrl, describeError } = require("./github-actions-poll");
+const {
+  DISPATCH_WORST_CASE_MS,
+  dispatchWorkflow,
+  gh,
+  waitForMerge,
+  fetchPublicUrl,
+  describeError,
+} = require("./github-actions-poll");
 const { prodTarget } = require("./cms-host");
 const { loudBail } = require("./fixture-baseline");
 const { EPHEMERAL_DATE } = require("./prod-mutate-fixture");
@@ -115,7 +123,11 @@ const SCHEDULER_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 const DEADLINE_MARGIN_MS = 5 * 60 * 1000;
 // See "THE DEADLINE WINDOW" in the header — spans worst-case seed merge
 // + the pre-deadline scheduler leg + margin (40 min).
-const DEADLINE_WINDOW_MS = SEED_MERGE_TIMEOUT_MS + SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS;
+// DISPATCH_WORST_CASE_MS: the run budget starts only once the dispatch
+// returns, and that call can now spend about two minutes riding out a 5xx
+// burst (#1130 item 4).
+const DEADLINE_WINDOW_MS =
+  SEED_MERGE_TIMEOUT_MS + DISPATCH_WORST_CASE_MS + SCHEDULER_RUN_TIMEOUT_MS + DEADLINE_MARGIN_MS;
 // Wait this far PAST the deadline before the at/after dispatch so
 // runner-vs-harness clock skew can't make the scheduler still read the
 // post as "due in ~0h".
@@ -233,18 +245,12 @@ async function dispatchSchedulerAndAwait(label) {
   const before = await gh(`${runsUrl}?per_page=1`);
   const maxSeenId = ((before.workflow_runs || [])[0] || {}).id || 0;
 
-  // POST .../dispatches answers 204 No Content; gh() unconditionally
-  // res.json()s, which rejects on the empty body — treat that specific
-  // SyntaxError as the success it is (GitHub accepted the dispatch).
-  await gh(`${wfBase}/dispatches`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: "main" }),
-    retries: 2,
-  }).catch((err) => {
-    if (err instanceof SyntaxError) return null;
-    throw err;
-  });
+  // dispatchWorkflow retries a 5xx burst with a long backoff (#1130 item 4)
+  // and treats the endpoint's empty 204 as success. A 5xx that GitHub
+  // accepted anyway can start a second scheduler run; the wait below takes
+  // the first new run, and the workflow's stacking guard normally stops the
+  // second from opening another PR.
+  await dispatchWorkflow({ repo: HOST_REPO, workflow: SCHEDULER_WORKFLOW, ref: "main" });
 
   const deadline = Date.now() + SCHEDULER_RUN_TIMEOUT_MS;
   let run = null;
@@ -380,9 +386,9 @@ test("scheduled-publish loop — draft seeds, scheduler flips it live via PR + a
     // earlier budgets held (see the header); assert it so a budget edit
     // that breaks the derivation fails HERE, not as a flaky changed=true.
     expect(
-      Date.now() + SCHEDULER_RUN_TIMEOUT_MS,
+      Date.now() + DISPATCH_WORST_CASE_MS + SCHEDULER_RUN_TIMEOUT_MS,
       "leg 2 no longer provably runs pre-deadline — DEADLINE_WINDOW_MS must cover " +
-        "the seed merge budget + the scheduler run budget + margin (see the header)",
+        "the seed merge budget + the dispatch retries + the scheduler run budget + margin (see the header)",
     ).toBeLessThan(publishDateMs);
 
     prsBeforeDeadline = await openScheduledPublishPrs();
